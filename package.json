@@ -33,7 +33,8 @@
     "infra:logs": "docker compose -f infrastructure/docker-compose.yml logs -f",
     "server:up": "docker compose -f infrastructure/docker-compose.yml --profile server up -d --build",
     "server:down": "docker compose -f infrastructure/docker-compose.yml --profile server down",
-    "server:logs": "docker compose -f infrastructure/docker-compose.yml --profile server logs -f"
+    "server:logs": "docker compose -f infrastructure/docker-compose.yml --profile server logs -f",
+    "sync:bot": "powershell -ExecutionPolicy Bypass -File scripts/deploy/pull-bot-changes.ps1"
   },
   "dependencies": {
     "tsx": "^4.23.12"
