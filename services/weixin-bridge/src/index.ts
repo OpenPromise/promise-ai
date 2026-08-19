@@ -10,7 +10,12 @@ import { ILinkClient } from './ilink.js';
 import { LoginManager } from './login.js';
 import { runWeixinRelay } from './relay.js';
 import { runEventPusher } from './event-pusher.js';
-import { listLibraryFiles, readLibraryFile, resolveFileByName } from './files.js';
+import {
+  deleteLibraryFile,
+  listLibraryFiles,
+  readLibraryFile,
+  resolveFileByName,
+} from './files.js';
 import { FileJobManager } from './jobs.js';
 
 try {
@@ -387,6 +392,18 @@ app.post('/api/weixin/send-file-async', async (request, reply) => {
       size: job.size,
       deduped,
     };
+  } catch (error) {
+    return reply.code(404).send({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.post('/api/weixin/delete-file', async (request, reply) => {
+  const body = (request.body ?? {}) as { fileName?: string };
+  const query = body.fileName?.trim();
+  if (!query) return reply.code(400).send({ error: '缺少 fileName' });
+  try {
+    const deleted = await deleteLibraryFile(filesDir, query);
+    return { ok: true, fileName: deleted };
   } catch (error) {
     return reply.code(404).send({ error: error instanceof Error ? error.message : String(error) });
   }

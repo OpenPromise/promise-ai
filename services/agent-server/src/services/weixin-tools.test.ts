@@ -80,6 +80,45 @@ describe('weixin.list_files', () => {
   });
 });
 
+describe('weixin.delete_file', () => {
+  it('posts fileName to the bridge delete endpoint', async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({ url: String(url), init });
+      return new Response(JSON.stringify({ ok: true, fileName: '到底丢失了几只羊.pptx' }), {
+        status: 200,
+      });
+    });
+    const tools = createWeixinTools({
+      bridgeUrl: 'http://weixin-bridge:3100',
+      store: await makeStore(),
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const result = await tools
+      .find((t) => t.name === 'weixin.delete_file')!
+      .execute({ fileName: '到底丢失了几只羊' }, { sessionId: 's' });
+    expect(result.ok).toBe(true);
+    const call = calls.find((c) => c.url.includes('/api/weixin/delete-file'))!;
+    expect(JSON.parse(call.init.body as string)).toEqual({ fileName: '到底丢失了几只羊' });
+  });
+
+  it('surfaces bridge errors', async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response(JSON.stringify({ error: '文件库中找不到「羊」' }), { status: 404 }),
+    );
+    const tools = createWeixinTools({
+      bridgeUrl: 'http://weixin-bridge:3100',
+      store: await makeStore(),
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const result = await tools
+      .find((t) => t.name === 'weixin.delete_file')!
+      .execute({ fileName: '羊' }, { sessionId: 's' });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('找不到');
+  });
+});
+
 describe('weixin.send_file', () => {
   it('starts an async background send via the bridge', async () => {
     const store = await makeStore('wx_peer');

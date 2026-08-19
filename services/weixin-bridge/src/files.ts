@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 export interface FileInfo {
@@ -71,5 +71,15 @@ export async function saveLibraryFile(dir: string, name: string, bytes: Buffer):
   await mkdir(dir, { recursive: true });
   const safe = sanitizeFileName(name);
   await writeFile(path.join(dir, safe), bytes);
+  return safe;
+}
+
+/** 按文件名（精确/前缀/包含）删除文件库中的文件，返回实际删除的文件名。 */
+export async function deleteLibraryFile(dir: string, query: string): Promise<string> {
+  const files = await listLibraryFiles(dir);
+  const matched = resolveFileByName(files, query);
+  if (!matched) throw new Error(`文件库中找不到「${query}」`);
+  const safe = sanitizeFileName(matched.name);
+  await unlink(path.join(dir, safe));
   return safe;
 }

@@ -192,6 +192,33 @@ export function createWeixinTools(options: WeixinToolOptions): Tool[] {
       },
     },
     {
+      name: 'weixin.delete_file',
+      description:
+        '按文件名从微信文件库删除文件（永久删除，不可恢复）。匹配规则与 ' +
+        'weixin.send_file 相同（精确/前缀/包含）。任何会话都可用。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          fileName: {
+            type: 'string',
+            description: '要删除的文件名或关键词',
+          },
+        },
+        required: ['fileName'],
+      },
+      permissionLevel: 1,
+      timeoutMs: 20_000,
+      async execute(input: unknown): Promise<ToolResult> {
+        const { fileName } = (input ?? {}) as { fileName?: string };
+        if (!fileName?.trim()) return { ok: false, error: '缺少 fileName' };
+        const result = await postBridge(fetchImpl, options.bridgeUrl, '/api/weixin/delete-file', {
+          fileName: fileName.trim(),
+        });
+        if (!result.ok) return { ok: false, error: result.error ?? '删除文件失败' };
+        return { ok: true, data: result.data };
+      },
+    },
+    {
       name: 'weixin.send_file',
       description:
         '从微信文件库按文件名查找并发送文件到微信。支持精确/前缀/包含匹配' +

@@ -3,6 +3,7 @@ import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
+  deleteLibraryFile,
   listLibraryFiles,
   readLibraryFile,
   resolveFileByName,
@@ -53,5 +54,16 @@ describe('library file IO', () => {
     const evil = await saveLibraryFile(dir, '../evil.txt', Buffer.from('x'));
     expect(evil).toBe('evil.txt');
     expect(await readFile(path.join(dir, 'evil.txt'), 'utf8')).toBe('x');
+  });
+
+  it('deletes a file by fuzzy name', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'wxfiles-del-'));
+    await saveLibraryFile(dir, '到底丢失了几只羊.pptx', Buffer.from('x'));
+
+    const deleted = await deleteLibraryFile(dir, '到底丢失了几只羊');
+    expect(deleted).toBe('到底丢失了几只羊.pptx');
+    expect(await listLibraryFiles(dir)).toHaveLength(0);
+
+    await expect(deleteLibraryFile(dir, '不存在的')).rejects.toThrow(/找不到/);
   });
 });
