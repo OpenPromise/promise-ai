@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { access, readFile, unlink } from 'node:fs/promises';
+import { access, open, readFile, readdir, stat, unlink } from 'node:fs/promises';
 import { loadConfig } from '@personal-ai/config';
 import type { DesktopToolDeclaration, PermissionLevel, ToolResult } from '@personal-ai/tools';
 
@@ -388,6 +388,100 @@ export function createLocalTools(): LocalTool[] {
           return {
             ok: false,
             error: `写入失败：${error instanceof Error ? error.message : String(error)}`,
+          };
+        }
+      },
+    },
+    {
+      declaration: {
+        name: 'filesystem.read',
+        description:
+          '读取一个文本文件的内容（L0：自动执行）。大文件只返回前 256KB，超限会标注 truncated。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: '文件路径' },
+          },
+          required: ['path'],
+        },
+        permissionLevel: 0 as PermissionLevel,
+      },
+      async execute(input: unknown) {
+        const { path: filePath } = (input ?? {}) as { path?: string };
+        if (!filePath?.trim()) {
+          return { ok: false, error: '缺少 path 参数' };
+        }
+        const resolved = path.resolve(filePath.trim());
+        try {
+          const info = await stat(resolved);
+          if (!info.isFile()) {
+            return { ok: false, error: '目标不是文件（目录请用 filesystem.list）' };
+          }
+          const READ_CAP = 256 * 1024;
+          const handle = await open(resolved, 'r');
+          try {
+            const size = Math.min(READ_CAP, info.size);
+            const buffer = Buffer.alloc(size);
+            await handle.read(buffer, 0, size, 0);
+            const truncated = info.size > READ_CAP;
+            return {
+              ok: true,
+              data: {
+                path: resolved,
+                size: info.size,
+                truncated,
+                content:
+                  buffer.toString('utf8') + (truncated ? '\n…（文件过大，仅返回前 256KB）' : ''),
+              },
+            };
+          } finally {
+            await handle.close();
+          }
+        } catch (error) {
+          return {
+            ok: false,
+            error: `读取失败：${error instanceof Error ? error.message : String(error)}`,
+          };
+        }
+      },
+    },
+    {
+      declaration: {
+        name: 'filesystem.list',
+        description:
+          '列出目录内容（文件名与类型，L0：自动执行）。目录优先、按名称排序，最多返回 500 项。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: '目录路径（默认当前用户主目录）' },
+          },
+          required: [],
+        },
+        permissionLevel: 0 as PermissionLevel,
+      },
+      async execute(input: unknown) {
+        const { path: dirPath } = (input ?? {}) as { path?: string };
+        const resolved = path.resolve(dirPath?.trim() || process.env.USERPROFILE || process.cwd());
+        try {
+          const entries = await readdir(resolved, { withFileTypes: true });
+          const items = entries
+            .map((entry) => ({
+              name: entry.name,
+              type: entry.isDirectory() ? 'directory' : 'file',
+            }))
+            .sort((a, b) => {
+              if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+              return a.name.localeCompare(b.name);
+            })
+            .slice(0, 500);
+          return {
+            ok: true,
+            data: { path: resolved, count: entries.length, truncated: entries.length > 500, items },
+          };
+        } catch (error) {
+          return {
+            ok: false,
+            error: `列出目录失败：${error instanceof Error ? error.message : String(error)}`,
           };
         }
       },

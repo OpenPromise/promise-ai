@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.14.11] - 2026-08-20
+
+### 文件权限体验对齐 + Docker 全链路部署验证
+
+- **新增桌面本地工具**：`filesystem.read`（L0，读取文本文件，>256KB 截断标注）、
+  `filesystem.list`（L0，列出目录内容），读文件/列目录不再需要走 L3 终端
+- **权限体验对齐**：日常文件操作（读写/移动/复制/删除/压缩/解压/建目录/打开）
+  全部 L0/L1 自动执行免确认；删除进回收站并拒绝系统关键目录；仅
+  `system.power` / `terminal.run` 保留 L3，`process.kill` / `screen.click` /
+  `screen.type` 为 L2
+- **测试覆盖**：vitest 纳入 `apps/desktop-agent`，新增 read/list 单元测试
+- **Docker 全链路验证**：Ubuntu 镜像构建成功（Node 24 + dsh 0.1.0-rc.7），
+  容器内 `/health` 正常、记忆后端 postgres、LLM fallback 生效；端到端对话验证
+  `self.info`（/app、Linux、dsh、postgres）+ `memory.remember` 落库；
+  容器重启后记忆仍在
+
 ## [0.14.10] - 2026-08-20
 
 ### Prime Agent 参考吸收（证据驱动改进 + 持久目标 + 反馈启动摘要）

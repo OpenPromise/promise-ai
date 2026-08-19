@@ -216,11 +216,11 @@ task.create({ name, schedule: "0 9 * * *", action: "检查杭州天气，如果�
 
 ### 文件权限对齐
 
-日常文件操作（移动、复制、写入、新建目录、压缩、解压、删除、打开路径）
-均为 **L1 自动执行，无需确认**；删除会进回收站（可恢复），并拒绝磁盘
-根目录与系统关键目录。只有 `system.power`（关机/重启/睡眠）为 L3 二次确认，
-`terminal.run` 为 L3，`process.kill` / `screen.click` / `screen.type` 等
-敏感操作为 L2 需确认。
+读取/列目录为 **L0 自动执行**；日常文件操作（移动、复制、写入、新建目录、
+压缩、解压、删除、打开路径）均为 **L1 自动执行，无需确认**；删除会进回收站
+（可恢复），并拒绝磁盘根目录与系统关键目录。只有 `system.power`
+（关机/重启/睡眠）与 `terminal.run` 为 L3 二次确认，`process.kill` /
+`screen.click` / `screen.type` 等敏感操作为 L2 需确认。
 
 ### Siri 式 UI（`apps/desktop-ui`）
 
@@ -244,14 +244,32 @@ npm run desktop:agent
 
 桌面端连接 `/ws/desktop` 后，AI 可直接操作这台电脑（工具走既有权限确认）：
 
-| 工具              | 权限 | 说明                      |
-| ----------------- | ---- | ------------------------- |
-| `terminal.run`    | L3   | 执行 PowerShell 命令      |
-| `app.launch`      | L2   | 启动应用 / 打开路径或 URL |
-| `filesystem.move` | L1   | 移动/重命名文件           |
-| `filesystem.copy` | L1   | 复制文件                  |
-| `screen.capture`  | L0   | 截取主屏幕保存 PNG        |
-| `window.list`     | L0   | 列出可见窗口              |
+| 工具                       | 权限 | 说明                         |
+| -------------------------- | ---- | ---------------------------- |
+| `terminal.run`             | L3   | 执行 PowerShell 命令         |
+| `app.launch`               | L1   | 启动应用 / 打开路径或 URL    |
+| `filesystem.move`          | L1   | 移动/重命名文件              |
+| `filesystem.copy`          | L1   | 复制文件                     |
+| `filesystem.delete`        | L1   | 删除到回收站（拒绝系统目录） |
+| `filesystem.write`         | L1   | 创建/覆写文本文件            |
+| `filesystem.read`          | L0   | 读取文本文件（大文件截断）   |
+| `filesystem.list`          | L0   | 列出目录内容                 |
+| `filesystem.create-folder` | L1   | 创建目录                     |
+| `filesystem.compress`      | L1   | 压缩为 zip                   |
+| `filesystem.extract`       | L1   | 解压 zip                     |
+| `system.power`             | L3   | 关机/重启/睡眠               |
+| `clipboard.read`           | L0   | 读取剪贴板                   |
+| `clipboard.write`          | L1   | 写入剪贴板                   |
+| `system.info`              | L0   | 系统/CPU/内存/磁盘信息       |
+| `system.volume`            | L1   | 调节音量                     |
+| `window.focus`             | L1   | 窗口置前                     |
+| `process.list`             | L0   | 列出进程                     |
+| `process.kill`             | L2   | 结束进程（需确认）           |
+| `screen.capture`           | L0   | 截取主屏幕保存 PNG           |
+| `window.list`              | L0   | 列出可见窗口                 |
+| `screen.analyze`           | L0   | 截屏 + 视觉模型分析          |
+| `screen.click`             | L2   | 点击屏幕坐标（需确认）       |
+| `screen.type`              | L2   | 向焦点窗口输入文本（需确认） |
 
 注意：`desktop:ui` 与 `desktop:agent` 是两个进程，可同时运行。
 
@@ -337,7 +355,7 @@ AI 助理可以开发/更新自己（服务端能力）：
   失败/反馈写入 `[feedback]` 记忆供后续会话复习
 - 证据驱动改进：`self.refine` 把失败反馈沉淀成一条规则，只追加到
   `persona/refinements.md`（经验层）并写入 `[feedback]` 记忆、返回 git 快照；
- 需要撤销时 `self.rollback`（L3）回滚到快照
+  需要撤销时 `self.rollback`（L3）回滚到快照
 - 持久目标：`goal.set` / `goal.list` / `goal.done` 管理长期目标（跨会话存活）；
   每次对话自动注入「目标 + 近期反馈」到系统提示词
 - 安全基线：仓库已纳入 git（首次提交为回滚点）；不自动发起自我开发、
