@@ -366,11 +366,14 @@ http://<服务器IP>:3100/weixin/login
 微信会话中可以让助手直接发图/发语音（由 agent-server 工具触发）：
 
 - `weixin.send_image`：发一张图片，`source` 为服务器本地图片路径或 http(s) URL
-- `weixin.send_voice`：用 ElevenLabs TTS 把文本合成语音后发送（mp3）
+- `weixin.send_voice`：用 ElevenLabs TTS 把文本合成语音，转码为微信原生
+  **silk** 格式后发送（绿色语音气泡）
 
 发送链路：agent-server 工具 → weixin-bridge（`/api/weixin/send-image` /
 `/api/weixin/send-voice`）→ iLink CDN（AES-128-ECB 加密上传）→ 微信消息。
 只在微信发起的会话可用（会话元数据 `weixinPeer` 决定发送对象）。
+媒体上传走微信 CDN（`novac2c.cdn.weixin.qq.com`），容器内置 ffmpeg 用于
+语音转码。
 
 ## 自我开发与更新
 

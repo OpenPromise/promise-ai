@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.14.15] - 2026-08-20
+
+### 微信原生语音（silk）+ 媒体发送修复
+
+- **语音切换为微信原生格式**：`weixin.send_voice` 现在 TTS(mp3) → ffmpeg 转
+  pcm → silk-wasm 编码 → `voice_item`（encode_type=6，silk）发送，微信端
+  显示为原生语音气泡；容器内置 ffmpeg
+- **修复 CDN 上传域名**：媒体上传必须走微信 CDN
+  `https://novac2c.cdn.weixin.qq.com/c2c`（此前误用 ilink 主站导致 404）；
+  `getuploadurl` 只返回 `upload_param` 时按 CDN 拼接上传地址
+- **真实端到端验证**：向微信发送测试图片与 ElevenLabs 合成语音均成功
+  （`{"ok":true}`），登录态跨重启保持
+- **健康检查修复**：weixin-bridge 覆盖镜像内置的健康检查（:3100），容器
+  显示 healthy
+
 ## [0.14.14] - 2026-08-20
 
 ### 微信媒体发送（图片 + 语音）

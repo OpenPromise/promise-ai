@@ -146,7 +146,7 @@ describe('media upload', () => {
     expect(uploaded.length).toBe(aesEcbPaddedSize(3));
   });
 
-  it('sends voice with mp3 encode type by default', async () => {
+  it('sends voice with silk encode type by default', async () => {
     const fetchImpl = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
       const u = String(input);
       if (u.includes('/getuploadurl')) {
@@ -165,7 +165,25 @@ describe('media upload', () => {
     const sendCall = calls.find(([u]) => u.includes('/sendmessage'))!;
     const body = JSON.parse(sendCall[1].body as string);
     expect(body.msg.item_list[0].type).toBe(3);
-    expect(body.msg.item_list[0].voice_item.encode_type).toBe(7);
+    expect(body.msg.item_list[0].voice_item.encode_type).toBe(6);
     expect(body.msg.item_list[0].voice_item.media.encrypt_query_param).toBe('dl-param');
+  });
+
+  it('constructs the CDN upload URL from upload_param using the WeChat CDN base', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
+      const u = String(input);
+      if (u.includes('/getuploadurl')) return jsonResponse({ ret: 0, upload_param: 'PARAM' });
+      if (u.startsWith('https://novac2c.cdn.weixin.qq.com/')) {
+        return new Response('', { status: 200, headers: { 'x-encrypted-param': 'dl-param' } });
+      }
+      if (u.includes('/sendmessage')) return jsonResponse({ ret: 0 });
+      return jsonResponse({});
+    });
+    const client = new ILinkClient({ token: 't', fetchImpl });
+    await client.sendImageToUser({ to: 'wx_user', image: Buffer.from([1, 2, 3]) });
+
+    const calls = fetchImpl.mock.calls as Array<[string, RequestInit]>;
+    const cdnCall = calls.find(([u]) => u.startsWith('https://novac2c.cdn.weixin.qq.com/'))!;
+    expect(cdnCall[0]).toContain('/c2c/upload?encrypted_query_param=PARAM&filekey=');
   });
 });

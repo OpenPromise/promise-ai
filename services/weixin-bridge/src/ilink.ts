@@ -8,6 +8,8 @@
 import { createCipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
 
 export const ILINK_DEFAULT_BASE_URL = 'https://ilinkai.weixin.qq.com';
+/** 微信 CDN（媒体加密上传/下载）域名。 */
+export const ILINK_CDN_BASE_URL = 'https://novac2c.cdn.weixin.qq.com/c2c';
 export const ILINK_APP_ID = 'bot';
 export const ILINK_BOT_TYPE = '3';
 export const STALE_TOKEN_ERRCODE = -14;
@@ -387,11 +389,13 @@ export class ILinkClient {
     aeskey: Buffer;
     uploadFullUrl?: string;
     uploadParam?: string;
+    cdnBaseUrl?: string;
   }): Promise<string> {
     const { plaintext, filekey, aeskey } = params;
+    const cdnBase = (params.cdnBaseUrl?.trim() || ILINK_CDN_BASE_URL).replace(/\/+$/, '');
     const uploadUrl =
       params.uploadFullUrl?.trim() ||
-      `${this.baseUrl}/upload?encrypted_query_param=${encodeURIComponent(params.uploadParam ?? '')}&filekey=${encodeURIComponent(filekey)}`;
+      `${cdnBase}/upload?encrypted_query_param=${encodeURIComponent(params.uploadParam ?? '')}&filekey=${encodeURIComponent(filekey)}`;
     const ciphertext = encryptAesEcb(plaintext, aeskey);
 
     let lastError: unknown;
@@ -457,7 +461,7 @@ export class ILinkClient {
 
   /**
    * 上传语音并发送给指定微信用户。
-   * encodeType 默认 7（mp3）；如服务端不支持可切换 6（silk）。
+   * encodeType 默认 6（silk，微信原生语音格式）。
    */
   async sendVoiceToUser(params: {
     to: string;
@@ -485,7 +489,7 @@ export class ILinkClient {
               aes_key: uploaded.aesKeyBase64,
               encrypt_type: 1,
             },
-            encode_type: params.encodeType ?? 7,
+            encode_type: params.encodeType ?? 6,
             ...(params.sampleRate ? { sample_rate: params.sampleRate } : {}),
             ...(params.playtimeMs ? { playtime: params.playtimeMs } : {}),
           },

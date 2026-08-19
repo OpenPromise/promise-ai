@@ -81,7 +81,7 @@ describe('weixin.send_voice', () => {
     expect(bridgeCall).toBeTruthy();
     const body = JSON.parse(bridgeCall!.init.body as string);
     expect(Buffer.from(body.audioBase64, 'base64').toString()).toBe('mp3-part-1-mp3-part-2');
-    expect(body.encodeType).toBe(7);
+    expect(body.encodeType).toBe(6);
   });
 
   it('fails when TTS is not configured', async () => {

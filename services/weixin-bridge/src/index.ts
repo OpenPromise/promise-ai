@@ -295,15 +295,31 @@ app.post('/api/weixin/send-voice', async (request, reply) => {
   const audio = Buffer.from(body.audioBase64 ?? '', 'base64');
   if (audio.length === 0) return reply.code(400).send({ error: '缺少 audioBase64' });
   try {
-    await client.sendVoiceToUser({
-      to: peer,
-      audio,
-      encodeType: body.encodeType ?? 7,
-      sampleRate: body.sampleRate,
-      playtimeMs: body.playtimeMs,
-      contextToken: body.contextToken,
-      runId: body.runId,
-    });
+    const encodeType = body.encodeType ?? 6;
+    if (encodeType === 6) {
+      // 微信原生语音：TTS mp3 -> pcm -> silk，走编码类型 6。
+      const { anyAudioToSilkVoice } = await import('./media/silk.js');
+      const voice = await anyAudioToSilkVoice(audio);
+      await client.sendVoiceToUser({
+        to: peer,
+        audio: voice.silk,
+        encodeType: 6,
+        sampleRate: voice.sampleRate,
+        playtimeMs: voice.durationMs,
+        contextToken: body.contextToken,
+        runId: body.runId,
+      });
+    } else {
+      await client.sendVoiceToUser({
+        to: peer,
+        audio,
+        encodeType,
+        sampleRate: body.sampleRate,
+        playtimeMs: body.playtimeMs,
+        contextToken: body.contextToken,
+        runId: body.runId,
+      });
+    }
     return { ok: true };
   } catch (error) {
     app.log.error({ err: error }, 'send weixin voice failed');

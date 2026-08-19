@@ -174,7 +174,7 @@ export function createWeixinTools(options: WeixinToolOptions): Tool[] {
           const result = await postBridge(fetchImpl, options.bridgeUrl, '/api/weixin/send-voice', {
             sessionId: ctx.sessionId,
             audioBase64: mp3.toString('base64'),
-            encodeType: 7,
+            encodeType: 6,
           });
           return result.ok
             ? { ok: true, data: { sent: true, bytes: mp3.length } }
