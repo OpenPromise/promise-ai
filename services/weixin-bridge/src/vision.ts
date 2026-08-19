@@ -47,9 +47,12 @@ export async function describeImageWithDashScope(options: DescribeImageOptions):
   const mime = sniffImageMime(options.imageBytes);
   const base64 = options.imageBytes.toString('base64');
 
-  const response = await fetchImpl(
-    'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
-    {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60_000);
+  timer.unref?.();
+  let response: Response;
+  try {
+    response = await fetchImpl('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', {
       method: 'POST',
       headers: {
         authorization: `Bearer ${apiKey}`,
@@ -70,8 +73,11 @@ export async function describeImageWithDashScope(options: DescribeImageOptions):
           },
         ],
       }),
-    },
-  );
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 
   const raw = await response.text();
   if (!response.ok) {

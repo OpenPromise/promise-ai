@@ -513,7 +513,15 @@ export class ILinkClient {
     const url =
       params.fullUrl?.trim() ||
       `${cdnBase}/download?encrypted_query_param=${encodeURIComponent(params.encryptQueryParam ?? '')}`;
-    const response = await this.#fetch(url);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30_000);
+    timer.unref?.();
+    let response: Response;
+    try {
+      response = await this.#fetch(url, { signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
     if (!response.ok) {
       throw new ILinkError(`CDN 下载失败 ${response.status}`);
     }

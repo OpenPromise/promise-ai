@@ -282,6 +282,8 @@ export async function runWeixinRelay(
   let syncBuf = state.syncBuf ?? '';
   let nextTimeoutMs = LONG_POLL_TIMEOUT_MS;
   let consecutiveFailures = 0;
+  let totalPolls = 0;
+  let lastHeartbeatAt = Date.now();
 
   while (!signal.aborted) {
     try {
@@ -314,6 +316,12 @@ export async function runWeixinRelay(
         continue;
       }
       consecutiveFailures = 0;
+      totalPolls += 1;
+      const now = Date.now();
+      if (now - lastHeartbeatAt >= 60_000) {
+        lastHeartbeatAt = now;
+        log?.(`[weixin] relay 轮询正常（第 ${totalPolls} 次）`);
+      }
 
       if (resp.get_updates_buf !== undefined && resp.get_updates_buf !== '') {
         syncBuf = resp.get_updates_buf;
@@ -322,7 +330,12 @@ export async function runWeixinRelay(
       }
       for (const msg of resp.msgs ?? []) {
         try {
-          await handleInboundMessage(msg, options);
+          // 单条消息处理护栏：下载/视觉/对话任一环节卡死都不能阻塞轮询。
+          await withTimeout(
+            handleInboundMessage(msg, options),
+            90_000,
+            '处理微信消息超时',
+          );
         } catch (error) {
           log?.(`[weixin] 处理消息失败：${error instanceof Error ? error.message : String(error)}`);
         }
@@ -360,4 +373,17 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
       { once: true },
     );
   });
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label}（${ms}ms）`)), ms);
+    timer.unref?.();
+  });
+  try {
+    return Promise.race([promise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
