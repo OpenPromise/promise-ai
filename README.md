@@ -388,7 +388,8 @@ iLink CDN（AES-128-ECB 加密上传，`novac2c.cdn.weixin.qq.com`）→ 微信�
 `/data/weixin-files`），把文件丢进去就能在微信里按名索取：
 
 - `weixin.list_files`（L0）：列出文件库（名称/大小/修改时间）
-- `weixin.send_file`（L1）：按文件名精确/前缀/包含匹配并发送（≤20MB）
+- `weixin.send_file`（L1）：按文件名精确/前缀/包含匹配并发送（≤100MB）；
+  任何会话都能用——非微信会话会自动发到绑定的微信账号
 - 微信里发给 bot 的文件会自动下载解密存入文件库，之后可按名要回
 
 使用示例：在微信里说"把报告.pdf 发给我"或"发一下上周的总结"，bot 会先查

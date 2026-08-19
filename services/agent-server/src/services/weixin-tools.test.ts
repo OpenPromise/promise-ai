@@ -105,14 +105,24 @@ describe('weixin.send_file', () => {
     });
   });
 
-  it('rejects outside weixin sessions', async () => {
+  it('works from non-weixin sessions (bridge falls back to the bound account)', async () => {
     const store = await makeStore();
     const session = (await store.listSessions())[0]!;
-    const tools = createWeixinTools({ bridgeUrl: 'http://b:3100', store });
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({ url: String(url), init });
+      return new Response(JSON.stringify({ ok: true, sent: '菜单.psd', size: 28 }), { status: 200 });
+    });
+    const tools = createWeixinTools({
+      bridgeUrl: 'http://weixin-bridge:3100',
+      store,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
     const result = await tools
       .find((t) => t.name === 'weixin.send_file')!
-      .execute({ fileName: 'x.pdf' }, { sessionId: session.id });
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain('不是微信会话');
+      .execute({ fileName: '菜单.psd' }, { sessionId: session.id });
+    expect(result.ok).toBe(true);
+    const call = calls.find((c) => c.url.includes('/api/weixin/send-file'))!;
+    expect(JSON.parse(call.init.body as string).sessionId).toBe(session.id);
   });
 });

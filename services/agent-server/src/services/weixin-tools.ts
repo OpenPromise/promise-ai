@@ -194,8 +194,9 @@ export function createWeixinTools(options: WeixinToolOptions): Tool[] {
     {
       name: 'weixin.send_file',
       description:
-        '从微信文件库按文件名查找并发送文件给当前微信会话用户。' +
-        '支持精确/前缀/包含匹配（如「报告.pdf」或「报告」）。仅用于微信会话。',
+        '从微信文件库按文件名查找并发送文件到微信。支持精确/前缀/包含匹配' +
+        '（如「菜单.psd」或「菜单」）。当前会话若是微信会话则发给该用户，' +
+        '否则发送到已绑定的微信账号（任何会话都可用）。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -211,8 +212,6 @@ export function createWeixinTools(options: WeixinToolOptions): Tool[] {
       async execute(input: unknown, ctx: ToolContext): Promise<ToolResult> {
         const { fileName } = (input ?? {}) as { fileName?: string };
         if (!fileName?.trim()) return { ok: false, error: '缺少 fileName' };
-        const peer = await resolveWeixinPeer(options.store, ctx);
-        if (!peer) return { ok: false, error: '当前会话不是微信会话，无法发送文件' };
         const result = await postBridge(fetchImpl, options.bridgeUrl, '/api/weixin/send-file', {
           sessionId: ctx.sessionId,
           fileName: fileName.trim(),

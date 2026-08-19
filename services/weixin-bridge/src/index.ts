@@ -289,8 +289,11 @@ app.post('/api/weixin/send-image', async (request, reply) => {
   };
   const client = authedClient();
   if (!client) return reply.code(401).send({ error: '微信未登录' });
-  const peer = resolvePeerBySession(body.sessionId);
-  if (!peer) return reply.code(404).send({ error: '找不到该会话对应的微信对端' });
+  // 优先当前微信会话对端；非微信会话（桌面/网页等）回退到已绑定的微信账号。
+  const peer =
+    resolvePeerBySession(body.sessionId) ??
+    Object.keys(stateStore.account?.peerSessions ?? {})[0];
+  if (!peer) return reply.code(404).send({ error: '没有已绑定的微信账号' });
   const image = Buffer.from(body.imageBase64 ?? '', 'base64');
   if (image.length === 0) return reply.code(400).send({ error: '缺少 imageBase64' });
   try {
@@ -321,8 +324,11 @@ app.post('/api/weixin/send-file', async (request, reply) => {
   };
   const client = authedClient();
   if (!client) return reply.code(401).send({ error: '微信未登录' });
-  const peer = resolvePeerBySession(body.sessionId);
-  if (!peer) return reply.code(404).send({ error: '找不到该会话对应的微信对端' });
+  // 优先当前微信会话对端；非微信会话（桌面/网页等）回退到已绑定的微信账号。
+  const peer =
+    resolvePeerBySession(body.sessionId) ??
+    Object.keys(stateStore.account?.peerSessions ?? {})[0];
+  if (!peer) return reply.code(404).send({ error: '没有已绑定的微信账号' });
   const query = body.fileName?.trim();
   if (!query) return reply.code(400).send({ error: '缺少 fileName' });
 
@@ -333,8 +339,8 @@ app.post('/api/weixin/send-file', async (request, reply) => {
   }
   const loaded = await readLibraryFile(filesDir, matched.name);
   if (!loaded) return reply.code(404).send({ error: `无法读取文件「${matched.name}」` });
-  if (loaded.bytes.length > 20 * 1024 * 1024) {
-    return reply.code(413).send({ error: `文件超过 20MB 上限：${matched.name}` });
+  if (loaded.bytes.length > 100 * 1024 * 1024) {
+    return reply.code(413).send({ error: `文件超过 100MB 上限：${matched.name}` });
   }
   try {
     await client.sendFileToUser({
