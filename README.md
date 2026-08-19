@@ -314,6 +314,19 @@ npm run server:up
 注意：服务器对外暴露前请设置防火墙并只开放必要端口；语音链路为 WebSocket，
 如有反代需开启 WebSocket 支持。
 
+## 自我开发与更新
+
+AI 助理可以开发/更新自己（服务端能力）：
+
+- 本地运行用 `npm run serve`（守护进程，服务退出自动拉起；`system.restart`
+  依赖它）；容器部署靠 Docker 的 `restart: unless-stopped`
+- 工具：`self.info`（项目根/版本/环境）、`self.check`（typecheck + 测试门禁）、
+  `system.restart`（L3 二次确认后优雅重启）
+- 流程（已写入人格规则）：`self.info` → 读代码出方案 → `coding.run` 实现 →
+  `self.check` 全绿 → 更新 CHANGELOG → `system.restart` 生效
+- 安全基线：仓库已纳入 git（首次提交为回滚点）；不自动发起自我开发、
+  不改密钥、不绕权限系统、破坏性操作需确认
+
 ## 常用命令
 
 | 命令                              | 说明                 |

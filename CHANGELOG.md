@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.14.8] - 2026-08-19
+
+### 自我开发与更新能力
+
+- **新增自我开发工具**：`self.info`（L0，项目根/版本/环境）、
+  `self.check`（L1，跑 typecheck + 测试作为改动门禁）、
+  `system.restart`（L3 二次确认，优雅重启让改动生效）
+- **自我开发行为准则**：新增 `persona/self-development.md`（注入系统提示词），
+  规定流程：self.info → 读代码出方案 → coding.run 实现 → self.check 全绿 →
+  更新 CHANGELOG → system.restart 生效；并划红线（不改密钥/不绕权限/
+  不自动发起/破坏性操作需确认）
+- **守护进程**：新增 `npm run serve`（agent-supervisor），服务退出自动拉起，
+  带防重启风暴退避；容器部署靠 Docker `restart: unless-stopped`
+- **git 基线**：仓库初始化并提交基线 commit（138 文件），自我更新可回滚
+
 ## [0.14.7] - 2026-08-19
 
 ### coding.run 移入服务端 + 全服务端部署拓扑

@@ -17,12 +17,19 @@ let fastRestarts = 0;
 function start() {
   const startedAt = Date.now();
   console.log('[supervisor] starting agent-server');
-  child = spawn('npm', ['start'], {
-    cwd: ROOT,
-    stdio: 'inherit',
-    shell: process.platform === 'win32',
-    windowsHide: true,
-  });
+  // 直接用 node + tsx 启动，避免经 npm/shell 的转义与弃用警告
+  child = spawn(
+    process.execPath,
+    [
+      path.join(ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+      path.join(ROOT, 'services', 'agent-server', 'src', 'index.ts'),
+    ],
+    {
+      cwd: ROOT,
+      stdio: 'inherit',
+      windowsHide: true,
+    },
+  );
   child.on('error', (error) => {
     console.error('[supervisor] failed to spawn agent-server:', error);
     setTimeout(start, RESTART_DELAY_MS);
