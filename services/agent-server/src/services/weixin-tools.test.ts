@@ -8,6 +8,19 @@ async function makeStore(peer?: string): Promise<InMemorySessionStore> {
   return store;
 }
 
+describe('微信通道权限约束', () => {
+  it('所有 weixin.* 工具权限必须 ≤ L1（微信通道自动拒绝 L2/L3）', () => {
+    const tools = createWeixinTools({
+      bridgeUrl: 'http://weixin-bridge:3100',
+      store: new InMemorySessionStore(),
+    });
+    for (const tool of tools) {
+      expect(tool.name).toMatch(/^weixin\./);
+      expect(tool.permissionLevel, `${tool.name} 在微信通道不可用`).toBeLessThanOrEqual(1);
+    }
+  });
+});
+
 describe('weixin.send_image', () => {
   it('loads a URL image and posts it to the bridge for the session peer', async () => {
     const store = await makeStore('wx_peer');

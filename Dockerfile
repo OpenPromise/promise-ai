@@ -28,6 +28,8 @@ COPY packages ./packages
 COPY services ./services
 COPY apps ./apps
 COPY persona ./persona
+# coding.run（dsh）读取的仓库规则
+COPY AGENTS.md ./
 
 # 只装生产依赖（跳过 electron / esbuild / vitest 等构建与测试依赖）
 RUN npm ci --omit=dev
