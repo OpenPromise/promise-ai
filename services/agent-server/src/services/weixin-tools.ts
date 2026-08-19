@@ -156,7 +156,7 @@ export function createWeixinTools(options: WeixinToolOptions): Tool[] {
         required: ['source'],
       },
       permissionLevel: 1,
-      timeoutMs: 60_000,
+      timeoutMs: 120_000,
       async execute(input: unknown, ctx: ToolContext): Promise<ToolResult> {
         const { source } = (input ?? {}) as { source?: string };
         if (!source?.trim()) return { ok: false, error: '缺少 source（图片路径或 URL）' };
@@ -196,7 +196,9 @@ export function createWeixinTools(options: WeixinToolOptions): Tool[] {
       description:
         '从微信文件库按文件名查找并发送文件到微信。支持精确/前缀/包含匹配' +
         '（如「菜单.psd」或「菜单」）。当前会话若是微信会话则发给该用户，' +
-        '否则发送到已绑定的微信账号（任何会话都可用）。',
+        '否则发送到已绑定的微信账号（任何会话都可用）。' +
+        '这是后台异步发送：工具立即返回 jobId，上传/投递在后台执行，进度与' +
+        '完成/失败会由微信进度消息实时推送，无需等待结果，也不要自动重试。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -208,14 +210,20 @@ export function createWeixinTools(options: WeixinToolOptions): Tool[] {
         required: ['fileName'],
       },
       permissionLevel: 1,
-      timeoutMs: 60_000,
+      timeoutMs: 20_000,
       async execute(input: unknown, ctx: ToolContext): Promise<ToolResult> {
         const { fileName } = (input ?? {}) as { fileName?: string };
         if (!fileName?.trim()) return { ok: false, error: '缺少 fileName' };
-        const result = await postBridge(fetchImpl, options.bridgeUrl, '/api/weixin/send-file', {
-          sessionId: ctx.sessionId,
-          fileName: fileName.trim(),
-        });
+        const result = await postBridge(
+          fetchImpl,
+          options.bridgeUrl,
+          '/api/weixin/send-file-async',
+          {
+            sessionId: ctx.sessionId,
+            fileName: fileName.trim(),
+          },
+          20_000,
+        );
         if (!result.ok) return { ok: false, error: result.error ?? '发送文件失败' };
         return { ok: true, data: result.data };
       },

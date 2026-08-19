@@ -147,6 +147,13 @@ export interface QrStatusResponse {
   redirect_host?: string;
 }
 
+export interface UploadedMediaInfo {
+  downloadParam: string;
+  aesKeyBase64: string;
+  ciphertextSize: number;
+  plaintextSize: number;
+}
+
 export interface ILinkClientOptions {
   baseUrl?: string;
   token?: string;
@@ -327,7 +334,8 @@ export class ILinkClient {
     const resp = await this.#postJson<SendMessageResp>(
       'ilink/bot/sendmessage',
       { msg, base_info: this.#baseInfo() },
-      15_000,
+      // 大文件（几十 MB）时服务端要校验 CDN 文件后才回执，15s 会假超时。
+      120_000,
     );
     if (resp.ret !== undefined && resp.ret !== 0) {
       throw new ILinkError(`sendMessage ret=${resp.ret} errmsg=${resp.errmsg ?? ''}`, resp.ret);
@@ -376,7 +384,7 @@ export class ILinkClient {
     const resp = await this.#postJson<GetUploadUrlResp & { ret?: number; errmsg?: string }>(
       'ilink/bot/getuploadurl',
       { ...params, base_info: this.#baseInfo() },
-      15_000,
+      30_000,
     );
     if (resp.ret !== undefined && resp.ret !== 0) {
       throw new ILinkError(`getUploadUrl ret=${resp.ret} errmsg=${resp.errmsg ?? ''}`, resp.ret);
@@ -405,11 +413,15 @@ export class ILinkClient {
 
     let lastError: unknown;
     for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 180_000);
+      timer.unref?.();
       try {
         const response = await this.#fetch(uploadUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/octet-stream' },
           body: new Uint8Array(ciphertext),
+          signal: controller.signal,
         });
         if (response.status >= 400 && response.status < 500) {
           const detail = response.headers.get('x-error-message') ?? (await response.text());
@@ -426,6 +438,8 @@ export class ILinkClient {
         lastError = error;
         if (error instanceof ILinkError && error.message.includes('客户端错误')) throw error;
         if (attempt < 3) continue;
+      } finally {
+        clearTimeout(timer);
       }
     }
     throw lastError instanceof Error ? lastError : new ILinkError('CDN 上传失败');
@@ -439,7 +453,7 @@ export class ILinkClient {
     runId?: string;
   }): Promise<void> {
     const { to, image } = params;
-    const uploaded = await this.#uploadMedia(to, UploadMediaType.IMAGE, image);
+    const uploaded = await this.uploadMediaBytes(to, UploadMediaType.IMAGE, image);
     await this.sendMessage({
       from_user_id: '',
       to_user_id: to,
@@ -473,7 +487,25 @@ export class ILinkClient {
     runId?: string;
   }): Promise<void> {
     const { to, file, fileName } = params;
-    const uploaded = await this.#uploadMedia(to, UploadMediaType.FILE, file);
+    const uploaded = await this.uploadMediaBytes(to, UploadMediaType.FILE, file);
+    await this.sendUploadedFileToUser({
+      to,
+      fileName,
+      uploaded,
+      contextToken: params.contextToken,
+      runId: params.runId,
+    });
+  }
+
+  /** 用已上传的媒体信息发送文件消息（供后台任务分步上报进度）。 */
+  async sendUploadedFileToUser(params: {
+    to: string;
+    fileName: string;
+    uploaded: UploadedMediaInfo;
+    contextToken?: string;
+    runId?: string;
+  }): Promise<void> {
+    const { to, fileName, uploaded } = params;
     await this.sendMessage({
       from_user_id: '',
       to_user_id: to,
@@ -530,16 +562,12 @@ export class ILinkClient {
     return decryptAesEcb(encrypted, parseAesKey(params.aesKeyBase64));
   }
 
-  async #uploadMedia(
+  /** 加密上传媒体到 CDN，返回发送消息所需的引用信息（供进度分步）。 */
+  async uploadMediaBytes(
     toUserId: string,
     mediaType: number,
     plaintext: Buffer,
-  ): Promise<{
-    downloadParam: string;
-    aesKeyBase64: string;
-    ciphertextSize: number;
-    plaintextSize: number;
-  }> {
+  ): Promise<UploadedMediaInfo> {
     const rawsize = plaintext.length;
     const rawfilemd5 = createHashMd5(plaintext);
     const filekey = randomBytes(16).toString('hex');

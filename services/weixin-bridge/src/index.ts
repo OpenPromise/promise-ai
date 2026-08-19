@@ -11,6 +11,7 @@ import { LoginManager } from './login.js';
 import { runWeixinRelay } from './relay.js';
 import { runEventPusher } from './event-pusher.js';
 import { listLibraryFiles, readLibraryFile, resolveFileByName } from './files.js';
+import { FileJobManager } from './jobs.js';
 
 try {
   const { config } = await import('dotenv');
@@ -41,6 +42,16 @@ let lastEventAt: number | undefined;
 const log = (message: string): void => {
   console.log(`[weixin-bridge] ${message}`);
 };
+
+const jobManager = new FileJobManager({
+  filesDir,
+  clientFactory: () => {
+    const client = authedClient();
+    if (!client) throw new Error('微信未登录');
+    return client;
+  },
+  log,
+});
 
 function makeClient(options: ILinkClientOptions = {}): ILinkClient {
   return new ILinkClient({
@@ -291,8 +302,7 @@ app.post('/api/weixin/send-image', async (request, reply) => {
   if (!client) return reply.code(401).send({ error: '微信未登录' });
   // 优先当前微信会话对端；非微信会话（桌面/网页等）回退到已绑定的微信账号。
   const peer =
-    resolvePeerBySession(body.sessionId) ??
-    Object.keys(stateStore.account?.peerSessions ?? {})[0];
+    resolvePeerBySession(body.sessionId) ?? Object.keys(stateStore.account?.peerSessions ?? {})[0];
   if (!peer) return reply.code(404).send({ error: '没有已绑定的微信账号' });
   const image = Buffer.from(body.imageBase64 ?? '', 'base64');
   if (image.length === 0) return reply.code(400).send({ error: '缺少 imageBase64' });
@@ -326,8 +336,7 @@ app.post('/api/weixin/send-file', async (request, reply) => {
   if (!client) return reply.code(401).send({ error: '微信未登录' });
   // 优先当前微信会话对端；非微信会话（桌面/网页等）回退到已绑定的微信账号。
   const peer =
-    resolvePeerBySession(body.sessionId) ??
-    Object.keys(stateStore.account?.peerSessions ?? {})[0];
+    resolvePeerBySession(body.sessionId) ?? Object.keys(stateStore.account?.peerSessions ?? {})[0];
   if (!peer) return reply.code(404).send({ error: '没有已绑定的微信账号' });
   const query = body.fileName?.trim();
   if (!query) return reply.code(400).send({ error: '缺少 fileName' });
@@ -355,6 +364,44 @@ app.post('/api/weixin/send-file', async (request, reply) => {
     app.log.error({ err: error }, 'send weixin file failed');
     return reply.code(502).send({ error: error instanceof Error ? error.message : String(error) });
   }
+});
+
+app.post('/api/weixin/send-file-async', async (request, reply) => {
+  const body = (request.body ?? {}) as {
+    sessionId?: string;
+    fileName?: string;
+  };
+  if (!authedClient()) return reply.code(401).send({ error: '微信未登录' });
+  const peer =
+    resolvePeerBySession(body.sessionId) ?? Object.keys(stateStore.account?.peerSessions ?? {})[0];
+  if (!peer) return reply.code(404).send({ error: '没有已绑定的微信账号' });
+  const query = body.fileName?.trim();
+  if (!query) return reply.code(400).send({ error: '缺少 fileName' });
+  try {
+    const { job, deduped } = await jobManager.start(peer, query);
+    return {
+      ok: true,
+      jobId: job.id,
+      status: job.status,
+      fileName: job.fileName,
+      size: job.size,
+      deduped,
+    };
+  } catch (error) {
+    return reply.code(404).send({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.get('/api/weixin/jobs', async () => {
+  const jobs = jobManager.list();
+  return { count: jobs.length, jobs };
+});
+
+app.get('/api/weixin/jobs/:id', async (request, reply) => {
+  const params = request.params as { id: string };
+  const job = jobManager.get(params.id);
+  if (!job) return reply.code(404).send({ error: '任务不存在' });
+  return job;
 });
 
 app.get('/weixin/login', async (_request, reply) => {

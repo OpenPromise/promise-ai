@@ -81,13 +81,22 @@ describe('weixin.list_files', () => {
 });
 
 describe('weixin.send_file', () => {
-  it('posts fileName to the bridge for the session peer', async () => {
+  it('starts an async background send via the bridge', async () => {
     const store = await makeStore('wx_peer');
     const session = (await store.listSessions())[0]!;
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
       calls.push({ url: String(url), init });
-      return new Response(JSON.stringify({ ok: true, sent: '报告.pdf', size: 9 }), { status: 200 });
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          jobId: 'job-1',
+          status: 'queued',
+          fileName: '报告.pdf',
+          size: 9,
+        }),
+        { status: 200 },
+      );
     });
     const tools = createWeixinTools({
       bridgeUrl: 'http://weixin-bridge:3100',
@@ -98,11 +107,12 @@ describe('weixin.send_file', () => {
       .find((t) => t.name === 'weixin.send_file')!
       .execute({ fileName: '报告.pdf' }, { sessionId: session.id });
     expect(result.ok).toBe(true);
-    const call = calls.find((c) => c.url.includes('/api/weixin/send-file'))!;
+    const call = calls.find((c) => c.url.includes('/api/weixin/send-file-async'))!;
     expect(JSON.parse(call.init.body as string)).toMatchObject({
       sessionId: session.id,
       fileName: '报告.pdf',
     });
+    expect((result.data as { jobId: string }).jobId).toBe('job-1');
   });
 
   it('works from non-weixin sessions (bridge falls back to the bound account)', async () => {
@@ -111,7 +121,9 @@ describe('weixin.send_file', () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
       calls.push({ url: String(url), init });
-      return new Response(JSON.stringify({ ok: true, sent: '菜单.psd', size: 28 }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, sent: '菜单.psd', size: 28 }), {
+        status: 200,
+      });
     });
     const tools = createWeixinTools({
       bridgeUrl: 'http://weixin-bridge:3100',
@@ -122,7 +134,7 @@ describe('weixin.send_file', () => {
       .find((t) => t.name === 'weixin.send_file')!
       .execute({ fileName: '菜单.psd' }, { sessionId: session.id });
     expect(result.ok).toBe(true);
-    const call = calls.find((c) => c.url.includes('/api/weixin/send-file'))!;
+    const call = calls.find((c) => c.url.includes('/api/weixin/send-file-async'))!;
     expect(JSON.parse(call.init.body as string).sessionId).toBe(session.id);
   });
 });
