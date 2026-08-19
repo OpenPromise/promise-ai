@@ -14,6 +14,14 @@ const fs = require('node:fs');
 const { spawn } = require('node:child_process');
 const readline = require('node:readline');
 
+// 让桌面 UI 与其它服务一样从仓库根 .env 读取配置（AGENT_URL / WAKE_HOTKEY）。
+try {
+  // npm -w 会把 cwd 切到 apps/desktop-ui，必须显式指向仓库根 .env。
+  require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
+} catch {
+  // .env 缺失时保持默认值
+}
+
 const AGENT_URL = process.env.AGENT_URL ?? 'http://127.0.0.1:3000';
 const WAKE_HOTKEY = process.env.WAKE_HOTKEY ?? 'CommandOrControl+Alt+Space';
 
