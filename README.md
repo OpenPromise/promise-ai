@@ -69,6 +69,11 @@ npm run dev            # 启动 Agent Server（默认 :3000）
 选中的 Provider 没有配置 Key 时服务仍可启动，`/health` 会显示 `llm.configured: false`，
 调用聊天接口会返回 503。
 
+主模型未产出内容即失败时，可自动切换到备用后端（OpenCrabs 故障转移思路）：
+`LLM_FALLBACK_PROVIDER=none|openrouter|dashscope`（默认 `none`），
+`LLM_FALLBACK_MODEL` 指定备用模型（默认 `deepseek/deepseek-v4-pro`）。
+流式输出一旦开始则不回滚，中途失败按既有错误路径重试/上报。
+
 ## 语音层（Phase 3）
 
 语音链路（cascade 模式）：**Qwen ASR（实时转写）→ Qwen/OpenRouter（思考回复）→
@@ -324,6 +329,9 @@ AI 助理可以开发/更新自己（服务端能力）：
   `system.restart`（L3 二次确认后优雅重启）
 - 流程（已写入人格规则）：`self.info` → 读代码出方案 → `coding.run` 实现 →
   `self.check` 全绿 → 更新 CHANGELOG → `system.restart` 生效
+- 有界自主（Prime Agent 思路）：每次自我开发先定义 `goal`，最多 3 轮
+  "改动-验证"迭代；`self.check` 质量门（typecheck + 测试）失败即停止并回滚；
+  失败/反馈写入 `[feedback]` 记忆供后续会话复习
 - 安全基线：仓库已纳入 git（首次提交为回滚点）；不自动发起自我开发、
   不改密钥、不绕权限系统、破坏性操作需确认
 

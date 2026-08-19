@@ -6,6 +6,7 @@ import {
   createResilientEmbedder,
   extractKeywords,
   InMemoryMemoryStore,
+  rrfMerge,
 } from './memory.js';
 
 describe('createLocalEmbedder + cosineSimilarity', () => {
@@ -78,6 +79,35 @@ describe('InMemoryMemoryStore', () => {
 
     const results = await store.search('咖啡', 2);
     expect(results.some(({ entry }) => entry.content.includes('咖啡'))).toBe(true);
+  });
+
+  it('fuses vector and keyword recall with RRF, favoring dual hits', async () => {
+    const makeEntry = (id: string, content: string) => ({
+      id,
+      kind: 'semantic' as const,
+      content,
+      createdAt: '',
+      updatedAt: '',
+    });
+    const dualHit = makeEntry('dual', '用户喜欢喝美式咖啡，常去杭州');
+    const vectorOnly = makeEntry('vector', '用户喜欢咖啡因饮料');
+    const keywordOnly = makeEntry('keyword', '杭州的天气很好');
+
+    const merged = rrfMerge(
+      [
+        [
+          { entry: vectorOnly, score: 0.9 },
+          { entry: dualHit, score: 0.7 },
+        ],
+        [
+          { entry: keywordOnly, score: 0.1 },
+          { entry: dualHit, score: 0.1 },
+        ],
+      ],
+      2,
+    );
+    expect(merged[0]?.entry.id).toBe('dual');
+    expect(merged.map(({ entry }) => entry.id)).toHaveLength(2);
   });
 });
 

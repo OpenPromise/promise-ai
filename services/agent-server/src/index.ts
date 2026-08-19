@@ -5,6 +5,7 @@ import { FilePersonaProvider } from '@personal-ai/core';
 import { ElevenLabsSTT, ElevenLabsTTS } from '@personal-ai/elevenlabs';
 import { OpenRouterProvider } from '@personal-ai/openrouter';
 import { QwenRealtimeClient } from '@personal-ai/qwen-realtime';
+import { FallbackLLMProvider } from '@personal-ai/llm';
 import {
   createDashScopeEmbedder,
   createLocalEmbedder,
@@ -24,6 +25,7 @@ import { TaskService, validateCronSchedule } from './services/task-service.js';
 import { ReminderService } from './services/reminder-service.js';
 import { createCodingTool } from './services/coding-tool.js';
 import { createSelfTools } from './services/self-tools.js';
+import { recoverInterruptedSessions } from './services/restart-recovery.js';
 
 const config = loadConfig();
 
@@ -104,6 +106,23 @@ if (config.databaseUrl) {
   }
 }
 
+// 重启恢复上报（OpenCrabs 思路）：服务被拉起后，给存在中断工具调用的会话
+// 注入提示，让用户与模型都知道上次任务被打断。
+if (sessionBackend === 'postgres') {
+  try {
+    const { recovered, sessionIds } = await recoverInterruptedSessions(store);
+    if (recovered > 0) {
+      console.log(
+        `[recovery] ${recovered} 个会话存在中断的工具调用，已注入恢复提示：${sessionIds.join(', ')}`,
+      );
+    }
+  } catch (error) {
+    console.warn(
+      `[recovery] 扫描中断会话失败（${error instanceof Error ? error.message : String(error)}）`,
+    );
+  }
+}
+
 const persona = new FilePersonaProvider({
   personaDir: fileURLToPath(new URL('../../../persona', import.meta.url)),
   ...(config.elevenlabs.voiceId
@@ -144,8 +163,9 @@ const createTTS = () =>
     languageCode: config.elevenlabs.language,
   });
 // Text reasoning: DashScope (Qwen) by default, with OpenRouter as an optional
-// alternative — both speak the same OpenAI-compatible protocol.
-const llm =
+// alternative — both speak the same OpenAI-compatible protocol. OpenCrabs 式
+// 故障转移：主模型未产出内容即失败时，透明切换到备用后端。
+const primaryLlm =
   config.llmProvider === 'openrouter'
     ? new OpenRouterProvider({
         apiKey: config.openrouter.apiKey,
@@ -157,9 +177,35 @@ const llm =
         baseUrl: config.dashscope.baseUrl,
         model: config.dashscope.model,
       });
+const fallbackLlm =
+  config.llmFallback.provider === 'openrouter'
+    ? new OpenRouterProvider({
+        apiKey: config.openrouter.apiKey,
+        baseUrl: config.openrouter.baseUrl,
+        model: config.llmFallback.model ?? config.openrouter.model,
+      })
+    : config.llmFallback.provider === 'dashscope'
+      ? new OpenRouterProvider({
+          apiKey: config.dashscope.apiKey,
+          baseUrl: config.dashscope.baseUrl,
+          model: config.llmFallback.model ?? config.dashscope.model,
+        })
+      : undefined;
+const llm = new FallbackLLMProvider({
+  primary: primaryLlm,
+  ...(fallbackLlm
+    ? {
+        fallback: fallbackLlm,
+        onFailover: (from, to, error) =>
+          console.warn(
+            `[llm] ${from.name}/${from.model} 未产出即失败（${error instanceof Error ? error.message : String(error)}），切换至 ${to.name}/${to.model}`,
+          ),
+      }
+    : {}),
+});
 // Voice cascade may use a faster model than text chat to cut latency; with
 // DashScope the same Qwen model is used for both.
-const voiceLlm =
+const primaryVoiceLlm =
   config.llmProvider === 'openrouter'
     ? new OpenRouterProvider({
         apiKey: config.openrouter.apiKey,
@@ -171,6 +217,18 @@ const voiceLlm =
         baseUrl: config.dashscope.baseUrl,
         model: config.dashscope.model,
       });
+const voiceLlm = new FallbackLLMProvider({
+  primary: primaryVoiceLlm,
+  ...(fallbackLlm
+    ? {
+        fallback: fallbackLlm,
+        onFailover: (from, to, error) =>
+          console.warn(
+            `[voice-llm] ${from.name}/${from.model} 未产出即失败（${error instanceof Error ? error.message : String(error)}），切换至 ${to.name}/${to.model}`,
+          ),
+      }
+    : {}),
+});
 
 const toolRegistry = new ToolRegistry();
 const approvals = new ApprovalRegistry();
@@ -239,6 +297,8 @@ try {
       llmConfigured: llm.configured,
       llmProvider: config.llmProvider,
       llmModel: llm.model,
+      llmFallback: config.llmFallback.provider,
+      llmFallbackModel: fallbackLlm?.model,
       voiceLlmModel: voiceLlm?.model,
       voiceMode: config.qwenRealtime.voiceMode,
       qwenVoiceModel: config.qwenRealtime.model,

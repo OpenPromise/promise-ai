@@ -9,6 +9,10 @@
 5. ElevenLabs Agents SDK
 6. OpenDex（语音优先桌面代理，仅借鉴 computer-use 循环工程、任务级权限
    授权、Realtime 委托与音频响应主题等设计，不复制其 Electron/React 外壳）
+7. OpenCrabs（Rust 终端 Agent，仅借鉴 LLM 多后端故障转移、记忆混合检索
+   RRF、重启恢复上报、反馈台账与启动摘要等设计，不复制其 Rust 代码）
+8. Prime Agent（RLM/Continual Harness，仅借鉴持久目标、预算化自主模式、
+   证据驱动的 /refine 持续改进与回滚快照等设计，不复制其代码）
 
 ## 参考原则
 

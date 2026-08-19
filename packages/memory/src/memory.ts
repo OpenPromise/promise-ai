@@ -177,6 +177,36 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
+/**
+ * RRF（Reciprocal Rank Fusion）：把多路召回结果按排名加权融合，同一记忆在
+ * 多路同时命中会获得更高分。OpenCrabs 混合检索思路：向量 + 关键词双路召回
+ * 不再"向量优先、关键词兜底"，而是平等融合。
+ */
+export function rrfMerge(
+  lists: Array<Array<MemorySearchResult>>,
+  limit: number,
+  k = 60,
+): MemorySearchResult[] {
+  const merged = new Map<string, { score: number; entry: MemoryEntry }>();
+  for (const list of lists) {
+    for (let rank = 0; rank < list.length; rank++) {
+      const item = list[rank];
+      if (!item) continue;
+      const contribution = 1 / (k + rank + 1);
+      const current = merged.get(item.entry.id);
+      if (current) {
+        current.score += contribution;
+      } else {
+        merged.set(item.entry.id, { score: contribution, entry: item.entry });
+      }
+    }
+  }
+  return [...merged.values()]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(({ score, entry }) => ({ entry, score }));
+}
+
 export class InMemoryMemoryStore implements MemoryStore {
   readonly #items: MemoryEntry[] = [];
   readonly #embedder: Embedder;
@@ -220,24 +250,24 @@ export class InMemoryMemoryStore implements MemoryStore {
         return { entry, score: cosineSimilarity(queryVector, vector) };
       }),
     );
-    const vectorResults = results
-      .filter((result) => result.score > 0.12)
+    // 向量路：保留低阈值候选，排名由 RRF 决定。
+    const vectorResults: MemorySearchResult[] = results
+      .filter((result) => result.score > 0.08)
       .sort((a, b) => b.score - a.score)
-      .slice(0, limit);
-    if (vectorResults.length >= limit) return vectorResults;
+      .slice(0, limit * 2);
 
-    // 关键词兜底：向量检索不足时，用查询关键词做包含匹配（OpenClaw 混合检索思路）。
+    // 关键词路：与向量路独立召回，再经 RRF 融合。
     const keywords = extractKeywords(query);
-    const seen = new Set(vectorResults.map(({ entry }) => entry.id));
     const keywordHits: MemorySearchResult[] = [];
-    for (const { entry } of results) {
-      if (seen.has(entry.id) || keywordHits.length >= limit - vectorResults.length) continue;
-      if (containsKeyword(entry.content, keywords)) {
-        seen.add(entry.id);
-        keywordHits.push({ entry, score: 0.1 });
+    if (keywords.length > 0) {
+      for (const { entry } of results) {
+        if (keywordHits.length >= limit * 2) break;
+        if (containsKeyword(entry.content, keywords)) {
+          keywordHits.push({ entry, score: 0.1 });
+        }
       }
     }
-    return [...vectorResults, ...keywordHits];
+    return rrfMerge([vectorResults, keywordHits], limit);
   }
 
   async forget(id: string): Promise<boolean> {

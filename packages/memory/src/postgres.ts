@@ -3,6 +3,7 @@ import pg from 'pg';
 import {
   createLocalEmbedder,
   extractKeywords,
+  rrfMerge,
   type Embedder,
   type MemoryEntry,
   type MemoryKind,
@@ -130,22 +131,23 @@ export class PostgresMemoryStore implements MemoryStore {
 
   async search(query: string, limit = 5): Promise<MemorySearchResult[]> {
     const embedding = await this.#embedder.embed(query);
-    const result = await this.#pool.query<MemoryRow>(
+    const vectorResult = await this.#pool.query<MemoryRow>(
       `SELECT id, kind, content, created_at, updated_at,
               1 - (embedding <=> $1::vector) AS score
        FROM memories
        WHERE embedding IS NOT NULL
        ORDER BY embedding <=> $1::vector
        LIMIT $2`,
-      [JSON.stringify(embedding), limit],
+      [JSON.stringify(embedding), limit * 2],
     );
-    const vectorRows = result.rows
-      .filter((row) => (row.score ?? 0) > 0.12)
+    // 向量路：保留低阈值候选，排名由 RRF 决定。
+    const vectorRows: MemorySearchResult[] = vectorResult.rows
+      .filter((row) => (row.score ?? 0) > 0.08)
       .map((row) => ({ entry: toEntry(row), score: row.score ?? 0 }));
-    if (vectorRows.length >= limit) return vectorRows;
 
-    // 关键词兜底（OpenClaw 混合检索思路）：向量命中不足时用 ILIKE 包含匹配。
+    // 关键词路：与向量路独立召回，再经 RRF 融合。
     const keywords = extractKeywords(query);
+    const keywordRows: MemorySearchResult[] = [];
     if (keywords.length > 0) {
       const keywordResult = await this.#pool.query<MemoryRow>(
         `SELECT id, kind, content, created_at, updated_at, 0.1 AS score
@@ -153,16 +155,11 @@ export class PostgresMemoryStore implements MemoryStore {
          WHERE content ILIKE ANY($1)
          ORDER BY updated_at DESC
          LIMIT $2`,
-        [keywords.map((keyword) => `%${escapeLike(keyword)}%`), limit - vectorRows.length],
+        [keywords.map((keyword) => `%${escapeLike(keyword)}%`), limit * 2],
       );
-      const seen = new Set(vectorRows.map(({ entry }) => entry.id));
-      for (const row of keywordResult.rows) {
-        if (seen.has(row.id)) continue;
-        seen.add(row.id);
-        vectorRows.push({ entry: toEntry(row), score: 0.1 });
-      }
+      keywordRows.push(...keywordResult.rows.map((row) => ({ entry: toEntry(row), score: 0.1 })));
     }
-    return vectorRows.slice(0, limit);
+    return rrfMerge([vectorRows, keywordRows], limit);
   }
 
   async forget(id: string): Promise<boolean> {

@@ -4,6 +4,7 @@ import { z } from 'zod';
 type LogLevel = 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
 type NodeEnv = 'development' | 'test' | 'production';
 export type LLMProviderName = 'openrouter' | 'dashscope';
+export type LLMFallbackProviderName = 'none' | 'openrouter' | 'dashscope';
 
 const emptyToUndefined = (value: unknown): unknown => {
   if (typeof value === 'string' && value.trim() === '') return undefined;
@@ -28,6 +29,11 @@ const envSchema = z.object({
     emptyToUndefined,
     z.enum(['openrouter', 'dashscope']).default('dashscope'),
   ),
+  LLM_FALLBACK_PROVIDER: z.preprocess(
+    emptyToUndefined,
+    z.enum(['none', 'openrouter', 'dashscope']).default('none'),
+  ),
+  LLM_FALLBACK_MODEL: z.preprocess(emptyToUndefined, z.string().trim().min(1).optional()),
   OPENROUTER_API_KEY: optionalString,
   OPENROUTER_MODEL: z.preprocess(
     emptyToUndefined,
@@ -82,6 +88,12 @@ export interface AppConfig {
   port: number;
   logLevel: LogLevel;
   llmProvider: LLMProviderName;
+  llmFallback: {
+    provider: LLMFallbackProviderName;
+    /** 备用模型；缺省时沿用该提供方的默认模型。 */
+    model?: string;
+    configured: boolean;
+  };
   openrouter: {
     apiKey?: string;
     model: string;
@@ -162,6 +174,15 @@ export function loadConfig(
     port: v.PORT,
     logLevel: v.LOG_LEVEL,
     llmProvider: v.LLM_PROVIDER,
+    llmFallback: {
+      provider: v.LLM_FALLBACK_PROVIDER,
+      model: v.LLM_FALLBACK_MODEL,
+      configured:
+        v.LLM_FALLBACK_PROVIDER !== 'none' &&
+        Boolean(
+          v.LLM_FALLBACK_PROVIDER === 'openrouter' ? v.OPENROUTER_API_KEY : v.DASHSCOPE_API_KEY,
+        ),
+    },
     openrouter: {
       apiKey: v.OPENROUTER_API_KEY,
       model: v.OPENROUTER_MODEL,

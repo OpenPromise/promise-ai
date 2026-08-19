@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.14.9] - 2026-08-19
+
+### OpenCrabs / Prime Agent 参考吸收（故障韧性 + 有界自我开发）
+
+- **LLM 多后端故障转移**：主模型（qwen3.8-max）未产出内容即失败时，透明
+  切换到备用后端（OpenRouter，默认 deepseek-v4-pro）；流式一旦开始则不回滚，
+  由上层既有错误路径处理。配置：`LLM_FALLBACK_PROVIDER` / `LLM_FALLBACK_MODEL`
+- **记忆混合检索 RRF**：向量 + 关键词双路独立召回，用 Reciprocal Rank Fusion
+  融合排名（不再"向量优先、关键词兜底"）；内存库与 Postgres 库同步升级
+- **重启恢复上报**：服务启动时扫描最近 24h 会话，为存在"悬空工具调用"的
+  会话注入中断提示（幂等，不重复注入），让下一轮对话知道任务曾被重启打断
+- **有界自主自我开发**：`self.check` 新增 `goal` / `maxIterations` 参数并在
+  输出中返回预算与质量门约束；`persona/self-development.md` 新增有界自主规则
+  （目标+最多 3 轮迭代+质量门失败即回滚）与反馈台账（[feedback] 记忆）
+
 ## [0.14.8] - 2026-08-19
 
 ### 自我开发与更新能力

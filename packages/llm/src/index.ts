@@ -211,3 +211,69 @@ export function finalizeToolCalls(
       arguments: call.arguments ?? '{}',
     }));
 }
+
+export interface FallbackLLMProviderOptions {
+  primary: LLMProvider;
+  /** 可选备用提供方；未配置时等同于直接使用 primary。 */
+  fallback?: LLMProvider;
+  /** 发生故障转移时回调（用于日志/事件上报）。 */
+  onFailover?: (from: LLMProvider, to: LLMProvider, error: unknown) => void;
+}
+
+/**
+ * OpenCrabs 式多后端故障转移：主模型在产出任何内容之前失败时，透明切换到
+ * 备用提供方。流式输出一旦已经开始（已向客户端吐过内容），中途失败无法
+ * 回滚，直接抛给上层按既有错误路径处理。
+ */
+export class FallbackLLMProvider implements LLMProvider {
+  readonly name = 'fallback';
+  readonly model: string;
+  readonly configured: boolean;
+  readonly #primary: LLMProvider;
+  readonly #fallback?: LLMProvider;
+  readonly #onFailover?: (from: LLMProvider, to: LLMProvider, error: unknown) => void;
+
+  constructor(options: FallbackLLMProviderOptions) {
+    this.#primary = options.primary;
+    this.#fallback = options.fallback;
+    this.#onFailover = options.onFailover;
+    this.model = this.#primary.model;
+    this.configured = this.#primary.configured || Boolean(this.#fallback?.configured);
+  }
+
+  async *chat(input: ChatInput): AsyncIterable<ChatChunk> {
+    const iterator = this.#primary.chat(input)[Symbol.asyncIterator]();
+    let started = false;
+    try {
+      while (true) {
+        const { done, value } = await iterator.next();
+        if (done) break;
+        started = true;
+        yield value;
+      }
+    } catch (error) {
+      if (!started && this.#fallback) {
+        this.#onFailover?.(this.#primary, this.#fallback, error);
+        yield* this.#fallback.chat(input);
+        return;
+      }
+      throw error;
+    } finally {
+      if (!started && typeof iterator.return === 'function') {
+        await iterator.return();
+      }
+    }
+  }
+
+  async generate(input: ChatInput): Promise<GenerateResult> {
+    try {
+      return await this.#primary.generate(input);
+    } catch (error) {
+      if (this.#fallback) {
+        this.#onFailover?.(this.#primary, this.#fallback, error);
+        return await this.#fallback.generate(input);
+      }
+      throw error;
+    }
+  }
+}
