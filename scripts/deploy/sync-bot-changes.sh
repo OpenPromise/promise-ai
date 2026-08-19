@@ -32,9 +32,14 @@ EOF
   echo "[sync] 基线已提交"
 fi
 
-# 容器 /app（含 bot 自我开发改动）同步到宿主机仓库，排除 node_modules
-echo "[sync] 同步容器 /app 到 $REPO ..."
-sudo docker exec assistant-app tar -C /app --exclude=node_modules -cf - . | tar -C "$REPO" -xf -
+# /app 已 bind-mount 宿主机仓库时，bot 改动直接落在仓库里，无需复制；
+# 未挂载（旧镜像）时才从容器复制。
+if sudo docker exec assistant-app test -d /app/.git 2>/dev/null; then
+  echo "[sync] /app 为挂载仓库，改动直接可见，跳过复制"
+else
+  echo "[sync] 同步容器 /app 到 $REPO ..."
+  sudo docker exec assistant-app tar -C /app --exclude=node_modules -cf - . | tar -C "$REPO" -xf -
+fi
 
 if ! git diff --quiet; then
   git add -A
