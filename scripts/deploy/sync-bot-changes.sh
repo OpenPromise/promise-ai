@@ -40,7 +40,7 @@ if ! git diff --quiet; then
   git add -A
   # 剔除"git 历史中已删除、容器里却残留"的陈旧文件，防止旧镜像文件被复活
   for f in $(git diff --cached --name-only --diff-filter=A); do
-    if ! git ls-files --error-unmatch "$f" >/dev/null 2>&1 && git log --all --oneline -- "$f" | grep -q .; then
+    if ! git cat-file -e "HEAD:$f" 2>/dev/null && git log --all --oneline -- "$f" | grep -q .; then
       git rm --cached --quiet "$f" 2>/dev/null || true
       rm -f "$f" 2>/dev/null || true
       echo "[sync] 剔除陈旧文件: $f"
