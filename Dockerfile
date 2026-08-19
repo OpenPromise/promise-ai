@@ -42,6 +42,11 @@ RUN npm install -g pnpm \
     && printf -- '- id: agent-default-model\n  config:\n    provider: deepseek-official\n    model: deepseek-v4-flash\n' \
        > "$DSH_HOME/profiles/headless/cordis.patch.yml"
 
+# git 全局配置：挂载的 /app 属主是宿主用户，需标记 safe.directory 才能提交/推送
+RUN git config --global --add safe.directory /app \
+    && git config --global user.name "Promise AI Bot" \
+    && git config --global user.email "bot@promise-ai.local"
+
 COPY infrastructure/docker-entrypoint.sh /app/infrastructure/docker-entrypoint.sh
 RUN chmod +x /app/infrastructure/docker-entrypoint.sh
 
