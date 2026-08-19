@@ -38,10 +38,26 @@ sudo docker exec assistant-app tar -C /app --exclude=node_modules -cf - . | tar 
 
 if ! git diff --quiet; then
   git add -A
+  # 剔除"git 历史中已删除、容器里却残留"的陈旧文件，防止旧镜像文件被复活
+  for f in $(git diff --cached --name-only --diff-filter=A); do
+    if ! git ls-files --error-unmatch "$f" >/dev/null 2>&1 && git log --all --oneline -- "$f" | grep -q .; then
+      git rm --cached --quiet "$f" 2>/dev/null || true
+      rm -f "$f" 2>/dev/null || true
+      echo "[sync] 剔除陈旧文件: $f"
+    fi
+  done
   git -c user.email="$GIT_EMAIL" -c user.name="$GIT_USER" commit -q -m "sync: 服务器 bot 改动 $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "[sync] 已提交：$(git rev-parse --short HEAD)"
   echo "[sync] 改动文件："
   git show --stat --oneline HEAD | head -30
+  # 推送到 GitHub（部署 key，read-write），bot 改动永久保留在远程
+  if git remote | grep -q '^origin$'; then
+    if git push origin main 2>&1 | tail -2; then
+      echo "[sync] 已推送到 GitHub（origin/main）"
+    else
+      echo "[sync] 推送失败，可稍后手动执行：git push origin main"
+    fi
+  fi
 else
   echo "[sync] 无改动"
 fi

@@ -27,50 +27,14 @@ try {
   $sync = Invoke-SSHCommand -SessionId $session.SessionId -Command 'bash /home/ubuntu/promise-ai/scripts/deploy/sync-bot-changes.sh 2>&1'
   $sync.Output | ForEach-Object { Write-Host $_ }
 
-  # 2) 相对基线的全部改动（服务器 git 历史已永久保留）
-  $baseline = (Invoke-SSHCommand -SessionId $session.SessionId -Command 'cd /home/ubuntu/promise-ai; git rev-list --max-parents=0 HEAD').Output |
-    Where-Object { $_ -match '^[0-9a-f]{7,40}$' } | Select-Object -First 1
-  if (-not $baseline) { Write-Host '无基线提交，跳过'; return }
-
-  $status = Invoke-SSHCommand -SessionId $session.SessionId -Command "cd /home/ubuntu/promise-ai; git diff --name-status $baseline HEAD"
-  $changed = @()
-  $deleted = @()
-  foreach ($line in $status.Output) {
-    if ($line -match '^([AM])\s+(.+)$') { $changed += $matches[2].Trim() }
-    elseif ($line -match '^D\s+(.+)$') { $deleted += $matches[1].Trim() }
-  }
-
-  Write-Host "--- 服务器改动：新增/修改 $($changed.Count) 个，删除 $($deleted.Count) 个 ---"
-  $paths = @()
-  foreach ($file in $deleted) {
-    $local = Join-Path $Repo $file
-    if (Test-Path $local) {
-      Remove-Item -LiteralPath $local -Force
-      $paths += $file
-      Write-Host "删除本地: $file"
-    }
-  }
-  foreach ($file in $changed) {
-    $local = Join-Path $Repo $file
-    $parent = Split-Path $local -Parent
-    if ($parent -and -not (Test-Path $parent)) {
-      New-Item -ItemType Directory -Force -Path $parent | Out-Null
-    }
-    # base64 直传保留相对路径（Get-SCPItem 会丢路径）
-    $b64 = (Invoke-SSHCommand -SessionId $session.SessionId -Command "cat /home/ubuntu/promise-ai/$file | base64 -w0").Output -join ''
-    if ($b64) {
-      [System.IO.File]::WriteAllBytes($local, [Convert]::FromBase64String($b64.Trim()))
-      $paths += $file
-    }
-    Write-Host "拉回: $file"
-  }
-
-  # 3) 本地提交（无变化则跳过）
+  # 2) 本地从 GitHub 拉取并提交（无变化则跳过）
   Push-Location $Repo
   try {
+    git fetch origin
+    git pull --ff-only origin main 2>&1 | ForEach-Object { Write-Host $_ }
     $dirty = git status --porcelain
     if ($dirty) {
-      git add -A -- $paths
+      git add -A
       git commit -m "sync: 服务器 bot 改动（$(Get-Date -Format 'yyyy-MM-dd HH:mm')）"
       Write-Host '--- 本地已提交 ---'
       git log --oneline -1
