@@ -114,29 +114,30 @@ AI 可以自主调用工具完成任务：`Agent → ToolRouter → Tool → Res
 
 当前内置工具（`packages/tools`）：
 
-| 工具                | 权限 | 说明                                 |
-| ------------------- | ---- | ------------------------------------ |
-| `time.get`          | L0   | 获取当前时间（可指定时区）           |
-| `weather.get`       | L0   | 查询城市天气（Open-Meteo，无需 Key） |
-| `web.search`        | L0   | 维基百科搜索                         |
-| `filesystem.search` | L0   | 工作区内按文件名搜索（含通配符）     |
-| `reminder.create`   | L1   | 创建提醒（内存存储）                 |
-| `reminder.list`     | L0   | 列出提醒                             |
-| `calendar.create`   | L1   | 创建日程（内存存储）                 |
-| `calendar.list`     | L0   | 列出日程                             |
-| `notification.send` | L2   | 发送通知（需用户确认）               |
-| `filesystem.delete` | L3   | 删除文件（需二次确认）               |
-| `memory.remember`   | L1   | 保存长期记忆                         |
-| `memory.list`       | L0   | 列出长期记忆                         |
-| `memory.forget`     | L1   | 永久删除记忆                         |
-| `memory.edit`       | L1   | 修改记忆                             |
-| `goal.set`          | L1   | 设置/更新长期目标（跨会话存活）      |
-| `goal.list`         | L0   | 列出长期目标                         |
-| `goal.done`         | L1   | 移除长期目标                         |
-| `task.create`       | L1   | 创建定时任务（cron）                 |
-| `task.list`         | L0   | 列出定时任务                         |
-| `task.delete`       | L2   | 删除定时任务（需确认）               |
-| `task.list-runs`    | L0   | 查看任务执行记录                     |
+| 工具                  | 权限 | 说明                                 |
+| --------------------- | ---- | ------------------------------------ |
+| `time.get`            | L0   | 获取当前时间（可指定时区）           |
+| `weather.get`         | L0   | 查询城市天气（Open-Meteo，无需 Key） |
+| `web.search`          | L0   | 维基百科搜索                         |
+| `github.search_repos` | L0   | 搜索 GitHub 仓库（按星标排序）       |
+| `filesystem.search`   | L0   | 工作区内按文件名搜索（含通配符）     |
+| `reminder.create`     | L1   | 创建提醒（内存存储）                 |
+| `reminder.list`       | L0   | 列出提醒                             |
+| `calendar.create`     | L1   | 创建日程（内存存储）                 |
+| `calendar.list`       | L0   | 列出日程                             |
+| `notification.send`   | L2   | 发送通知（需用户确认）               |
+| `filesystem.delete`   | L3   | 删除文件（需二次确认）               |
+| `memory.remember`     | L1   | 保存长期记忆                         |
+| `memory.list`         | L0   | 列出长期记忆                         |
+| `memory.forget`       | L1   | 永久删除记忆                         |
+| `memory.edit`         | L1   | 修改记忆                             |
+| `goal.set`            | L1   | 设置/更新长期目标（跨会话存活）      |
+| `goal.list`           | L0   | 列出长期目标                         |
+| `goal.done`           | L1   | 移除长期目标                         |
+| `task.create`         | L1   | 创建定时任务（cron）                 |
+| `task.list`           | L0   | 列出定时任务                         |
+| `task.delete`         | L2   | 删除定时任务（需确认）               |
+| `task.list-runs`      | L0   | 查看任务执行记录                     |
 
 对话时如果 AI 决定调用工具，SSE / 语音 WS 会额外收到：
 
@@ -406,6 +407,7 @@ AI 助理可以开发/更新自己（服务端能力）：
 - 本地运行用 `npm run serve`（守护进程，服务退出自动拉起；`system.restart`
   依赖它）；容器部署靠 Docker 的 `restart: unless-stopped`
 - 工具：`self.info`（项目根/版本/环境）、`self.check`（typecheck + 测试门禁）、
+  `self.apply`（self.check 通过后自动重启激活改动，L1）、
   `system.restart`（L3 二次确认后优雅重启）
 - 流程（已写入人格规则）：`self.info` → 读代码出方案 → `coding.run` 实现 →
   `self.check` 全绿 → 更新 CHANGELOG → `system.restart` 生效

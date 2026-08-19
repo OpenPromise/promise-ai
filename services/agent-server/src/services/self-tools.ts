@@ -85,10 +85,14 @@ function extractTestSummary(output: string): string | undefined {
   );
 }
 
+/** 本进程内最近一次 self.check 是否通过（self.apply 的激活门禁）。 */
+let lastSelfCheckPassed = false;
+
 /**
  * 自我开发相关工具：
  * - self.info：项目根目录/版本/环境（L0）
  * - self.check：跑 typecheck + 测试，作为改动前后的健康门禁（L1）
+ * - self.apply：self.check 通过后激活自我开发改动（L1 自动重启，无需人工确认）
  * - self.refine：证据驱动的小步改进，追加经验规则 + 反馈记忆 + git 快照（L1）
  * - self.rollback：回滚到指定 git 提交（L3，需用户确认）
  * - system.restart：优雅重启服务，让代码改动生效（L3 需用户确认）
@@ -173,6 +177,7 @@ export function createSelfTools(
           return `[${label}] exit=${result.exitCode} ${full ? result.output.slice(-4000) : tail}`;
         };
         const ok = typecheck.ok && test.ok;
+        lastSelfCheckPassed = ok;
         return {
           ok,
           data: {
@@ -187,6 +192,37 @@ export function createSelfTools(
             },
           },
           ...(!ok ? { error: 'self.check 未全部通过，请修复后再继续' } : {}),
+        };
+      },
+    },
+    {
+      name: 'self.apply',
+      description:
+        '激活自我开发产生的代码改动：仅当本进程内最近一次 self.check 已通过' +
+        '才允许；随后优雅重启服务（约 10 秒），由守护进程/容器自动拉起，' +
+        '新工具/新代码立即生效。完成后明确告诉用户已生效及如何使用。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          reason: { type: 'string', description: '应用原因，例如"新增 weixin.md5 工具"' },
+        },
+        required: ['reason'],
+      },
+      permissionLevel: 1 as PermissionLevel,
+      timeoutMs: 15_000,
+      async execute(input: unknown): Promise<ToolResult> {
+        if (!lastSelfCheckPassed) {
+          return { ok: false, error: 'self.check 尚未通过，禁止应用未验证的改动' };
+        }
+        const { reason } = (input ?? {}) as { reason?: string };
+        setTimeout(() => process.exit(0), 10_000);
+        return {
+          ok: true,
+          data: {
+            restarting: true,
+            reason: reason?.trim() || 'self-apply',
+            note: 'self.check 已通过，服务将在 10 秒后重启激活改动；重启后请告诉用户新能力已生效',
+          },
         };
       },
     },

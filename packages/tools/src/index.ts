@@ -2,6 +2,7 @@ import { createCalendarTools, InMemoryCalendarStore } from './calendar.js';
 import { createFilesystemSearchTool } from './filesystem.js';
 import { createGoalTools } from './goal-tools.js';
 import { createMemoryTools } from './memory-tools.js';
+import { createGithubSearchTool } from './github.js';
 import { createReminderTools, InMemoryReminderStore } from './reminders.js';
 import { createTaskTools, type TaskToolDeps } from './task-tools.js';
 import {
@@ -118,6 +119,7 @@ export function createBuiltinTools(options: BuiltinToolOptions = {}): BuiltinToo
     createTimeTool(),
     createWeatherTool(options.fetchImpl),
     createWebSearchTool(options.fetchImpl),
+    createGithubSearchTool(options.fetchImpl),
     createFilesystemSearchTool({ allowedRoots: options.allowedSearchRoots }),
     createFilesystemDeleteTool({ allowedRoots: options.allowedSearchRoots }),
     createNotificationSendTool(stores.notifications),
@@ -145,4 +147,5 @@ export {
 export { validateToolArgs, type ValidationIssue } from './validate.js';
 export { createMemoryTools } from './memory-tools.js';
 export { createGoalTools, GOAL_PREFIX, parseGoal } from './goal-tools.js';
+export { createGithubSearchTool } from './github.js';
 export { createTaskTools, type TaskToolDeps } from './task-tools.js';

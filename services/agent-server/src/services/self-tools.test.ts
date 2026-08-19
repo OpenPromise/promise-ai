@@ -16,12 +16,14 @@ describe('createSelfTools', () => {
 
     expect(byName.has('self.info')).toBe(true);
     expect(byName.has('self.check')).toBe(true);
+    expect(byName.has('self.apply')).toBe(true);
     expect(byName.has('self.refine')).toBe(true);
     expect(byName.has('self.rollback')).toBe(true);
     expect(byName.has('system.restart')).toBe(true);
 
     expect(byName.get('self.info')?.permissionLevel).toBe(0);
     expect(byName.get('self.check')?.permissionLevel).toBe(1);
+    expect(byName.get('self.apply')?.permissionLevel).toBe(1);
     expect(byName.get('self.refine')?.permissionLevel).toBe(1);
     // 回滚与重启是高风险操作：L3（二次确认）。
     expect(byName.get('self.rollback')?.permissionLevel).toBe(3);
@@ -94,5 +96,14 @@ describe('createSelfTools', () => {
     const valid = await rollback.execute({ commit: head }, { sessionId: 's1' });
     expect(valid.ok).toBe(true);
     expect(await readFile(target, 'utf8')).toBe('v1');
+  });
+
+  it('self.apply refuses to activate changes before self.check passes', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'apply-'));
+    const tools = createSelfTools({ projectRoot: dir });
+    const apply = tools.find((tool) => tool.name === 'self.apply')!;
+    const result = await apply.execute({ reason: '新增工具' }, { sessionId: 's1' });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('self.check 尚未通过');
   });
 });
