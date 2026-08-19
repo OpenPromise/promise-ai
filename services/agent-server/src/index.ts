@@ -174,11 +174,17 @@ const primaryLlm =
         baseUrl: config.openrouter.baseUrl,
         model: config.openrouter.model,
       })
-    : new OpenRouterProvider({
-        apiKey: config.dashscope.apiKey,
-        baseUrl: config.dashscope.baseUrl,
-        model: config.dashscope.model,
-      });
+    : config.llmProvider === 'deepseek'
+      ? new OpenRouterProvider({
+          apiKey: config.deepseek.apiKey,
+          baseUrl: config.deepseek.baseUrl,
+          model: config.deepseek.model,
+        })
+      : new OpenRouterProvider({
+          apiKey: config.dashscope.apiKey,
+          baseUrl: config.dashscope.baseUrl,
+          model: config.dashscope.model,
+        });
 const fallbackLlm =
   config.llmFallback.provider === 'openrouter'
     ? new OpenRouterProvider({
@@ -214,11 +220,17 @@ const primaryVoiceLlm =
         baseUrl: config.openrouter.baseUrl,
         model: config.openrouter.voiceModel,
       })
-    : new OpenRouterProvider({
-        apiKey: config.dashscope.apiKey,
-        baseUrl: config.dashscope.baseUrl,
-        model: config.dashscope.model,
-      });
+    : config.llmProvider === 'deepseek'
+      ? new OpenRouterProvider({
+          apiKey: config.deepseek.apiKey,
+          baseUrl: config.deepseek.baseUrl,
+          model: config.deepseek.model,
+        })
+      : new OpenRouterProvider({
+          apiKey: config.dashscope.apiKey,
+          baseUrl: config.dashscope.baseUrl,
+          model: config.dashscope.model,
+        });
 const voiceLlm = new FallbackLLMProvider({
   primary: primaryVoiceLlm,
   ...(fallbackLlm

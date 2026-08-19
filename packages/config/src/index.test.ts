@@ -86,4 +86,22 @@ describe('config', () => {
       ConfigError,
     );
   });
+
+  it('supports deepseek as the LLM provider and toggles voice', () => {
+    const config = loadConfig(
+      {
+        ...baseEnv,
+        LLM_PROVIDER: 'deepseek',
+        DEEPSEEK_API_KEY: 'sk-deepseek-test',
+        DEEPSEEK_LLM_MODEL: 'deepseek-v4-flash',
+        VOICE_ENABLED: 'false',
+      },
+      { loadDotenv: false },
+    );
+    expect(config.llmProvider).toBe('deepseek');
+    expect(config.deepseek.configured).toBe(true);
+    expect(config.deepseek.model).toBe('deepseek-v4-flash');
+    expect(config.deepseek.baseUrl).toBe('https://api.deepseek.com');
+    expect(config.voiceEnabled).toBe(false);
+  });
 });

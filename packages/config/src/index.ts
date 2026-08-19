@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 type LogLevel = 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
 type NodeEnv = 'development' | 'test' | 'production';
-export type LLMProviderName = 'openrouter' | 'dashscope';
+export type LLMProviderName = 'openrouter' | 'dashscope' | 'deepseek';
 export type LLMFallbackProviderName = 'none' | 'openrouter' | 'dashscope';
 
 const emptyToUndefined = (value: unknown): unknown => {
@@ -27,8 +27,18 @@ const envSchema = z.object({
   ),
   LLM_PROVIDER: z.preprocess(
     emptyToUndefined,
-    z.enum(['openrouter', 'dashscope']).default('dashscope'),
+    z.enum(['openrouter', 'dashscope', 'deepseek']).default('dashscope'),
   ),
+  DEEPSEEK_API_KEY: optionalString,
+  DEEPSEEK_LLM_MODEL: z.preprocess(
+    emptyToUndefined,
+    z.string().trim().min(1).default('deepseek-v4-flash'),
+  ),
+  DEEPSEEK_BASE_URL: z.preprocess(
+    emptyToUndefined,
+    z.string().url().default('https://api.deepseek.com'),
+  ),
+  VOICE_ENABLED: z.preprocess(emptyToUndefined, z.enum(['true', 'false']).default('true')),
   LLM_FALLBACK_PROVIDER: z.preprocess(
     emptyToUndefined,
     z.enum(['none', 'openrouter', 'dashscope']).default('none'),
@@ -109,6 +119,14 @@ export interface AppConfig {
     baseUrl: string;
     configured: boolean;
   };
+  deepseek: {
+    apiKey?: string;
+    model: string;
+    baseUrl: string;
+    configured: boolean;
+  };
+  /** 语音（Qwen Realtime / 级联）总开关；false 时只保留文字聊天。 */
+  voiceEnabled: boolean;
   elevenlabs: {
     apiKey?: string;
     voiceId?: string;
@@ -196,6 +214,13 @@ export function loadConfig(
       baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
       configured: Boolean(v.DASHSCOPE_API_KEY),
     },
+    deepseek: {
+      apiKey: v.DEEPSEEK_API_KEY,
+      model: v.DEEPSEEK_LLM_MODEL,
+      baseUrl: v.DEEPSEEK_BASE_URL,
+      configured: Boolean(v.DEEPSEEK_API_KEY),
+    },
+    voiceEnabled: v.VOICE_ENABLED === 'true',
     elevenlabs: {
       apiKey: v.ELEVENLABS_API_KEY,
       voiceId: v.ELEVENLABS_VOICE_ID,

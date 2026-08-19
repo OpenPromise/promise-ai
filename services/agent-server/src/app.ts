@@ -80,49 +80,52 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   app.register(async (instance) => {
     await instance.register(websocket, { options: { maxPayload: 1024 * 1024 } });
     registerDesktopRoutes(instance, { registry: deps.tools });
-    if (deps.config.qwenRealtime.configured && deps.createQwen) {
-      if (deps.config.qwenRealtime.voiceMode === 's2s') {
-        // End-to-end speech-to-speech: lowest latency, reasoning is Qwen's own.
-        registerQwenS2SVoiceRoutes(instance, {
-          store: deps.store,
-          tools: deps.tools,
-          approvals: deps.approvals,
-          voice: deps.config.qwenRealtime.voice,
-          createQwen: () => deps.createQwen!(deps.config.qwenRealtime.model),
-          // 语音委托子代理：复杂/多步任务交给文本推理代理执行（OpenDex run_task 模式）。
-          conversation: new ConversationService({
+    // 语音总开关：VOICE_ENABLED=false 时只保留文字聊天（桌面端语音会断开）
+    if (deps.config.voiceEnabled) {
+      if (deps.config.qwenRealtime.configured && deps.createQwen) {
+        if (deps.config.qwenRealtime.voiceMode === 's2s') {
+          // End-to-end speech-to-speech: lowest latency, reasoning is Qwen's own.
+          registerQwenS2SVoiceRoutes(instance, {
             store: deps.store,
-            llm: deps.llm,
+            tools: deps.tools,
+            approvals: deps.approvals,
+            voice: deps.config.qwenRealtime.voice,
+            createQwen: () => deps.createQwen!(deps.config.qwenRealtime.model),
+            // 语音委托子代理：复杂/多步任务交给文本推理代理执行（OpenDex run_task 模式）。
+            conversation: new ConversationService({
+              store: deps.store,
+              llm: deps.llm,
+              tools: deps.tools,
+              approvals: deps.approvals,
+              memory: deps.memory,
+            }),
+          });
+        } else {
+          // Qwen ASR -> LLM -> ElevenLabs TTS cascade. The voice conversation
+          // uses voiceLlm (fast) while text chat keeps the full-strength llm.
+          const voiceConversation = new ConversationService({
+            store: deps.store,
+            llm: deps.voiceLlm ?? deps.llm,
             tools: deps.tools,
             approvals: deps.approvals,
             memory: deps.memory,
-          }),
-        });
+          });
+          registerQwenVoiceRoutes(instance, {
+            store: deps.store,
+            conversation: voiceConversation,
+            approvals: deps.approvals,
+            createQwenASR: () => deps.createQwen!(deps.config.qwenRealtime.asrModel),
+            createTTS: deps.createTTS ?? (() => deps.createVoice().tts),
+          });
+        }
       } else {
-        // Qwen ASR -> LLM -> ElevenLabs TTS cascade. The voice conversation
-        // uses voiceLlm (fast) while text chat keeps the full-strength llm.
-        const voiceConversation = new ConversationService({
+        registerVoiceRoutes(instance, {
           store: deps.store,
-          llm: deps.voiceLlm ?? deps.llm,
-          tools: deps.tools,
+          conversation,
           approvals: deps.approvals,
-          memory: deps.memory,
-        });
-        registerQwenVoiceRoutes(instance, {
-          store: deps.store,
-          conversation: voiceConversation,
-          approvals: deps.approvals,
-          createQwenASR: () => deps.createQwen!(deps.config.qwenRealtime.asrModel),
-          createTTS: deps.createTTS ?? (() => deps.createVoice().tts),
+          createVoice: deps.createVoice,
         });
       }
-    } else {
-      registerVoiceRoutes(instance, {
-        store: deps.store,
-        conversation,
-        approvals: deps.approvals,
-        createVoice: deps.createVoice,
-      });
     }
   });
 

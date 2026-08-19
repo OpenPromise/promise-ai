@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.14.29] - 2026-08-20
+
+### LLM 切换 deepseek-v4-flash + 暂时禁用语音
+
+- **文字 LLM 改为 DeepSeek 官方**：`LLM_PROVIDER=deepseek`，
+  `DEEPSEEK_LLM_MODEL=deepseek-v4-flash`（`DEEPSEEK_API_KEY`），不再用
+  qwen3.8-max 做文本推理；OpenRouter fallback 保留
+- **语音总开关**：`VOICE_ENABLED=false` 时禁用 Qwen Realtime / 级联语音
+  路由（/ws/voice），只保留文字聊天
+- **仍在使用的 Qwen 模型**：记忆嵌入 `text-embedding-v4`、微信收图理解
+  `qwen3.8-max`（WEIXIN_VISION_MODEL）、桌面屏幕视觉 `qwen-vl-max` /
+  `qwen3.8-max`（桌面端本地调用）
+
 ## [0.14.28] - 2026-08-20
 
 ### bot 自主提交推送 git（self.commit）

@@ -65,6 +65,13 @@ npm run dev            # 启动 Agent Server（默认 :3000）
   文字推理默认用 `DASHSCOPE_LLM_MODEL=qwen3.8-max`
 - `openrouter`：走 OpenRouter 聚合网关，需要 `OPENROUTER_API_KEY`；
   `OPENROUTER_MODEL` 可换成任意 OpenRouter 模型 ID（如 `x-ai/grok-4.6`、`deepseek/deepseek-chat`）
+- `deepseek`：DeepSeek 官方 API，需要 `DEEPSEEK_API_KEY`；
+  `DEEPSEEK_LLM_MODEL` 默认 `deepseek-v4-flash`
+
+语音总开关：`VOICE_ENABLED=false` 禁用 Qwen Realtime/级联语音，只保留文字
+聊天（桌面端语音会断开，属预期）。仍在使用 Qwen 模型的位置：记忆嵌入
+`text-embedding-v4`、微信收图理解 `WEIXIN_VISION_MODEL`（qwen3.8-max）、
+桌面屏幕视觉 `qwen-vl-max` / `qwen3.8-max`。
 
 选中的 Provider 没有配置 Key 时服务仍可启动，`/health` 会显示 `llm.configured: false`，
 调用聊天接口会返回 503。
