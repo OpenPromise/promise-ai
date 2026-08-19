@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.14.28] - 2026-08-20
+
+### bot 自主提交推送 git（self.commit）
+
+- **`self.commit`（L1）**：bot 在自我开发完成后可自行 `git add/commit/push`
+  到 GitHub（origin/main），无需人工同步；提交说明由 bot 填写
+- **源码挂载**：宿主机仓库 bind-mount 到容器 `/app`（含 .git），node_modules
+  用命名卷隔离；SSH 部署 key 只读挂载进容器供 git push
+- **容器内置 git**：Dockerfile 安装 git；`.dockerignore` 排除文件库
+- **流程**：coding.run 改动 → self.check → self.commit（推 GitHub）→
+  self.apply（自动重启生效）；本地 `npm run sync:bot` 或 git pull 同步
+- **测试**：self.commit 无改动/提交推送两路径用例，全量 220 passed
+
 ## [0.14.27] - 2026-08-20
 
 ### 项目推送 GitHub + git 部署（修复陈旧文件复活）

@@ -13,8 +13,10 @@
 4. 用 `coding.run`（directory=项目根目录，acceptEdits）实现改动
 5. 调用 `self.check`（填写 goal 与 maxIterations）运行 typecheck 与测试，
    必须全部通过
-6. 更新 CHANGELOG.md 与相关 README 文档
-7. 需要重启才生效的改动，调用 `system.restart`（L3 需用户确认），
+6. 调用 `self.commit`（message 说明改动）提交并推送到 GitHub
+7. 更新 CHANGELOG.md 与相关 README 文档（再次 self.commit 或一并提交）
+8. 需要重启才生效的改动，调用 `system.restart`（L3 需用户确认）或
+   `self.apply`（self.check 已通过时，L1 自动生效），
    并明确告诉用户"重启后生效"
 
 ## 证据驱动的改进（refine）

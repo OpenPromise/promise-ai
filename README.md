@@ -416,10 +416,12 @@ AI 助理可以开发/更新自己（服务端能力）：
 - 本地运行用 `npm run serve`（守护进程，服务退出自动拉起；`system.restart`
   依赖它）；容器部署靠 Docker 的 `restart: unless-stopped`
 - 工具：`self.info`（项目根/版本/环境）、`self.check`（typecheck + 测试门禁）、
+  `self.commit`（提交并推送 GitHub）、
   `self.apply`（self.check 通过后自动重启激活改动，L1）、
   `system.restart`（L3 二次确认后优雅重启）
 - 流程（已写入人格规则）：`self.info` → 读代码出方案 → `coding.run` 实现 →
-  `self.check` 全绿 → 更新 CHANGELOG → `system.restart` 生效
+  `self.check` 全绿 → `self.commit`（推 GitHub）→ 更新 CHANGELOG →
+  `self.apply` 自动生效
 - 有界自主（Prime Agent 思路）：每次自我开发先定义 `goal`，最多 3 轮
   "改动-验证"迭代；`self.check` 质量门（typecheck + 测试）失败即停止并回滚；
   失败/反馈写入 `[feedback]` 记忆供后续会话复习

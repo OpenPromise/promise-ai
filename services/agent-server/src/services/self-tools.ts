@@ -92,6 +92,7 @@ let lastSelfCheckPassed = false;
  * 自我开发相关工具：
  * - self.info：项目根目录/版本/环境（L0）
  * - self.check：跑 typecheck + 测试，作为改动前后的健康门禁（L1）
+ * - self.commit：把自我开发改动提交并推送到 GitHub（L1）
  * - self.apply：self.check 通过后激活自我开发改动（L1 自动重启，无需人工确认）
  * - self.refine：证据驱动的小步改进，追加经验规则 + 反馈记忆 + git 快照（L1）
  * - self.rollback：回滚到指定 git 提交（L3，需用户确认）
@@ -222,6 +223,80 @@ export function createSelfTools(
             restarting: true,
             reason: reason?.trim() || 'self-apply',
             note: 'self.check 已通过，服务将在 10 秒后重启激活改动；重启后请告诉用户新能力已生效',
+          },
+        };
+      },
+    },
+    {
+      name: 'self.commit',
+      description:
+        '把当前自我开发的改动提交并推送到 GitHub（origin/main）。' +
+        '建议先 self.check 通过再调用；无改动时返回提示。' +
+        '提交信息用一句话描述改动（如"新增 weixin.md5 工具"）。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          message: { type: 'string', description: '提交说明' },
+          push: {
+            type: 'boolean',
+            description: '是否推送到远程，默认 true',
+          },
+        },
+        required: ['message'],
+      },
+      permissionLevel: 1 as PermissionLevel,
+      timeoutMs: 90_000,
+      async execute(input: unknown): Promise<ToolResult> {
+        const { message, push = true } = (input ?? {}) as { message?: string; push?: boolean };
+        if (!message?.trim()) return { ok: false, error: '缺少 message 参数' };
+
+        const status = await runGit(projectRoot, ['status', '--porcelain'], 15_000);
+        if (status.ok && status.output.length === 0) {
+          return { ok: true, data: { committed: false, note: '工作区无改动，无需提交' } };
+        }
+
+        const add = await runGit(projectRoot, ['add', '-A'], 15_000);
+        if (!add.ok) return { ok: false, error: `git add 失败：${add.output.slice(-300)}` };
+        const commit = await runGit(
+          projectRoot,
+          [
+            '-c',
+            'user.name=Promise AI Bot',
+            '-c',
+            'user.email=bot@promise-ai.local',
+            'commit',
+            '-m',
+            message.trim(),
+          ],
+          30_000,
+        );
+        if (!commit.ok)
+          return { ok: false, error: `git commit 失败：${commit.output.slice(-300)}` };
+        const head = await runGit(projectRoot, ['rev-parse', '--short', 'HEAD'], 10_000);
+
+        let pushed = false;
+        if (push) {
+          const pushRes = await runGit(projectRoot, ['push', 'origin', 'main'], 60_000);
+          pushed = pushRes.ok;
+          if (!pushed) {
+            return {
+              ok: true,
+              data: {
+                committed: true,
+                commit: head.ok ? head.output.split(/\r?\n/)[0] : undefined,
+                pushed: false,
+                note: '已提交但推送失败（可能未配置远程/网络问题），可稍后手动推送',
+              },
+            };
+          }
+        }
+        return {
+          ok: true,
+          data: {
+            committed: true,
+            commit: head.ok ? head.output.split(/\r?\n/)[0] : undefined,
+            pushed,
+            note: pushed ? '已提交并推送到 GitHub（origin/main）' : '已提交（未推送）',
           },
         };
       },

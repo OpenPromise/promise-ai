@@ -21,4 +21,6 @@ git clean -fd
 
 # 3) 构建并启动
 sudo docker compose -f infrastructure/docker-compose.yml --profile server up -d --build
+# 源码以 bind mount 方式运行，拉取新代码后重启即可生效
+sudo docker compose -f infrastructure/docker-compose.yml --profile server restart app weixin-bridge
 echo "[deploy] 部署完成"

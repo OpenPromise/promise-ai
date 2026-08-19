@@ -106,4 +106,48 @@ describe('createSelfTools', () => {
     expect(result.ok).toBe(false);
     expect(result.error).toContain('self.check 尚未通过');
   });
+
+  it('self.commit reports when there is nothing to commit', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'commit-empty-'));
+    await execFileAsync('git', ['init', dir], { windowsHide: true });
+    const tools = createSelfTools({ projectRoot: dir });
+    const commit = tools.find((tool) => tool.name === 'self.commit')!;
+    const result = await commit.execute({ message: '无改动' }, { sessionId: 's1' });
+    expect(result.ok).toBe(true);
+    expect((result.data as { committed: boolean }).committed).toBe(false);
+  });
+
+  it('self.commit commits and pushes to the remote', async () => {
+    const work = await mkdtemp(path.join(tmpdir(), 'commit-work-'));
+    const bare = await mkdtemp(path.join(tmpdir(), 'commit-bare-'));
+    await execFileAsync('git', ['init', '--bare', bare], { windowsHide: true });
+    await execFileAsync('git', ['init', '-b', 'main', work], { windowsHide: true });
+    await execFileAsync('git', ['-C', work, 'remote', 'add', 'origin', bare], {
+      windowsHide: true,
+    });
+    await writeFile(path.join(work, 'a.txt'), 'v1', 'utf8');
+    await execFileAsync('git', ['-C', work, 'add', '.'], { windowsHide: true });
+    await execFileAsync(
+      'git',
+      ['-C', work, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-m', 'init'],
+      { windowsHide: true },
+    );
+    await execFileAsync('git', ['-C', work, 'push', 'origin', 'HEAD:main'], { windowsHide: true });
+
+    await writeFile(path.join(work, 'a.txt'), 'bot edit', 'utf8');
+    const tools = createSelfTools({ projectRoot: work });
+    const commit = tools.find((tool) => tool.name === 'self.commit')!;
+    const result = await commit.execute({ message: 'bot 更新 a.txt' }, { sessionId: 's1' });
+    expect(result.ok).toBe(true);
+    const data = result.data as { committed: boolean; pushed: boolean; commit?: string };
+    expect(data.committed).toBe(true);
+    expect(data.pushed).toBe(true);
+    expect(data.commit).toBeTruthy();
+
+    const log = await execFileAsync('git', ['-C', bare, 'log', '--oneline', '-2', 'main'], {
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    expect(log.stdout).toContain('bot 更新 a.txt');
+  });
 });
