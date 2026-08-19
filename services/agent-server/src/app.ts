@@ -43,6 +43,16 @@ export interface AppDeps {
   subscribeReminderEvents?: (listener: (event: ReminderDueEvent) => void) => () => void;
 }
 
+/** 空 TTS：语音输出禁用时使用（ASR 仍工作，回复以文字形式发送）。 */
+function createNoopTTS(): TTSProvider {
+  return {
+    configured: false,
+    async *synthesize() {
+      yield* [];
+    },
+  };
+}
+
 export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify({
     logger: { level: deps.config.logLevel },
@@ -83,7 +93,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     // 语音总开关：VOICE_ENABLED=false 时只保留文字聊天（桌面端语音会断开）
     if (deps.config.voiceEnabled) {
       if (deps.config.qwenRealtime.configured && deps.createQwen) {
-        if (deps.config.qwenRealtime.voiceMode === 's2s') {
+        if (deps.config.qwenRealtime.voiceMode === 's2s' && deps.config.voiceTtsEnabled) {
           // End-to-end speech-to-speech: lowest latency, reasoning is Qwen's own.
           registerQwenS2SVoiceRoutes(instance, {
             store: deps.store,
@@ -115,16 +125,21 @@ export function buildApp(deps: AppDeps): FastifyInstance {
             conversation: voiceConversation,
             approvals: deps.approvals,
             createQwenASR: () => deps.createQwen!(deps.config.qwenRealtime.asrModel),
-            createTTS: deps.createTTS ?? (() => deps.createVoice().tts),
+            createTTS: deps.config.voiceTtsEnabled
+              ? (deps.createTTS ?? (() => deps.createVoice().tts))
+              : createNoopTTS,
           });
         }
       } else {
-        registerVoiceRoutes(instance, {
-          store: deps.store,
-          conversation,
-          approvals: deps.approvals,
-          createVoice: deps.createVoice,
-        });
+        // ElevenLabs STT->LLM->TTS 旧链路：语音输出关闭时同样跳过
+        if (deps.config.voiceTtsEnabled) {
+          registerVoiceRoutes(instance, {
+            store: deps.store,
+            conversation,
+            approvals: deps.approvals,
+            createVoice: deps.createVoice,
+          });
+        }
       }
     }
   });

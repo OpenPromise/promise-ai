@@ -68,8 +68,13 @@ npm run dev            # 启动 Agent Server（默认 :3000）
 - `deepseek`：DeepSeek 官方 API，需要 `DEEPSEEK_API_KEY`；
   `DEEPSEEK_LLM_MODEL` 默认 `deepseek-v4-flash`
 
-语音总开关：`VOICE_ENABLED=false` 禁用 Qwen Realtime/级联语音，只保留文字
-聊天（桌面端语音会断开，属预期）。仍在使用 Qwen 模型的位置：记忆嵌入
+语音开关拆成两个：
+
+- `VOICE_ENABLED=true`：语音路由总开关（false 时全部禁用）
+- `VOICE_TTS_ENABLED=false`：**只识别不说话**——Qwen ASR 继续识别你的语音，
+  回复以文字显示（s2s 端到端语音需 TTS 开启才启用）
+
+仍在使用 Qwen 模型的位置：Qwen ASR（语音识别）、记忆嵌入
 `text-embedding-v4`、微信收图理解 `WEIXIN_VISION_MODEL`（qwen3.8-max）、
 桌面屏幕视觉 `qwen-vl-max` / `qwen3.8-max`。
 

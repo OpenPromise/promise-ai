@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.14.30] - 2026-08-20
+
+### 语音识别保留、语音输出可关（ASR-only 模式）
+
+- **拆分为两个开关**：`VOICE_ENABLED`（总开关，恢复为 true）与
+  `VOICE_TTS_ENABLED=false`（语音输出关闭）
+- **ASR-only**：Qwen ASR（cascade 模式）继续识别你的语音，LLM 回复以
+  文字形式发送给客户端，不合成音频；s2s 端到端语音仅在 TTS 开启时启用
+
 ## [0.14.29] - 2026-08-20
 
 ### LLM 切换 deepseek-v4-flash + 暂时禁用语音

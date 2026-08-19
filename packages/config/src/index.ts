@@ -39,6 +39,7 @@ const envSchema = z.object({
     z.string().url().default('https://api.deepseek.com'),
   ),
   VOICE_ENABLED: z.preprocess(emptyToUndefined, z.enum(['true', 'false']).default('true')),
+  VOICE_TTS_ENABLED: z.preprocess(emptyToUndefined, z.enum(['true', 'false']).default('true')),
   LLM_FALLBACK_PROVIDER: z.preprocess(
     emptyToUndefined,
     z.enum(['none', 'openrouter', 'dashscope']).default('none'),
@@ -127,6 +128,8 @@ export interface AppConfig {
   };
   /** 语音（Qwen Realtime / 级联）总开关；false 时只保留文字聊天。 */
   voiceEnabled: boolean;
+  /** 语音合成开关；false 时 ASR 仍可用，但回复只出文字不发声。 */
+  voiceTtsEnabled: boolean;
   elevenlabs: {
     apiKey?: string;
     voiceId?: string;
@@ -221,6 +224,7 @@ export function loadConfig(
       configured: Boolean(v.DEEPSEEK_API_KEY),
     },
     voiceEnabled: v.VOICE_ENABLED === 'true',
+    voiceTtsEnabled: v.VOICE_TTS_ENABLED === 'true',
     elevenlabs: {
       apiKey: v.ELEVENLABS_API_KEY,
       voiceId: v.ELEVENLABS_VOICE_ID,
