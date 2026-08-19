@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import type { ILinkClient, WeixinMessage } from './ilink.js';
 import { chatOnce, consumeSse, runWeixinRelay } from './relay.js';
 import type { AccountState } from './state.js';
@@ -273,6 +276,107 @@ describe('runWeixinRelay', () => {
     expect(chatBody?.message).toContain('[用户发来一张图片]');
     expect(chatBody?.message).toContain('一只小猫在窗台上');
     expect(sent[0]?.item_list?.[0]?.text_item?.text).toBe('收到，图片已看懂');
+
+    controller.abort();
+    await relayPromise;
+  });
+
+  it('saves inbound files to the library and relays a note', async () => {
+    const sent: WeixinMessage[] = [];
+    const controller = new AbortController();
+    let polls = 0;
+    const filesDir = await mkdtemp(path.join(tmpdir(), 'wxrelay-files-'));
+
+    const client = {
+      baseUrl: 'https://ilinkai.weixin.qq.com',
+      async notifyStart() {},
+      async notifyStop() {},
+      async getUpdates(_buf: string, options: { signal?: AbortSignal }) {
+        polls += 1;
+        if (polls === 1) {
+          return {
+            ret: 0,
+            msgs: [
+              {
+                from_user_id: 'wx_peer',
+                message_type: 1,
+                item_list: [
+                  {
+                    type: 4,
+                    file_item: {
+                      file_name: '报告.pdf',
+                      media: { encrypt_query_param: 'PARAM', aes_key: 'AQIDBA==' },
+                    },
+                  },
+                ],
+              },
+            ],
+          };
+        }
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, 60_000);
+          options.signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            resolve(undefined);
+          });
+        });
+        throw new Error('aborted');
+      },
+      async getConfig() {
+        return { ret: 0, typing_ticket: 'ticket' };
+      },
+      async sendTyping() {},
+      async downloadMedia() {
+        return Buffer.from('pdf-bytes');
+      },
+      async sendMessage(msg: WeixinMessage) {
+        sent.push(msg);
+      },
+    } as unknown as ILinkClient;
+
+    const state: AccountState = {
+      token: 'tok',
+      baseUrl: 'https://ilinkai.weixin.qq.com',
+      accountId: 'bot-1',
+      peerSessions: {},
+      savedAt: new Date().toISOString(),
+    };
+    let chatBody: { message?: string } | undefined;
+
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith('/api/sessions')) {
+        return new Response(JSON.stringify({ id: 'session-file' }), { status: 201 });
+      }
+      if (u.endsWith('/chat')) {
+        chatBody = JSON.parse((init.body as string) ?? '{}') as { message?: string };
+        return sseResponse([
+          JSON.stringify({ type: 'chat.token', payload: { delta: '文件已收到' } }),
+        ]);
+      }
+      return new Response('{}', { status: 200 });
+    });
+
+    const relayPromise = runWeixinRelay(
+      {
+        agentUrl: 'http://agent:3000',
+        client,
+        state,
+        persist: async () => {},
+        filesDir,
+        log: () => {},
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      },
+      controller.signal,
+    );
+
+    const deadline = Date.now() + 5000;
+    while ((!chatBody || !sent.length) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(chatBody?.message).toContain('[用户发来文件：报告.pdf');
+    expect(chatBody?.message).toContain('已保存到文件库');
+    expect(sent[0]?.item_list?.[0]?.text_item?.text).toBe('文件已收到');
 
     controller.abort();
     await relayPromise;

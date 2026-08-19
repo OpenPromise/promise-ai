@@ -3,6 +3,7 @@ import type { ILinkClient, WeixinMessage } from './ilink.js';
 import { buildReplyMessage, extractInboundText, STALE_TOKEN_ERRCODE } from './ilink.js';
 import { markdownToPlain, splitLongText } from './markdown.js';
 import { describeImageWithDashScope } from './vision.js';
+import { saveLibraryFile } from './files.js';
 import type { AccountState } from './state.js';
 
 export interface RelayOptions {
@@ -13,6 +14,8 @@ export interface RelayOptions {
   persist: () => Promise<void>;
   /** 收图理解：DashScope 视觉模型配置（apiKey / model）。 */
   vision?: { apiKey?: string; model?: string; fetchImpl?: typeof fetch };
+  /** 文件库目录：微信发来的文件自动保存到这里，供按名发送。 */
+  filesDir?: string;
   log?: (message: string) => void;
   fetchImpl?: typeof fetch;
 }
@@ -166,8 +169,10 @@ async function handleInboundMessage(msg: WeixinMessage, options: RelayOptions): 
   const text = extractInboundText(msg);
   if (!peer) return;
 
-  // 图片理解：有 image_item 时下载解密并调用视觉模型描述，随文本一起交给大脑。
-  let userMessage = text.trim();
+  const parts: string[] = [];
+  if (text.trim()) parts.push(text.trim());
+
+  // 图片理解：有 image_item 时下载解密并调用视觉模型描述。
   const imageItem = msg.item_list?.find((item) => item.type === 2);
   if (imageItem?.image_item) {
     let description = '';
@@ -191,9 +196,32 @@ async function handleInboundMessage(msg: WeixinMessage, options: RelayOptions): 
     const imagePart = description
       ? `[用户发来一张图片]\n图片内容：${description}`
       : '[用户发来一张图片（内容识别失败，如需可向用户询问）]';
-    userMessage = text.trim() ? `${text.trim()}\n${imagePart}` : imagePart;
+    parts.push(imagePart);
   }
-  if (!userMessage) return;
+
+  // 文件入库：有 file_item 时下载解密并保存到文件库。
+  const fileItem = msg.item_list?.find((item) => item.type === 4);
+  if (fileItem?.file_item && options.filesDir) {
+    try {
+      const { media } = fileItem.file_item;
+      const bytes = await client.downloadMedia({
+        encryptQueryParam: media?.encrypt_query_param,
+        fullUrl: media?.full_url,
+        aesKeyBase64: media?.aes_key,
+      });
+      const saved = await saveLibraryFile(
+        options.filesDir,
+        fileItem.file_item.file_name ?? 'file.bin',
+        bytes,
+      );
+      parts.push(`[用户发来文件：${saved}，已保存到文件库，之后可用文件名要求发送]`);
+    } catch (error) {
+      log?.(`[weixin] 文件保存失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  if (parts.length === 0) return;
+  const userMessage = parts.join('\n');
 
   const sessionId = await ensureSession(agentUrl, peer, state, persist, fetchImpl);
   if (!sessionId) {
@@ -213,17 +241,17 @@ async function handleInboundMessage(msg: WeixinMessage, options: RelayOptions): 
     fetchImpl,
     log,
   });
-  const parts: string[] = [];
-  if (reply.text) parts.push(markdownToPlain(reply.text));
+  const replyParts: string[] = [];
+  if (reply.text) replyParts.push(markdownToPlain(reply.text));
   if (reply.deniedTools.length > 0) {
-    parts.push(
+    replyParts.push(
       `⚠️ 已拒绝需要确认的操作：${[...new Set(reply.deniedTools)].join('、')}（可在桌面端授权后重试）`,
     );
   }
-  if (reply.error) parts.push(`❌ ${reply.error}`);
-  if (parts.length === 0) return;
+  if (reply.error) replyParts.push(`❌ ${reply.error}`);
+  if (replyParts.length === 0) return;
 
-  for (const chunk of splitLongText(parts.join('\n\n'))) {
+  for (const chunk of splitLongText(replyParts.join('\n\n'))) {
     await client.sendMessage(
       buildReplyMessage({
         to: peer,

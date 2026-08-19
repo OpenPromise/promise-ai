@@ -57,12 +57,15 @@ services:
       # 容器内通过 compose 网络访问 agent-server
       AGENT_URL: http://app:3000
       WEIXIN_STATE_DIR: /data/weixin
+      WEIXIN_FILES_DIR: /data/weixin-files
       WEIXIN_BOT_AGENT: PromiseAi/0.1.0
     command: ['npm', 'run', 'weixin:bridge']
     ports:
       - '${WEIXIN_PORT:-3100}:3100'
     volumes:
       - weixin-data:/data/weixin
+      # 微信文件库：宿主机仓库根目录 weixin-files/ 直接可见，丢文件即入库
+      - ../weixin-files:/data/weixin-files
     # 镜像内置的健康检查指向 :3000（agent-server），这里覆盖为 bridge 自己的端口
     healthcheck:
       test: ['CMD', 'curl', '-fsS', 'http://127.0.0.1:3100/health']

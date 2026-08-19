@@ -23,16 +23,12 @@ export interface TextItem {
   text?: string;
 }
 
-export interface VoiceItem {
-  /** 语音转文字内容（服务端已转写时提供）。 */
-  text?: string;
-}
-
 export interface MessageItem {
   type?: number;
   text_item?: TextItem;
   voice_item?: VoiceItem;
   image_item?: ImageItem;
+  file_item?: FileItem;
 }
 
 export interface WeixinMessage {
@@ -110,7 +106,15 @@ export interface ImageItem {
   aeskey?: string;
 }
 
+export interface FileItem {
+  media?: CDNMedia;
+  file_name?: string;
+  len?: string;
+}
+
 export interface VoiceItem {
+  /** 语音转文字内容（服务端已转写时提供）。 */
+  text?: string;
   media?: CDNMedia;
   /** 1=pcm 2=adpcm 3=feature 4=speex 5=amr 6=silk 7=mp3 8=ogg-speex */
   encode_type?: number;
@@ -460,6 +464,41 @@ export class ILinkClient {
     });
   }
 
+  /** 上传文件并以文件消息（file_item）发送给指定微信用户。 */
+  async sendFileToUser(params: {
+    to: string;
+    file: Buffer;
+    fileName: string;
+    contextToken?: string;
+    runId?: string;
+  }): Promise<void> {
+    const { to, file, fileName } = params;
+    const uploaded = await this.#uploadMedia(to, UploadMediaType.FILE, file);
+    await this.sendMessage({
+      from_user_id: '',
+      to_user_id: to,
+      client_id: `promise-ai-${randomUUID()}`,
+      message_type: 2,
+      message_state: 2,
+      item_list: [
+        {
+          type: 4,
+          file_item: {
+            media: {
+              encrypt_query_param: uploaded.downloadParam,
+              aes_key: uploaded.aesKeyBase64,
+              encrypt_type: 1,
+            },
+            file_name: fileName,
+            len: String(uploaded.plaintextSize),
+          },
+        },
+      ],
+      ...(params.contextToken ? { context_token: params.contextToken } : {}),
+      ...(params.runId ? { run_id: params.runId } : {}),
+    });
+  }
+
   /**
    * 下载并解密入站 CDN 媒体（图片等）。key 兼容两种编码：
    * base64(16 raw bytes) 或 base64(32 hex chars)。
@@ -487,7 +526,12 @@ export class ILinkClient {
     toUserId: string,
     mediaType: number,
     plaintext: Buffer,
-  ): Promise<{ downloadParam: string; aesKeyBase64: string; ciphertextSize: number }> {
+  ): Promise<{
+    downloadParam: string;
+    aesKeyBase64: string;
+    ciphertextSize: number;
+    plaintextSize: number;
+  }> {
     const rawsize = plaintext.length;
     const rawfilemd5 = createHashMd5(plaintext);
     const filekey = randomBytes(16).toString('hex');
@@ -516,6 +560,7 @@ export class ILinkClient {
       // 与参考客户端保持一致：aes_key 为 hex 字符串的 base64 编码。
       aesKeyBase64: Buffer.from(aeskey.toString('hex'), 'utf8').toString('base64'),
       ciphertextSize: filesize,
+      plaintextSize: rawsize,
     };
   }
 }

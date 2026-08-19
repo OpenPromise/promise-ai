@@ -10,6 +10,7 @@ import { ILinkClient } from './ilink.js';
 import { LoginManager } from './login.js';
 import { runWeixinRelay } from './relay.js';
 import { runEventPusher } from './event-pusher.js';
+import { listLibraryFiles, readLibraryFile, resolveFileByName } from './files.js';
 
 try {
   const { config } = await import('dotenv');
@@ -25,6 +26,7 @@ const channelVersion = process.env.WEIXIN_CHANNEL_VERSION ?? '0.1.0';
 const botAgent = process.env.WEIXIN_BOT_AGENT ?? 'PromiseAi/0.1.0';
 const baseUrl = process.env.WEIXIN_BASE_URL ?? undefined;
 const visionModel = process.env.WEIXIN_VISION_MODEL ?? 'qwen3.8-max';
+const filesDir = process.env.WEIXIN_FILES_DIR ?? path.join(stateDir, 'files');
 
 await mkdir(stateDir, { recursive: true });
 const stateFile = path.join(stateDir, 'state.json');
@@ -82,6 +84,7 @@ async function startRelay(): Promise<void> {
       state: account,
       persist: () => stateStore.save(),
       vision: { apiKey: process.env.DASHSCOPE_API_KEY, model: visionModel },
+      filesDir,
       log: (message) => {
         log(message);
         lastEventAt = Date.now();
@@ -300,6 +303,50 @@ app.post('/api/weixin/send-image', async (request, reply) => {
     return { ok: true };
   } catch (error) {
     app.log.error({ err: error }, 'send weixin image failed');
+    return reply.code(502).send({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.get('/api/weixin/files', async () => {
+  const files = await listLibraryFiles(filesDir);
+  return { count: files.length, files };
+});
+
+app.post('/api/weixin/send-file', async (request, reply) => {
+  const body = (request.body ?? {}) as {
+    sessionId?: string;
+    fileName?: string;
+    contextToken?: string;
+    runId?: string;
+  };
+  const client = authedClient();
+  if (!client) return reply.code(401).send({ error: '微信未登录' });
+  const peer = resolvePeerBySession(body.sessionId);
+  if (!peer) return reply.code(404).send({ error: '找不到该会话对应的微信对端' });
+  const query = body.fileName?.trim();
+  if (!query) return reply.code(400).send({ error: '缺少 fileName' });
+
+  const files = await listLibraryFiles(filesDir);
+  const matched = resolveFileByName(files, query);
+  if (!matched) {
+    return reply.code(404).send({ error: `文件库中找不到「${query}」` });
+  }
+  const loaded = await readLibraryFile(filesDir, matched.name);
+  if (!loaded) return reply.code(404).send({ error: `无法读取文件「${matched.name}」` });
+  if (loaded.bytes.length > 20 * 1024 * 1024) {
+    return reply.code(413).send({ error: `文件超过 20MB 上限：${matched.name}` });
+  }
+  try {
+    await client.sendFileToUser({
+      to: peer,
+      file: loaded.bytes,
+      fileName: loaded.name,
+      contextToken: body.contextToken,
+      runId: body.runId,
+    });
+    return { ok: true, sent: loaded.name, size: loaded.bytes.length };
+  } catch (error) {
+    app.log.error({ err: error }, 'send weixin file failed');
     return reply.code(502).send({ error: error instanceof Error ? error.message : String(error) });
   }
 });

@@ -57,6 +57,45 @@ async function postBridge(
   }
 }
 
+async function getBridge(
+  fetchImpl: typeof fetch,
+  bridgeUrl: string,
+  path: string,
+  timeoutMs = 15_000,
+): Promise<BridgeResult> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  timer.unref?.();
+  try {
+    const response = await fetchImpl(`${bridgeUrl.replace(/\/+$/, '')}${path}`, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    const raw = await response.text();
+    let json: unknown = raw;
+    try {
+      json = JSON.parse(raw) as unknown;
+    } catch {
+      // 非 JSON 响应按文本返回
+    }
+    if (!response.ok) {
+      const detail =
+        typeof json === 'object' && json && 'error' in json
+          ? String((json as { error?: unknown }).error ?? '')
+          : raw.slice(0, 200);
+      return { ok: false, error: `微信桥返回 ${response.status}：${detail}` };
+    }
+    return { ok: true, data: json };
+  } catch (error) {
+    return {
+      ok: false,
+      error: `调用微信桥失败：${error instanceof Error ? error.message : String(error)}`,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** 会话元数据里的微信对端（由 weixin-bridge 建会话时写入）。 */
 async function resolveWeixinPeer(
   store: SessionStore,
@@ -132,6 +171,54 @@ export function createWeixinTools(options: WeixinToolOptions): Tool[] {
         return result.ok
           ? { ok: true, data: { sent: true, source: source.trim() } }
           : { ok: false, error: result.error ?? '发送图片失败' };
+      },
+    },
+    {
+      name: 'weixin.list_files',
+      description:
+        '列出微信文件库里的文件（文件名、大小、修改时间）。' +
+        '文件库是服务器上的专属文件夹，可用于查找用户想要的文件。',
+      inputSchema: { type: 'object', properties: {}, required: [] },
+      permissionLevel: 0,
+      timeoutMs: 20_000,
+      async execute(): Promise<ToolResult> {
+        const result = await getBridge(fetchImpl, options.bridgeUrl, '/api/weixin/files');
+        if (!result.ok) return { ok: false, error: result.error ?? '获取文件列表失败' };
+        const data = (result.data ?? {}) as { files?: Array<{ name: string; size: number }> };
+        return {
+          ok: true,
+          data: { count: data.files?.length ?? 0, files: data.files ?? [] },
+        };
+      },
+    },
+    {
+      name: 'weixin.send_file',
+      description:
+        '从微信文件库按文件名查找并发送文件给当前微信会话用户。' +
+        '支持精确/前缀/包含匹配（如「报告.pdf」或「报告」）。仅用于微信会话。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          fileName: {
+            type: 'string',
+            description: '要发送的文件名或关键词',
+          },
+        },
+        required: ['fileName'],
+      },
+      permissionLevel: 1,
+      timeoutMs: 60_000,
+      async execute(input: unknown, ctx: ToolContext): Promise<ToolResult> {
+        const { fileName } = (input ?? {}) as { fileName?: string };
+        if (!fileName?.trim()) return { ok: false, error: '缺少 fileName' };
+        const peer = await resolveWeixinPeer(options.store, ctx);
+        if (!peer) return { ok: false, error: '当前会话不是微信会话，无法发送文件' };
+        const result = await postBridge(fetchImpl, options.bridgeUrl, '/api/weixin/send-file', {
+          sessionId: ctx.sessionId,
+          fileName: fileName.trim(),
+        });
+        if (!result.ok) return { ok: false, error: result.error ?? '发送文件失败' };
+        return { ok: true, data: result.data };
       },
     },
   ];

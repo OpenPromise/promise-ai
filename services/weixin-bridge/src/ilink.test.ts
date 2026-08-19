@@ -164,6 +164,35 @@ describe('media upload', () => {
     expect(cdnCall[0]).toContain('/c2c/upload?encrypted_query_param=PARAM&filekey=');
   });
 
+  it('sends a file as a file_item message', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
+      const u = String(input);
+      if (u.includes('/getuploadurl')) {
+        return jsonResponse({ ret: 0, upload_full_url: 'https://cdn.example/upload' });
+      }
+      if (u.startsWith('https://cdn.example/')) {
+        return new Response('', { status: 200, headers: { 'x-encrypted-param': 'dl-param' } });
+      }
+      if (u.includes('/sendmessage')) return jsonResponse({ ret: 0 });
+      return jsonResponse({});
+    });
+    const client = new ILinkClient({ token: 't', fetchImpl });
+    await client.sendFileToUser({
+      to: 'wx_user',
+      file: Buffer.from('pdf-bytes'),
+      fileName: '报告.pdf',
+    });
+
+    const calls = fetchImpl.mock.calls as Array<[string, RequestInit]>;
+    const sendCall = calls.find(([u]) => u.includes('/sendmessage'))!;
+    const body = JSON.parse(sendCall[1].body as string);
+    expect(body.msg.to_user_id).toBe('wx_user');
+    expect(body.msg.item_list[0].type).toBe(4);
+    expect(body.msg.item_list[0].file_item.file_name).toBe('报告.pdf');
+    expect(body.msg.item_list[0].file_item.len).toBe('9');
+    expect(body.msg.item_list[0].file_item.media.encrypt_query_param).toBe('dl-param');
+  });
+
   it('downloads and decrypts inbound CDN media with a raw 16-byte key', async () => {
     const key = Buffer.alloc(16, 3);
     const plain = Buffer.from('plain-image-bytes');

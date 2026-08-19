@@ -48,3 +48,71 @@ describe('weixin.send_image', () => {
     expect(result.error).toContain('不是微信会话');
   });
 });
+
+describe('weixin.list_files', () => {
+  it('lists the bridge file library', async () => {
+    const fetchImpl = vi.fn(async (url: string, _init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes('/api/weixin/files')) {
+        return new Response(
+          JSON.stringify({
+            count: 2,
+            files: [
+              { name: '报告.pdf', size: 10, modifiedAt: '' },
+              { name: 'notes.txt', size: 4, modifiedAt: '' },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response('{}', { status: 200 });
+    });
+    const tools = createWeixinTools({
+      bridgeUrl: 'http://weixin-bridge:3100',
+      store: await makeStore(),
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const result = await tools
+      .find((t) => t.name === 'weixin.list_files')!
+      .execute({}, { sessionId: 's' });
+    expect(result.ok).toBe(true);
+    expect((result.data as { count: number }).count).toBe(2);
+  });
+});
+
+describe('weixin.send_file', () => {
+  it('posts fileName to the bridge for the session peer', async () => {
+    const store = await makeStore('wx_peer');
+    const session = (await store.listSessions())[0]!;
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({ url: String(url), init });
+      return new Response(JSON.stringify({ ok: true, sent: '报告.pdf', size: 9 }), { status: 200 });
+    });
+    const tools = createWeixinTools({
+      bridgeUrl: 'http://weixin-bridge:3100',
+      store,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const result = await tools
+      .find((t) => t.name === 'weixin.send_file')!
+      .execute({ fileName: '报告.pdf' }, { sessionId: session.id });
+    expect(result.ok).toBe(true);
+    const call = calls.find((c) => c.url.includes('/api/weixin/send-file'))!;
+    expect(JSON.parse(call.init.body as string)).toMatchObject({
+      sessionId: session.id,
+      fileName: '报告.pdf',
+    });
+  });
+
+  it('rejects outside weixin sessions', async () => {
+    const store = await makeStore();
+    const session = (await store.listSessions())[0]!;
+    const tools = createWeixinTools({ bridgeUrl: 'http://b:3100', store });
+    const result = await tools
+      .find((t) => t.name === 'weixin.send_file')!
+      .execute({ fileName: 'x.pdf' }, { sessionId: session.id });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('不是微信会话');
+  });
+});
