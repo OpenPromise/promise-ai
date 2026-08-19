@@ -30,8 +30,11 @@ try {
   # 2) 本地从 GitHub 拉取并提交（无变化则跳过）
   Push-Location $Repo
   try {
-    git fetch origin
+    $oldPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    git fetch origin 2>&1 | ForEach-Object { Write-Host $_ }
     git pull --ff-only origin main 2>&1 | ForEach-Object { Write-Host $_ }
+    $ErrorActionPreference = $oldPreference
     $dirty = git status --porcelain
     if ($dirty) {
       git add -A
