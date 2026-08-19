@@ -1,0 +1,21 @@
+{
+  "name": "@personal-ai/tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Tool abstraction and registry",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@personal-ai/memory": "0.1.0"
+  },
+  "scripts": {
+    "test": "vitest run"
+  }
+}

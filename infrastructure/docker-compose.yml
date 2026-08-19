@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: assistant-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-assistant}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-assistant}
+      POSTGRES_DB: ${POSTGRES_DB:-assistant}
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-assistant} -d ${POSTGRES_DB:-assistant}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Agent Server（仅服务端部署；本地开发可继续用 npm run start）
+  app:
+    profiles: ['server']
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: assistant-app
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      # 容器内通过 compose 网络访问 postgres 服务，而非 localhost
+      DATABASE_URL: postgres://${POSTGRES_USER:-assistant}:${POSTGRES_PASSWORD:-assistant}@postgres:5432/${POSTGRES_DB:-assistant}
+    ports:
+      - '${APP_PORT:-3000}:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres-data:

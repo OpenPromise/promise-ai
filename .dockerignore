@@ -1,0 +1,15 @@
+node_modules
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+*.log
+dist
+out
+coverage
+infrastructure/postgres-data
+apps/desktop-ui/renderer/app.bundle.js
+apps/desktop-ui/renderer/*.map
+.claude
+.dsh

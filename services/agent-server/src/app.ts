@@ -1,0 +1,148 @@
+import Fastify from 'fastify';
+import type { FastifyInstance } from 'fastify';
+import websocket from '@fastify/websocket';
+import type { AppConfig } from '@personal-ai/config';
+import type { PersonaProvider } from '@personal-ai/core';
+import type { TTSProvider, VoiceGateway } from '@personal-ai/elevenlabs';
+import type { LLMProvider } from '@personal-ai/llm';
+import type { MemoryStore, SessionStore } from '@personal-ai/memory';
+import type { QwenRealtimeClient } from '@personal-ai/qwen-realtime';
+import type { ToolRegistry } from '@personal-ai/tools';
+import { registerHealthRoutes } from './routes/health.js';
+import { registerSessionRoutes } from './routes/sessions.js';
+import { registerVoiceRoutes } from './routes/voice.js';
+import { registerQwenVoiceRoutes } from './routes/qwen-voice.js';
+import { registerQwenS2SVoiceRoutes } from './routes/qwen-voice-s2s.js';
+import { registerDesktopRoutes } from './routes/desktop.js';
+import { registerEventRoutes } from './routes/events.js';
+import { ApprovalRegistry } from './services/approval.js';
+import { ConversationService } from './services/conversation.js';
+import type { ReminderDueEvent } from './services/reminder-service.js';
+import type { TaskRunEvent } from './services/task-service.js';
+
+export interface AppDeps {
+  config: AppConfig;
+  store: SessionStore;
+  llm: LLMProvider;
+  /** Low-latency LLM for the voice cascade; falls back to `llm` when unset. */
+  voiceLlm?: LLMProvider;
+  persona: PersonaProvider;
+  tools: ToolRegistry;
+  approvals: ApprovalRegistry;
+  memory: MemoryStore;
+  memoryBackend: string;
+  sessionBackend: string;
+  createVoice: () => VoiceGateway;
+  /** ElevenLabs TTS used by the Qwen ASR -> LLM -> TTS cascade. */
+  createTTS?: () => TTSProvider;
+  /** Creates a Qwen realtime client for the given model (ASR or TTS). */
+  createQwen?: (model: string) => QwenRealtimeClient;
+  /** 任务运行事件订阅（桌面端通知闭环）。 */
+  subscribeTaskEvents?: (listener: (event: TaskRunEvent) => void) => () => void;
+  /** 提醒到期事件订阅（桌面端通知闭环）。 */
+  subscribeReminderEvents?: (listener: (event: ReminderDueEvent) => void) => () => void;
+}
+
+export function buildApp(deps: AppDeps): FastifyInstance {
+  const app = Fastify({
+    logger: { level: deps.config.logLevel },
+  });
+
+  const conversation = new ConversationService({
+    store: deps.store,
+    llm: deps.llm,
+    tools: deps.tools,
+    approvals: deps.approvals,
+    memory: deps.memory,
+  });
+
+  registerHealthRoutes(app, {
+    config: deps.config,
+    llm: deps.llm,
+    memoryBackend: deps.memoryBackend,
+  });
+  if (deps.subscribeTaskEvents || deps.subscribeReminderEvents) {
+    registerEventRoutes(app, {
+      subscribeTaskEvents: deps.subscribeTaskEvents ?? (() => () => {}),
+      subscribeReminderEvents: deps.subscribeReminderEvents ?? (() => () => {}),
+    });
+  }
+  registerSessionRoutes(app, {
+    store: deps.store,
+    llm: deps.llm,
+    persona: deps.persona,
+    conversation,
+    approvals: deps.approvals,
+  });
+
+  // The websocket plugin must be registered in the same encapsulation as the
+  // websocket routes so its `onRoute` hook rewrites the handlers.
+  app.register(async (instance) => {
+    await instance.register(websocket, { options: { maxPayload: 1024 * 1024 } });
+    registerDesktopRoutes(instance, { registry: deps.tools });
+    if (deps.config.qwenRealtime.configured && deps.createQwen) {
+      if (deps.config.qwenRealtime.voiceMode === 's2s') {
+        // End-to-end speech-to-speech: lowest latency, reasoning is Qwen's own.
+        registerQwenS2SVoiceRoutes(instance, {
+          store: deps.store,
+          tools: deps.tools,
+          approvals: deps.approvals,
+          voice: deps.config.qwenRealtime.voice,
+          createQwen: () => deps.createQwen!(deps.config.qwenRealtime.model),
+          // 语音委托子代理：复杂/多步任务交给文本推理代理执行（OpenDex run_task 模式）。
+          conversation: new ConversationService({
+            store: deps.store,
+            llm: deps.llm,
+            tools: deps.tools,
+            approvals: deps.approvals,
+            memory: deps.memory,
+          }),
+        });
+      } else {
+        // Qwen ASR -> LLM -> ElevenLabs TTS cascade. The voice conversation
+        // uses voiceLlm (fast) while text chat keeps the full-strength llm.
+        const voiceConversation = new ConversationService({
+          store: deps.store,
+          llm: deps.voiceLlm ?? deps.llm,
+          tools: deps.tools,
+          approvals: deps.approvals,
+          memory: deps.memory,
+        });
+        registerQwenVoiceRoutes(instance, {
+          store: deps.store,
+          conversation: voiceConversation,
+          approvals: deps.approvals,
+          createQwenASR: () => deps.createQwen!(deps.config.qwenRealtime.asrModel),
+          createTTS: deps.createTTS ?? (() => deps.createVoice().tts),
+        });
+      }
+    } else {
+      registerVoiceRoutes(instance, {
+        store: deps.store,
+        conversation,
+        approvals: deps.approvals,
+        createVoice: deps.createVoice,
+      });
+    }
+  });
+
+  app.setErrorHandler((error, request, reply) => {
+    if (reply.sent) return;
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'statusCode' in error &&
+      typeof error.statusCode === 'number' &&
+      error.statusCode >= 400 &&
+      error.statusCode < 500
+    ) {
+      const message =
+        'message' in error && typeof error.message === 'string' ? error.message : 'Bad request';
+      return reply.code(error.statusCode).send({ error: message });
+    }
+    request.log.error({ err: error }, 'unhandled error');
+    reply.code(500).send({ error: 'Internal server error' });
+  });
+
+  return app;
+}

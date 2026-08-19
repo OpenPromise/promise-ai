@@ -1,0 +1,25 @@
+{
+  "name": "@personal-ai/memory",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Session and memory storage abstractions",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@personal-ai/types": "0.1.0",
+    "pg": "^8.23.0"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1"
+  }
+}

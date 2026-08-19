@@ -1,0 +1,352 @@
+# Changelog
+
+## [0.14.7] - 2026-08-19
+
+### coding.run 移入服务端 + 全服务端部署拓扑
+
+- **coding.run 从桌面代理搬到服务端**：编码能力属于"大脑"，不依赖桌面客户端；
+  服务端直接驱动 dsh（DeepSeek Harness，默认 deepseek-v4-flash），
+  `CODING_AGENT=claude` 仍可切 Claude Code（服务器未装时给出明确提示）
+- **Docker 镜像内置 dsh**：构建期安装 `@deepseek-ai/dsh` + pnpm 并引导 headless
+  profile；入口脚本把 `DEEPSEEK_API_KEY` 写入 dsh 凭证文件后启动服务
+- **拓扑**：服务器 = agent-server + Postgres + coding.run（Ubuntu 容器）；
+  桌面 UI / 桌面代理是薄客户端（麦克风、音频、本机工具），通过
+  `AGENT_URL` / `AGENT_WS_URL` 连接远端；树莓派、车机等未来客户端走同一套
+  WebSocket/SSE 协议（语音 /ws/voice、事件 /api/events）
+- 实测：容器内 `dsh` 正常推理；服务端 qwen 经 coding.run 调用 dsh 在
+  `/tmp` 创建文件并回读验证成功
+
+## [0.14.6] - 2026-08-19
+
+### Docker 服务端部署（Ubuntu）
+
+- **新增 `Dockerfile`（Ubuntu 24.04 + Node 24）**：只打包 agent-server 生产运行
+  （`npm ci --omit=dev`，跳过 electron/esbuild 等构建依赖），含 `/health` 健康检查
+- **compose 新增 `app` 服务**（`server` profile）：自动等 Postgres 健康后启动，
+  `DATABASE_URL` 在容器内指向 compose 网络内的 postgres，环境变量走 `.env`
+- **命令**：`npm run server:up` / `server:down` / `server:logs`（默认 3000 端口，
+  可用 `APP_PORT` 覆盖）；本地开发 `infra:up` 仍只起 Postgres，互不干扰
+- 修正 agent-server 缺失的 workspace 运行时依赖声明；`tsx` 移入 dependencies
+  （生产镜像需要它作为启动器）
+- 实测：镜像构建 + 容器启动 + Postgres 会话恢复 + qwen3.8-max 真实对话流
+  （chat.token / chat.done）全部通过
+
+## [0.14.5] - 2026-08-19
+
+### 桌面 UI 主题系统（OpenDex use-amplitude 思路）
+
+- **可插拔主题架构**：渲染层重构为主题管理器（`themes.js`），每个主题是
+  完整界面，统一接收状态（idle/listening/thinking/speaking/approval）
+  与麦克风/播放振幅，运行时切换、localStorage 持久化
+- **新增"柔光光晕"主题**：纯 2D Canvas 多层渐变光体（宽柔光 + 核心光体 +
+  高光 + 细环 + 音量涟漪），呼吸节奏与振幅实时驱动，状态切换平滑变色，
+  不依赖 three.js；原"流光光球"（three.js）保留为默认主题
+- **托盘切换**：系统托盘 → 切换主题 → 流光光球 / 柔光光晕，即时生效
+
+## [0.14.4] - 2026-08-19
+
+### 语音委托子代理（OpenDex run_task 模式）
+
+- 语音 S2S 会话新增 `voice.delegate` 工具：语音模型把复杂/多步骤/耗时任务
+  （写代码、连续操作、需要仔细推理）交给文本推理代理（qwen3.8-max）执行，
+  代理拥有全部工具（含桌面桥：屏幕/终端/文件/编程），完成后只把结果摘要
+  回给语音模型播报——语音不再被长工具循环拖垮
+- 委托过程中状态/审批/工具进度事件照常推送到桌面 UI（光球可确认 L2 权限），
+  简单单步操作仍走直连工具（低延迟）
+- 委托上限 20 分钟，超时中止并返回错误摘要，语音回合不会无限等待
+
+## [0.14.3] - 2026-08-19
+
+### 记忆检索升级（OpenClaw 混合检索思路）
+
+- **真实语义嵌入**：长期记忆默认改用百炼 `text-embedding-v4`（1024 维，中文
+  语义检索质量远超本地 bigram 哈希）；云接口失败自动回退本地嵌入，不阻断写入
+- **维度自动迁移**：pgvector 列维度变化（384→1024）时启动自动重建 embedding
+  列并用当前嵌入器重新嵌入存量记忆，记忆数据不丢失
+- **关键词兜底**：向量检索命中不足时用查询关键词（CJK 二元组）做 ILIKE/
+  包含匹配，避免"明明记过但搜不到"（OpenClaw FTS+向量混合检索的简化版）
+- 内存版记忆存储增加向量缓存，云嵌入下不再每次搜索重复调用 API
+
+## [0.14.2] - 2026-08-19
+
+### Computer-use 循环工程 + Agent Core 护栏（参考 OpenDex / OpenClaw）
+
+- **屏幕帧校验与无变化检测**：`screen.analyze` 返回轻量截图签名（frameId），
+  `screen.click` 传回 frameId 校验画面未过期（OpenClaw 过期帧语义）；点击后自动
+  复查画面，无变化时明确提示"可能未生效"，避免模型反复点击同一位置
+- **区域放大分析**：`screen.analyze` 支持 `region` 只分析屏幕局部（小目标先放大），
+  坐标相对裁剪区域原点，`screen.click` 传同一 region 自动映射回屏幕坐标
+- **任务级权限授权**（OpenDex Allow once）：一次请求内已放行的 L2 工具，后续
+  任意参数调用自动执行（覆盖整个多步工具循环），请求结束即清理，不跨请求泄漏
+- **工具循环恢复**（OpenClaw）：连续 3 次相同工具调用（同工具同参数）判定为循环，
+  拦截执行并结束对话，提示重新评估任务
+- **工具结果配对修复**（OpenClaw）：会话历史存在"有 tool_calls 缺 tool result"
+  （服务中断残留）时，发送前自动补合成错误结果，避免接口拒绝悬空调用
+- AGENTS.md 参考清单新增 OpenDex（仅架构参考）
+
+## [0.14.1] - 2026-08-19
+
+### Agent Core 可靠性（参考项目差距落地）
+
+- **LLM 流式超时 + 重试**：对话与上下文压缩的 LLM 调用新增"无数据超时"
+  （默认 90 秒卡死中断）；首个 token 前的瞬时错误（网络失败 / 429 / 5xx /
+  超时）自动退避重试最多 2 次，已输出内容后的失败不重试（避免重复流）
+- **失败事件化**：LLM 持续失败时不再让 SSE 静默断流——产出 `chat.error`
+  事件、把"回复生成失败"写入会话历史，并让光球/聊天窗回到 listening，
+  不再卡在"正在思考"
+- **工具结果裁剪**：工具返回进入 LLM 上下文前统一截断（>8KB 保留头 4KB +
+  尾 1KB 并标注省略），防止单条大输出（如 terminal/filesystem 结果）撑爆
+  上下文；`agent.tool_result` 事件仍携带完整结果
+- **桌面桥断线自动重连**：desktop-agent 断开后指数退避重连
+  （1s→2s→4s…封顶 30s），重连后自动重新注册全部工具；服务端重启后
+  不再需要手动重启桌面代理
+
+## [0.14.0] - 2026-08-19
+
+### coding.run 切换 dsh（DeepSeek Harness）后端
+
+- **默认后端改为 dsh**：`coding.run` 现在通过 `dsh --profile headless` 执行
+  开发任务（DeepSeek Harness，Agent/工具/模型适配器全部插件化，可扩展性强）；
+  模型走百炼 OpenAI 兼容接口（`qwen3.8-max`），沙箱按权限模式生效
+- **双后端切换**：环境变量 `CODING_AGENT=claude` 可切回 Claude Code
+  （`--resume` 会话续接）；dsh headless 每次调用是全新会话，暂无续接
+- **dsh 默认模型切到 DeepSeek 官方 `deepseek-v4-flash`**：密钥走 `DEEPSEEK_API_KEY`
+  凭证；百炼 qwen3.8-max（newapi 适配器）保留，可在 profile patch 中一键切回
+- **coding.run 改为 L1 自动执行**：不再弹出「需要确认」审批（L2 → L1），
+  编码代理内部的终端命令/读写操作直接执行；dsh 仍受 workspace-write 沙箱约束，
+  `bypassPermissions` 可完全免沙箱
+- **权限映射**：`acceptEdits` → `DSH_PERMISSION_MODE=workspace-write`
+  （沙箱限工作区），`bypassPermissions` → `danger-full-access`（完全免确认）；
+  dsh 通过 `node` 直连 `bin.js` 启动，避免 .cmd shim 引号问题
+
+## [0.13.0] - 2026-08-19
+
+### 文本推理只保留千问 + 定时任务通知闭环
+
+- **移除 Grok（xAI 直连）**：删除 `GrokProvider` 与全部 `GROK_*` 配置，
+  `packages/grok` 更名为 `packages/llm`（保留 LLMProvider 抽象与 OpenAI 兼容
+  流式工具）；`LLM_PROVIDER` 现在只有 `dashscope`（默认，qwen3.8-max）与
+  `openrouter`（可选替代）两个选项
+- **定时任务通知闭环**：`TaskService` 新增 `onRun` 事件订阅（成功/失败均触发），
+  新增 `GET /api/events` SSE 推送端点；桌面端常驻订阅，任务执行完/失败时
+  立即弹系统通知（含任务名与结果摘要），"每天 9 点查天气→下雨提醒你"
+  这类场景现在真正闭环
+- **任务会话自愈**：任务专属会话因存储切换/清理而丢失时自动重建
+  （`TaskStore.updateTask` 支持更新 `sessionId`），旧任务不再无限失败刷通知
+- **提醒投递闭环**：新增 `ReminderService`（10 秒扫描到期提醒），
+  `reminder.create` 创建的提醒到点会通过 SSE `reminder.due` 事件推送到桌面端
+  弹系统通知——此前提醒只存储、从不触发，是功能缺口
+- **文件权限体验对齐**：日常文件操作全部 L1 自动执行（移动/复制/写入/
+  新建目录/压缩/解压/删除/打开路径）；`filesystem.delete` 改为删除到
+  **回收站**（免确认但可恢复），并拒绝磁盘根目录与系统关键目录
+  （Windows / Program Files / ProgramData 等）；`app.launch` 描述明确
+  支持打开文件/文件夹/磁盘/URL
+
+## [0.12.0] - 2026-08-19
+
+### Agent Core 稳定性（按参考项目差距分析落地）
+
+- **接入本机 Claude Code 开发**：新增 `coding.run` 工具（L2 确认），
+  通过本机 Claude Code headless 模式（`-p --output-format json`）执行开发任务，
+  同一目录自动 `--resume` 延续会话；工具/桥接支持每工具超时
+  （`timeoutMs`），并修复工具超时只依赖 abort 信号、不响应 abort 时
+  会拖到自身超时的问题（改为 Promise.race 真正兜底）
+- **文字推理可切千问**：新增 `LLM_PROVIDER=dashscope`（`DASHSCOPE_LLM_MODEL=qwen3.8-max`，
+  DashScope OpenAI 兼容接口），文字对话与上下文压缩都走 qwen3.8-max；
+  语音仍为 Qwen S2S 端到端
+- **会话持久化**：新增 `PostgresSessionStore`（`sessions` 表 + JSONB 消息列），
+  Agent Server 重启后会话不丢；桌面端在 localStorage 记住 sessionId，
+  重启后自动恢复同一段对话（会话失效时自动新建）
+- **上下文压缩**：会话超过 60 条消息时，把早期历史交给 LLM 生成摘要并裁剪
+  （保留最近 24 条），提示词不再无限膨胀；压缩失败自动降级为原行为
+- **统一 Agent 状态机**：新增 `agent.state` 事件
+  （`thinking / awaiting_approval / speaking / listening`），
+  光球与聊天窗据此展示真实状态，不再误报"正在等待回复"；
+  语音 S2S / 级联 / ElevenLabs 三条路由统一发出
+- **工具参数 Schema 校验**：执行前按 `inputSchema` 校验参数
+  （必填、类型、enum、范围、嵌套），非法调用快速失败并回传给 LLM 修正
+- **审批增强**：L2 工具同参数二次调用自动放行（参数指纹记忆，
+  参考 Mastra autoResumeSuspendedTools）；L3（电源/终端）始终要求确认
+- **文字聊天窗升级**：支持审批弹条（允许/拒绝）、思考状态、会话恢复
+- 光球交互修正：思考/说话中点击光球 = 打断并回到待机
+
+## [0.11.0] - 2026-08-19
+
+### 桌面体验完善
+
+- 托盘 orb 图标：渲染进程 Canvas 绘制发光渐变球体，经 IPC 设为托盘图标
+- 窗口状态自适应：idle 缩小为 150x170 小光点并开启鼠标点击穿透，
+  唤醒后恢复 460x520 并居中（多显示器 workArea 适配）
+- 会话复用：多次唤醒共用同一会话，对话上下文连续
+- 播放音量可视化：AI 语音播放时 AnalyserNode 实时驱动 orb 波动，
+  reactive audio visualization 完整闭环（说话时 orb 随声音起伏）
+- AI 回复文本显示：说话时面板同步显示当前句子
+- 错误反馈：Agent Server 未启动时明确提示
+
+## [0.10.0] - 2026-08-19
+
+### Phase 9（第一步）：Windows Desktop Agent
+
+- **远端工具桥**（`/ws/desktop`）：桌面端连接后声明本地工具，
+  Agent Loop 通过 WebSocket 桥到桌面本地执行；断线自动卸载工具并拒绝
+  挂起请求；工具执行 60s 超时
+- **桌面工具集**（`apps/desktop-agent`）：`terminal.run`（L3）、
+  `app.launch`（L2）、`filesystem.move/copy`（L1）、`screen.capture`（L0）、
+  `window.list`（L0），全部走既有权限确认流
+- **Siri 式桌面 UI**（`apps/desktop-ui`，Electron）：
+  - 视觉遵循设计提示词：luminous orb / glassmorphism / fluid gradient /
+    ambient glow / reactive audio visualization
+  - 中央发光球体（多层渐变 + 高斯模糊 + 色相流动）、conic 光晕旋转、
+    Canvas 动态粒子、玻璃拟态状态面板
+  - 麦克风音量实时驱动 orb 波动与粒子强度（音频响应可视化）
+  - 全局热键唤醒（默认 `Ctrl+Alt+Space`）、托盘常驻、点击光球开始对话
+  - 完整语音链路：getUserMedia 16k PCM → `/ws/voice` → STT → Grok → TTS
+    → 逐句音频播放（新增 `tts.sentence` 事件）
+- 测试：桥接注册/执行/超时/断线、桌面工具全链路集成
+
+## [0.9.0] - 2026-08-19
+
+### Phase 8：Task / Scheduler
+
+- `TaskStore`：`tasks` / `task_runs` 表（内存 + Postgres 双实现），
+  任务含 cron 调度、自然语言指令、专属会话
+- `TaskService`：Node.js 调度器（30 秒 tick，无队列系统），cron 到期检查
+  （基于创建时间/上次运行防止重复触发）、无人值守执行、运行记录
+- headless 模式：任务执行走完整 Agent Loop，但 L2/L3 工具直接拒绝
+  （无人值守不允许需要确认的操作）
+- 任务工具：`task.create`（L1，cron 校验）/ `task.list`（L0）/
+  `task.delete`（L2，需确认）/ `task.list-runs`（L0）
+- 示例：`task.create({schedule:"0 9 * * *", action:"检查杭州天气，如果下雨提醒我"})`
+- 测试：cron 到期判断、调度触发、错误记录、headless 拒绝 L2、任务工具
+
+## [0.8.0] - 2026-08-19
+
+### Phase 7：Memory System
+
+- 三层记忆模型：Short-term（会话）+ Episodic（重要事件）+ Semantic（长期事实）
+- `MemoryStore` 抽象与两个实现：
+  - `InMemoryMemoryStore`：无数据库兜底，本地确定性 embedding 语义检索
+  - `PostgresMemoryStore`：PostgreSQL + pgvector（`memories` 表、
+    余弦距离 `<=>` 检索），`DATABASE_URL` 不可用时自动降级内存
+- 记忆工具：`memory.remember` / `memory.list` / `memory.forget` /
+  `memory.edit`——记住/列出/真实删除/修改，Agent 可自主维护长期记忆
+- Agent 上下文注入：每轮对话前检索与当前消息最相关的记忆，
+  附加为 system prompt（最多 3 条，有冲突时以用户当前说法为准）
+- 记忆写入规则（遵循计划）：只保存长期价值信息，不保存闲聊/密钥；
+  用户要求"忘记"时永久删除
+- `/health` 显示真实版本号与记忆后端（memory / postgres）
+
+## [0.7.0] - 2026-08-19
+
+### Phase 6：权限系统
+
+- 工具权限分级落地：L0 只读无需确认、L1 低风险修改默认执行、
+  L2 敏感操作需用户确认、L3 高风险必须二次确认
+- `ApprovalRegistry`：会话级 pending 审批（内存），60 秒超时自动拒绝，
+  拒绝原因（timeout / session closed / 用户拒绝）回传给 LLM 自我修正
+- 审批双通道：
+  - SSE：`permission.request` / `permission.response` 事件，
+    `POST /api/sessions/:id/permission` 提交决定
+  - 语音 WS：`{"type":"permission.response","requestId":...,"approved":...}`
+- Agent Loop 挂起/恢复：L2/L3 工具执行前等待确认，
+  未批准时工具不执行，拒绝结果作为 ToolResult 回传
+- 新增演示工具：`filesystem.delete`（L3，限定工作区、二次确认）、
+  `notification.send`（L2，通知内存存储）
+- 测试：L2 拒绝/批准、L3 二次确认、超时自动拒绝、敏感工具边界
+
+## [0.6.0] - 2026-08-19
+
+### Phase 5：Agent Core / 工具系统
+
+- LLM tool calling：`grok` / `openrouter` 支持 `tools` 参数，流式累积
+  `tool_calls` delta（跨 chunk 拼接 arguments），非流式解析 `message.tool_calls`
+- Agent Loop（`ConversationService`）：LLM → 工具调用 → 结果回传 → LLM，
+  最多 5 轮；assistant 的 tool_calls 消息原样回传，工具结果按 `toolCallId` 关联
+- 消息模型扩展：`tool` 角色、assistant 消息 `toolCalls`、tool 消息 `toolCallId`
+- 第一批内置工具（`@personal-ai/tools`）：
+  `time.get`（时区）、`weather.get`（Open-Meteo，城市地理编码）、
+  `web.search`（维基百科）、`filesystem.search`（限定工作区、glob 通配）、
+  `reminder.create/list`、`calendar.create/list`（内存存储，Phase 7 迁数据库）
+- 工具执行：15s 超时（区分超时/取消，`AbortController.reason`）、错误捕获后
+  作为结果回传 LLM 自我修正、L0/L1 自动执行，L2+ 拒绝（Phase 6 做确认流程）
+- 事件：SSE/WS 新增 `agent.tool_call` / `agent.tool_result`；会话历史完整记录
+  工具调用链（GET 响应 schema 补齐 toolCalls 字段）
+- 新增 `AGENTS.md`：架构参考政策（OpenClaw / Mastra / LiveKit / ElevenLabs SDK
+  仅作参考，禁止复制代码与过度工程化）
+
+## [0.5.0] - 2026-08-19
+
+### Phase 4：实时语音 Agent
+
+- 句子级流式 TTS：Grok 回复按 `。！？…` 等边界切句，每句立即合成下发，
+  大幅降低首音频延迟（不再等完整回复）
+- 用户打断（Barge-in）：
+  - TTS 播放期间收到非空 partial transcript 即中断当前任务
+  - 客户端可发 `{"type":"interrupt"}` 显式打断
+  - 打断后发送 `tts.interrupted`（含原因），已合成的部分回复写入会话历史
+- `ElevenLabsTTS` 支持 `AbortSignal`，可随时中止合成（停止说话）
+- 并发会话隔离：每个语音 WS 连接独立创建 STT/TTS 客户端，
+  修复共享实例导致的多会话串音与 handler 泄漏
+- `agent.done` 事件：携带完整回复文本，便于客户端展示/校对
+- `splitSentences` 流式句子切分器（含连续标点合并、换行切分）
+- 测试：TTS abort、句子切分、partial 打断、客户端 interrupt、每连接独立客户端
+
+## [0.4.0] - 2026-08-19
+
+### Phase 3：ElevenLabs 语音层
+
+- `ElevenLabsTTS`：流式 TTS（MP3 / PCM 输出），支持 `languageCode`（中文清晰输出，
+  `eleven_v3` + Sarah 音色）
+- `ElevenLabsSTT`：实时 WebSocket STT（`scribe_v2_realtime`），VAD 提交策略、
+  部分/最终转写事件、`languageCode` 与 VAD 阈值参数
+  - 修复：实时消息的 `text` 位于顶层而非 `data`，此前导致转写恒为空
+- `SilenceTurnDetector`：基于 RMS 的静音换轮检测（本地 VAD 备用方案）
+- agent-server 新增 `/ws/voice/:sessionId`：STT → Grok（LLM）→ TTS 语音会话闭环，
+  统一信封输出 `voice.ready` / `transcript.partial` / `transcript.final` /
+  `agent.thinking` / `tts.start` / `audio.chunk` / `tts.end` / `voice.error`
+- `npm run voice:smoke`：TTS 生成 → PCM 转 PCM → 实时 STT 回环冒烟测试
+
+## [0.3.0] - 2026-08-19
+
+### Phase 2：Persona 人格系统
+
+- `FilePersonaProvider`：读取 `persona/*.md`（身份/人格/说话风格/行为准则）合成
+  System Prompt，每次调用重新读取，人格文件修改即时生效
+- `PersonaProvider.getVoiceProfile()` 返回声音档案（来源 `ELEVENLABS_*` 配置，
+  Phase 3 语音层使用）
+- agent-server 默认 System Prompt 改为由 Persona Loader 提供，会话级
+  `systemPrompt` 仍可覆盖
+- 测试：`FilePersonaProvider` 单元测试（合成/缺失文件/默认音色/热更新）+ 会话集成测试
+
+## [0.2.0] - 2026-08-18
+
+### LLM Provider 可切换
+
+- 新增 `@personal-ai/openrouter`：OpenRouterProvider（流式 SSE、用量统计、错误处理）
+- 抽出 OpenAI 兼容流式解析助手（`iterSsePayloads` / `parseChatCompletionStreamData`），
+  Grok 与 OpenRouter 共用
+- `LLM_PROVIDER` 环境变量选择大脑：`grok`（直连 xAI）或 `openrouter`
+- `.env.example` / README 增加 OpenRouter 配置说明
+
+## [0.1.0] - 2026-08-18
+
+### Phase 0：项目骨架
+
+- 建立 npm workspaces Monorepo（packages / services）
+- TypeScript 严格模式 + 统一 tsconfig
+- ESLint（typescript-eslint）+ Prettier 配置
+- Vitest 测试框架
+- 环境变量统一管理（`@personal-ai/config` + `.env.example`）
+- Docker Compose：PostgreSQL 16 + pgvector 扩展
+- Persona 目录与初始人格定义
+- 架构文档 `docs/architecture.md`
+
+### Phase 1：Grok 文本 Agent MVP
+
+- `@personal-ai/types`：Session / ChatMessage 等共享类型
+- `@personal-ai/protocol`：统一消息信封与事件名
+- `@personal-ai/grok`：LLMProvider 抽象 + GrokProvider（SSE 流式）
+- `@personal-ai/memory`：SessionStore 抽象 + 内存实现
+- `@personal-ai/tools`：Tool 接口与注册表（为 Phase 5 预留）
+- `@personal-ai/elevenlabs`：STT/TTS 抽象（为 Phase 3 预留）
+- Agent Server：创建 Session、流式对话、SSE 协议、错误处理、请求/用量日志

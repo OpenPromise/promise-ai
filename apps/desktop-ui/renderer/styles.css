@@ -1,0 +1,106 @@
+:root {
+  --vol: 0;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+  color: rgba(255, 255, 255, 0.92);
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 26px;
+  position: relative;
+  /* 整个窗口交给 Windows 原生拖动（jarvis-orb 同款机制）：
+     系统级同步移动，转圈/快甩零延迟零漂移。setShape 已把窗口裁成圆形，
+     透明区域外的点击仍会穿透，不会挡住桌面操作。 */
+  -webkit-app-region: drag;
+  cursor: grab;
+}
+
+/* 主题渲染区：每个主题（流光光球 / 柔光光晕）在这里创建自己的画布 */
+#theme-host {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+#orb-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.aura-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------------- orb */
+
+#orb-wrap {
+  position: relative;
+  width: 210px;
+  height: 210px;
+  transition:
+    transform 0.7s cubic-bezier(0.2, 0.8, 0.2, 1),
+    width 0.7s,
+    height 0.7s;
+}
+
+/* 中心点击区：可交互（唤醒/批准），也是 JS 拖动的兜底区域 */
+#orb-click {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 55%;
+  height: 55%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+}
+
+/* 光球视觉全部由 Canvas 渲染（app.js drawOrb），orb-wrap 仅作交互热区 */
+.state-listening #orb-wrap,
+.state-speaking #orb-wrap {
+  width: 250px;
+  height: 250px;
+}
+
+/* thinking: faster, hotter pulse */
+.state-thinking #orb-wrap {
+  width: 230px;
+  height: 230px;
+}
+
+/* idle: compact glowing dot */
+.state-idle #orb-wrap {
+  width: 96px;
+  height: 96px;
+  opacity: 0.92;
+}
+
+/* ------------------------------------------------------------- panel */
+
+.panel {
+  display: none;
+}

@@ -1,0 +1,259 @@
+import { randomUUID } from 'node:crypto';
+
+export type MemoryKind = 'episodic' | 'semantic';
+
+export interface MemoryEntry {
+  id: string;
+  kind: MemoryKind;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MemorySearchResult {
+  entry: MemoryEntry;
+  score: number;
+}
+
+export interface Embedder {
+  embed(text: string): Promise<number[]>;
+  /** 输出向量维度；缺失时由存储层决定（默认 384）。 */
+  readonly dimensions?: number;
+}
+
+export interface MemoryStore {
+  add(input: { kind: MemoryKind; content: string }): Promise<MemoryEntry>;
+  list(kind?: MemoryKind): Promise<MemoryEntry[]>;
+  search(query: string, limit?: number): Promise<MemorySearchResult[]>;
+  /** Permanently deletes a memory entry. */
+  forget(id: string): Promise<boolean>;
+  edit(id: string, content: string): Promise<MemoryEntry | undefined>;
+  close?(): Promise<void>;
+}
+
+/**
+ * Deterministic, dependency-free embedder: character bigram hashing into a
+ * fixed-size normalized vector. Good enough for short Chinese memory snippets;
+ * swap in a real embedding API later without touching the stores.
+ */
+export function createLocalEmbedder(dimensions = 384): Embedder {
+  return {
+    dimensions,
+    async embed(text: string): Promise<number[]> {
+      const vector = new Float32Array(dimensions);
+      const normalized = text.toLowerCase();
+      for (let i = 0; i < normalized.length - 1; i++) {
+        const gram = normalized.slice(i, i + 2);
+        let hash = 0;
+        for (let j = 0; j < gram.length; j++) {
+          hash = (hash * 31 + gram.charCodeAt(j)) >>> 0;
+        }
+        const index = hash % dimensions;
+        vector[index] = (vector[index] ?? 0) + 1;
+      }
+
+      let norm = 0;
+      for (const value of vector) norm += value * value;
+      norm = Math.sqrt(norm);
+      if (norm > 0) {
+        for (let i = 0; i < vector.length; i++) {
+          vector[i] = (vector[i] ?? 0) / norm;
+        }
+      }
+      return [...vector];
+    },
+  };
+}
+
+export interface DashScopeEmbedderOptions {
+  apiKey: string;
+  model?: string;
+  baseUrl?: string;
+  /** 可注入的 fetch（测试用）；默认全局 fetch。 */
+  fetchImpl?: typeof fetch;
+}
+
+/**
+ * 百炼（DashScope）text-embedding 云嵌入器：中文语义检索质量远好于本地
+ * bigram 哈希。OpenAI 兼容接口：POST {base}/embeddings。
+ */
+export function createDashScopeEmbedder(options: DashScopeEmbedderOptions): Embedder {
+  const model = options.model ?? process.env.QWEN_EMBEDDING_MODEL ?? 'text-embedding-v4';
+  const baseUrl = (options.baseUrl ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1').replace(
+    /\/+$/,
+    '',
+  );
+  const fetchImpl = options.fetchImpl ?? fetch;
+  return {
+    dimensions: 1024,
+    async embed(text: string): Promise<number[]> {
+      if (!options.apiKey) {
+        throw new Error('DASHSCOPE_API_KEY 未配置，无法使用云嵌入');
+      }
+      const response = await fetchImpl(`${baseUrl}/embeddings`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${options.apiKey}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ model, input: [text] }),
+      });
+      const data = (await response.json()) as {
+        data?: Array<{ embedding?: number[] }>;
+        error?: { message?: string };
+      };
+      if (!response.ok) {
+        throw new Error(
+          `DashScope embeddings 调用失败（HTTP ${response.status}）：${data.error?.message ?? ''}`,
+        );
+      }
+      const embedding = data.data?.[0]?.embedding;
+      if (!embedding) {
+        throw new Error('DashScope embeddings 返回为空');
+      }
+      return embedding;
+    },
+  };
+}
+
+/**
+ * 主嵌入器失败时自动回退到备用嵌入器；为保持维度一致（pgvector 列固定维度），
+ * 回退向量会补零/截断到主嵌入器的维度。
+ */
+export function createResilientEmbedder(primary: Embedder, fallback: Embedder): Embedder {
+  const dimensions = primary.dimensions ?? fallback.dimensions ?? 384;
+  return {
+    dimensions,
+    async embed(text: string): Promise<number[]> {
+      try {
+        return await primary.embed(text);
+      } catch {
+        const vector = await fallback.embed(text);
+        if (vector.length === dimensions) return vector;
+        if (vector.length > dimensions) return vector.slice(0, dimensions);
+        return [...vector, ...new Array<number>(dimensions - vector.length).fill(0)];
+      }
+    },
+  };
+}
+
+/** 从查询里提取关键词（CJK 用二元组），供向量检索无结果时的关键词兜底。 */
+export function extractKeywords(query: string): string[] {
+  const keywords: string[] = [];
+  const cjk = query.replace(/[^\u4e00-\u9fff]/g, '');
+  if (cjk.length >= 2) {
+    for (let i = 0; i < cjk.length - 1 && keywords.length < 6; i++) {
+      keywords.push(cjk.slice(i, i + 2));
+    }
+  }
+  for (const word of query.split(/[\s\p{P}\p{S}]+/u)) {
+    const trimmed = word.trim();
+    if (trimmed.length < 2) continue;
+    // 纯中文词已由上面的二元组覆盖，避免整句被当作单个关键词。
+    if (/^[\u4e00-\u9fff]+$/.test(trimmed)) continue;
+    keywords.push(trimmed);
+  }
+  return [...new Set(keywords)].slice(0, 6);
+}
+
+function containsKeyword(content: string, keywords: string[]): boolean {
+  const lower = content.toLowerCase();
+  return keywords.some((keyword) => lower.includes(keyword.toLowerCase()));
+}
+
+export function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length !== b.length || a.length === 0) return 0;
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    const va = a[i] ?? 0;
+    const vb = b[i] ?? 0;
+    dot += va * vb;
+    normA += va * va;
+    normB += vb * vb;
+  }
+  if (normA === 0 || normB === 0) return 0;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+export class InMemoryMemoryStore implements MemoryStore {
+  readonly #items: MemoryEntry[] = [];
+  readonly #embedder: Embedder;
+  /** id -> 向量缓存：云嵌入器下避免每次搜索都重复调用 API。 */
+  readonly #vectors = new Map<string, number[]>();
+
+  constructor(embedder: Embedder = createLocalEmbedder()) {
+    this.#embedder = embedder;
+  }
+
+  async add(input: { kind: MemoryKind; content: string }): Promise<MemoryEntry> {
+    const now = new Date().toISOString();
+    const entry: MemoryEntry = {
+      id: randomUUID(),
+      kind: input.kind,
+      content: input.content,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.#items.push(entry);
+    this.#vectors.set(entry.id, await this.#embedder.embed(entry.content));
+    return entry;
+  }
+
+  async list(kind?: MemoryKind): Promise<MemoryEntry[]> {
+    return this.#items
+      .filter((entry) => !kind || entry.kind === kind)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async search(query: string, limit = 5): Promise<MemorySearchResult[]> {
+    if (this.#items.length === 0) return [];
+    const queryVector = await this.#embedder.embed(query);
+    const results = await Promise.all(
+      this.#items.map(async (entry) => {
+        let vector = this.#vectors.get(entry.id);
+        if (!vector) {
+          vector = await this.#embedder.embed(entry.content);
+          this.#vectors.set(entry.id, vector);
+        }
+        return { entry, score: cosineSimilarity(queryVector, vector) };
+      }),
+    );
+    const vectorResults = results
+      .filter((result) => result.score > 0.12)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
+    if (vectorResults.length >= limit) return vectorResults;
+
+    // 关键词兜底：向量检索不足时，用查询关键词做包含匹配（OpenClaw 混合检索思路）。
+    const keywords = extractKeywords(query);
+    const seen = new Set(vectorResults.map(({ entry }) => entry.id));
+    const keywordHits: MemorySearchResult[] = [];
+    for (const { entry } of results) {
+      if (seen.has(entry.id) || keywordHits.length >= limit - vectorResults.length) continue;
+      if (containsKeyword(entry.content, keywords)) {
+        seen.add(entry.id);
+        keywordHits.push({ entry, score: 0.1 });
+      }
+    }
+    return [...vectorResults, ...keywordHits];
+  }
+
+  async forget(id: string): Promise<boolean> {
+    const index = this.#items.findIndex((entry) => entry.id === id);
+    if (index === -1) return false;
+    this.#items.splice(index, 1);
+    this.#vectors.delete(id);
+    return true;
+  }
+
+  async edit(id: string, content: string): Promise<MemoryEntry | undefined> {
+    const entry = this.#items.find((item) => item.id === id);
+    if (!entry) return undefined;
+    entry.content = content;
+    entry.updatedAt = new Date().toISOString();
+    this.#vectors.set(entry.id, await this.#embedder.embed(content));
+    return { ...entry };
+  }
+}

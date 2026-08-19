@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; connect-src *; style-src 'self'; script-src 'self'"
+    />
+    <title>文字聊天</title>
+    <link rel="stylesheet" href="chat.css" />
+  </head>
+  <body>
+    <div id="drag-handle"></div>
+    <div id="reply"></div>
+    <div id="approval" class="hidden">
+      <span id="approval-text"></span>
+      <button id="approval-allow" type="button">允许</button>
+      <button id="approval-deny" type="button">拒绝</button>
+    </div>
+    <input id="input" type="text" placeholder="输入消息，回车发送" autocomplete="off" />
+    <script src="chat.js"></script>
+  </body>
+</html>

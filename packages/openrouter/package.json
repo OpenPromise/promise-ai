@@ -1,0 +1,22 @@
+{
+  "name": "@personal-ai/openrouter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "LLM provider implementation for OpenRouter",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@personal-ai/llm": "0.1.0",
+    "@personal-ai/types": "0.1.0"
+  },
+  "scripts": {
+    "test": "vitest run"
+  }
+}

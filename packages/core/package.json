@@ -1,0 +1,21 @@
+{
+  "name": "@personal-ai/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Agent Core: context assembly and persona abstraction",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@personal-ai/types": "0.1.0"
+  },
+  "scripts": {
+    "test": "vitest run"
+  }
+}

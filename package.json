@@ -1,0 +1,52 @@
+{
+  "name": "personal-ai-assistant",
+  "version": "0.11.0",
+  "private": true,
+  "type": "module",
+  "description": "Personal AI Assistant monorepo - Qwen brain, Agent Core",
+  "workspaces": [
+    "packages/*",
+    "services/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch services/agent-server/src/index.ts",
+    "start": "tsx services/agent-server/src/index.ts",
+    "serve": "node scripts/agent-supervisor.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "voice:smoke": "tsx scripts/voice-smoke.ts",
+    "voice:qwen-smoke": "tsx scripts/qwen-smoke.ts",
+    "desktop:ui": "npm run start -w @personal-ai/desktop-ui",
+    "build:ui": "npm run build:renderer -w @personal-ai/desktop-ui",
+    "desktop:agent": "tsx apps/desktop-agent/src/index.ts",
+    "infra:up": "docker compose -f infrastructure/docker-compose.yml up -d",
+    "infra:down": "docker compose -f infrastructure/docker-compose.yml down",
+    "infra:logs": "docker compose -f infrastructure/docker-compose.yml logs -f",
+    "server:up": "docker compose -f infrastructure/docker-compose.yml --profile server up -d --build",
+    "server:down": "docker compose -f infrastructure/docker-compose.yml --profile server down",
+    "server:logs": "docker compose -f infrastructure/docker-compose.yml --profile server logs -f"
+  },
+  "dependencies": {
+    "tsx": "^4.23.12"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.2.0",
+    "@types/ws": "^8.18.1",
+    "eslint": "^10.8.1",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.11.0",
+    "prettier": "^3.9.6",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^4.1.11"
+  }
+}

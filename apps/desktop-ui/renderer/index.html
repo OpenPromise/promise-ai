@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; connect-src *; media-src blob:; style-src 'self'; script-src 'self'"
+    />
+    <title>私人 AI 助理</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app" class="state-idle">
+      <div id="theme-host"></div>
+      <div class="panel glass">
+        <div id="status-text">点按光球开始对话</div>
+        <div id="transcript"></div>
+      </div>
+    </div>
+    <script src="app.bundle.js"></script>
+  </body>
+</html>
