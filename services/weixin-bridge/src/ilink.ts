@@ -5,7 +5,7 @@
  * - 消息：getupdates 长轮询 / sendmessage / sendtyping / getconfig / notifystart/stop
  * - 鉴权：AuthorizationType=ilink_bot_token + Bearer token + X-WECHAT-UIN
  */
-import { createCipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
 
 export const ILINK_DEFAULT_BASE_URL = 'https://ilinkai.weixin.qq.com';
 /** 微信 CDN（媒体加密上传/下载）域名。 */
@@ -106,6 +106,8 @@ export interface CDNMedia {
 export interface ImageItem {
   media?: CDNMedia;
   mid_size?: number;
+  /** 入站图片的 AES key（hex，16 字节）；优先于 media.aes_key。 */
+  aeskey?: string;
 }
 
 export interface VoiceItem {
@@ -458,6 +460,29 @@ export class ILinkClient {
     });
   }
 
+  /**
+   * 下载并解密入站 CDN 媒体（图片等）。key 兼容两种编码：
+   * base64(16 raw bytes) 或 base64(32 hex chars)。
+   */
+  async downloadMedia(params: {
+    encryptQueryParam?: string;
+    fullUrl?: string;
+    aesKeyBase64?: string;
+    cdnBaseUrl?: string;
+  }): Promise<Buffer> {
+    const cdnBase = (params.cdnBaseUrl?.trim() || ILINK_CDN_BASE_URL).replace(/\/+$/, '');
+    const url =
+      params.fullUrl?.trim() ||
+      `${cdnBase}/download?encrypted_query_param=${encodeURIComponent(params.encryptQueryParam ?? '')}`;
+    const response = await this.#fetch(url);
+    if (!response.ok) {
+      throw new ILinkError(`CDN 下载失败 ${response.status}`);
+    }
+    const encrypted = Buffer.from(await response.arrayBuffer());
+    if (!params.aesKeyBase64) return encrypted;
+    return decryptAesEcb(encrypted, parseAesKey(params.aesKeyBase64));
+  }
+
   async #uploadMedia(
     toUserId: string,
     mediaType: number,
@@ -501,9 +526,31 @@ export function encryptAesEcb(plaintext: Buffer, key: Buffer): Buffer {
   return Buffer.concat([cipher.update(plaintext), cipher.final()]);
 }
 
+/** AES-128-ECB 解密（PKCS7 padding，Node 默认）。 */
+export function decryptAesEcb(ciphertext: Buffer, key: Buffer): Buffer {
+  const decipher = createDecipheriv('aes-128-ecb', key, null);
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+}
+
 /** AES-128-ECB 密文大小（PKCS7 补齐到 16 字节边界）。 */
 export function aesEcbPaddedSize(plaintextSize: number): number {
   return Math.ceil((plaintextSize + 1) / 16) * 16;
+}
+
+/**
+ * 解析 CDNMedia.aes_key（base64）为 16 字节原始 key：
+ * - base64(16 raw bytes) 直接用
+ * - base64(32 hex chars) 先 ASCII 解码再 hex 解码
+ */
+export function parseAesKey(aesKeyBase64: string): Buffer {
+  const decoded = Buffer.from(aesKeyBase64, 'base64');
+  if (decoded.length === 16) return decoded;
+  if (decoded.length === 32 && /^[0-9a-fA-F]{32}$/.test(decoded.toString('ascii'))) {
+    return Buffer.from(decoded.toString('ascii'), 'hex');
+  }
+  throw new ILinkError(
+    `aes_key 解码异常：${decoded.length} bytes（需要 16 raw bytes 或 32 hex chars）`,
+  );
 }
 
 function createHashMd5(input: Buffer): string {

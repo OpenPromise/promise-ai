@@ -163,4 +163,34 @@ describe('media upload', () => {
     const cdnCall = calls.find(([u]) => u.startsWith('https://novac2c.cdn.weixin.qq.com/'))!;
     expect(cdnCall[0]).toContain('/c2c/upload?encrypted_query_param=PARAM&filekey=');
   });
+
+  it('downloads and decrypts inbound CDN media with a raw 16-byte key', async () => {
+    const key = Buffer.alloc(16, 3);
+    const plain = Buffer.from('plain-image-bytes');
+    const encrypted = encryptAesEcb(plain, key);
+    const fetchImpl = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
+      const u = String(input);
+      expect(u).toContain('/download?encrypted_query_param=PARAM');
+      return new Response(new Uint8Array(encrypted), { status: 200 });
+    });
+    const client = new ILinkClient({ token: 't', fetchImpl });
+    const out = await client.downloadMedia({
+      encryptQueryParam: 'PARAM',
+      aesKeyBase64: key.toString('base64'),
+    });
+    expect(out).toEqual(plain);
+  });
+
+  it('downloads and decrypts with a hex-encoded aes_key', async () => {
+    const keyHex = Buffer.alloc(16, 5).toString('hex');
+    const plain = Buffer.from('hello');
+    const encrypted = encryptAesEcb(plain, Buffer.from(keyHex, 'hex'));
+    const fetchImpl = vi.fn(async () => new Response(new Uint8Array(encrypted), { status: 200 }));
+    const client = new ILinkClient({ token: 't', fetchImpl });
+    const out = await client.downloadMedia({
+      encryptQueryParam: 'P',
+      aesKeyBase64: Buffer.from(keyHex, 'utf8').toString('base64'),
+    });
+    expect(out).toEqual(plain);
+  });
 });

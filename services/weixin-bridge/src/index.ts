@@ -9,6 +9,7 @@ import type { ILinkClientOptions } from './ilink.js';
 import { ILinkClient } from './ilink.js';
 import { LoginManager } from './login.js';
 import { runWeixinRelay } from './relay.js';
+import { runEventPusher } from './event-pusher.js';
 
 try {
   const { config } = await import('dotenv');
@@ -23,12 +24,14 @@ const stateDir = process.env.WEIXIN_STATE_DIR ?? path.join(os.homedir(), '.weixi
 const channelVersion = process.env.WEIXIN_CHANNEL_VERSION ?? '0.1.0';
 const botAgent = process.env.WEIXIN_BOT_AGENT ?? 'PromiseAi/0.1.0';
 const baseUrl = process.env.WEIXIN_BASE_URL ?? undefined;
+const visionModel = process.env.WEIXIN_VISION_MODEL ?? 'qwen3.8-max';
 
 await mkdir(stateDir, { recursive: true });
 const stateFile = path.join(stateDir, 'state.json');
 const stateStore = await StateStore.open(stateFile);
 
 let relayController: AbortController | null = null;
+let eventController: AbortController | null = null;
 let relayRunning = false;
 let relayStale = false;
 let lastEventAt: number | undefined;
@@ -78,6 +81,7 @@ async function startRelay(): Promise<void> {
       client,
       state: account,
       persist: () => stateStore.save(),
+      vision: { apiKey: process.env.DASHSCOPE_API_KEY, model: visionModel },
       log: (message) => {
         log(message);
         lastEventAt = Date.now();
@@ -96,12 +100,34 @@ async function startRelay(): Promise<void> {
       relayRunning = false;
       log(`relay 异常退出：${error instanceof Error ? error.message : String(error)}`);
     });
+  startEventPusher();
 }
 
 async function stopRelay(): Promise<void> {
   relayController?.abort();
   relayController = null;
+  eventController?.abort();
+  eventController = null;
   relayRunning = false;
+}
+
+function startEventPusher(): void {
+  const account = stateStore.account;
+  if (!account?.token) return;
+  eventController?.abort();
+  eventController = new AbortController();
+  const client = makeClient({ token: account.token, baseUrl: account.baseUrl });
+  void runEventPusher(
+    {
+      agentUrl,
+      client,
+      peers: () => Object.keys(stateStore.account?.peerSessions ?? {}),
+      log,
+    },
+    eventController.signal,
+  ).catch((error) => {
+    log(`事件推送退出：${error instanceof Error ? error.message : String(error)}`);
+  });
 }
 
 const loginManager = new LoginManager({

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ILinkClient, WeixinMessage } from './ilink.js';
 import { buildReplyMessage, extractInboundText, STALE_TOKEN_ERRCODE } from './ilink.js';
 import { markdownToPlain, splitLongText } from './markdown.js';
+import { describeImageWithDashScope } from './vision.js';
 import type { AccountState } from './state.js';
 
 export interface RelayOptions {
@@ -10,6 +11,8 @@ export interface RelayOptions {
   state: AccountState;
   /** 持久化 state（syncBuf / peerSessions 变化后调用）。 */
   persist: () => Promise<void>;
+  /** 收图理解：DashScope 视觉模型配置（apiKey / model）。 */
+  vision?: { apiKey?: string; model?: string; fetchImpl?: typeof fetch };
   log?: (message: string) => void;
   fetchImpl?: typeof fetch;
 }
@@ -161,7 +164,36 @@ async function handleInboundMessage(msg: WeixinMessage, options: RelayOptions): 
   }
   const peer = msg.from_user_id ?? '';
   const text = extractInboundText(msg);
-  if (!peer || !text.trim()) return;
+  if (!peer) return;
+
+  // 图片理解：有 image_item 时下载解密并调用视觉模型描述，随文本一起交给大脑。
+  let userMessage = text.trim();
+  const imageItem = msg.item_list?.find((item) => item.type === 2);
+  if (imageItem?.image_item) {
+    let description = '';
+    try {
+      const { media, aeskey } = imageItem.image_item;
+      const aesKeyBase64 = aeskey ? Buffer.from(aeskey, 'hex').toString('base64') : media?.aes_key;
+      const bytes = await client.downloadMedia({
+        encryptQueryParam: media?.encrypt_query_param,
+        fullUrl: media?.full_url,
+        aesKeyBase64,
+      });
+      description = await describeImageWithDashScope({
+        apiKey: options.vision?.apiKey,
+        model: options.vision?.model,
+        imageBytes: bytes,
+        fetchImpl: options.vision?.fetchImpl ?? fetchImpl,
+      });
+    } catch (error) {
+      log?.(`[weixin] 图片识别失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+    const imagePart = description
+      ? `[用户发来一张图片]\n图片内容：${description}`
+      : '[用户发来一张图片（内容识别失败，如需可向用户询问）]';
+    userMessage = text.trim() ? `${text.trim()}\n${imagePart}` : imagePart;
+  }
+  if (!userMessage) return;
 
   const sessionId = await ensureSession(agentUrl, peer, state, persist, fetchImpl);
   if (!sessionId) {
@@ -177,7 +209,7 @@ async function handleInboundMessage(msg: WeixinMessage, options: RelayOptions): 
     // typing 失败不影响主流程
   }
 
-  const reply = await chatOnce(agentUrl, sessionId, text, {
+  const reply = await chatOnce(agentUrl, sessionId, userMessage, {
     fetchImpl,
     log,
   });
