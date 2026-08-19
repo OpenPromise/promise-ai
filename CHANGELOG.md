@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.14.27] - 2026-08-20
+
+### 项目推送 GitHub + git 部署（修复陈旧文件复活）
+
+- **远程仓库**：项目已推送到 `https://github.com/OpenPromise/promise-ai`
+  （私有）；本地 origin 已配置，服务器配 read-write 部署 key
+- **git 部署**：`scripts/deploy/git-deploy.sh`——部署前同步 bot 改动 →
+  `git reset --hard origin/main` + `git clean -fd` 精确还原工作区 → 构建；
+  从源头杜绝 tar 部署导致的"已删除文件残留进镜像"问题（如 silk.ts 复活）
+- **同步闭环**：bot 改动 → 服务器仓库提交 → 推 GitHub → `npm run sync:bot`
+  本地 `git pull` 拉回，永久保留可回滚
+- 修复过程中对远程历史做了 force push 清理（私有仓库，无他人克隆，安全）
+
 ## [0.14.26] - 2026-08-20
 
 ### 服务器 bot 改动永久保留（同步机制）

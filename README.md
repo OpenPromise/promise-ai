@@ -351,6 +351,10 @@ npm run server:up
 `npm run sync:bot`（需 `SYNC_SERVER` / `SYNC_USER` / `SYNC_PASSWORD`
 环境变量）拉回本地仓库提交；`.env` 与文件库不入库。
 
+**部署方式**：项目已托管到 `https://github.com/OpenPromise/promise-ai`
+（私有）。服务器部署统一用 `scripts/deploy/git-deploy.sh`（从 Git 主线
+reset+clean 后构建），不再用 tar 包，避免旧文件残留进镜像。
+
 ## 微信 ClawBot（weixin-bridge）
 
 服务端内置微信桥接（`services/weixin-bridge`，自研轻量实现，不依赖 OpenClaw）：
