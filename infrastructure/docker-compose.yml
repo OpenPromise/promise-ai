@@ -39,5 +39,32 @@ services:
       postgres:
         condition: service_healthy
 
+  # 微信 ClawBot 桥接（iLink 长轮询 -> agent-server -> 微信回复）
+  weixin-bridge:
+    profiles: ['server']
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: assistant-weixin
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      NODE_ENV: production
+      WEIXIN_PORT: 3100
+      # 容器内通过 compose 网络访问 agent-server
+      AGENT_URL: http://app:3000
+      WEIXIN_STATE_DIR: /data/weixin
+      WEIXIN_BOT_AGENT: PromiseAi/0.1.0
+    command: ['npm', 'run', 'weixin:bridge']
+    ports:
+      - '${WEIXIN_PORT:-3100}:3100'
+    volumes:
+      - weixin-data:/data/weixin
+    depends_on:
+      app:
+        condition: service_started
+
 volumes:
   postgres-data:
+  weixin-data:

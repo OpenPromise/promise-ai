@@ -345,6 +345,22 @@ npm run server:up
 已实测：客户端把 `AGENT_URL` 指向 `http://<服务器IP>:3000`、
 `AGENT_WS_URL` 指向 `ws://<服务器IP>:3000/ws/desktop` 即可接入远端大脑。
 
+## 微信 ClawBot（weixin-bridge）
+
+服务端内置微信桥接（`services/weixin-bridge`，自研轻量实现，不依赖 OpenClaw）：
+微信私聊消息直接转发给 agent-server 大脑，回复回微信。部署后：
+
+```bash
+# 服务器防火墙/安全组放行 3100 后，浏览器打开扫码页
+http://<服务器IP>:3100/weixin/login
+```
+
+- 扫码登录（手机微信扫一扫 → 确认），登录态/同步游标持久化，重启自动续接
+- 语音消息自动转文字处理；长回复自动分段；Markdown 转纯文本
+- L2/L3 敏感操作在微信里默认拒绝并提示到桌面端授权（群聊暂不支持）
+- 重新登录：`POST /api/weixin/logout` 后再次扫码，或直接用
+  `npm run weixin:bridge` 本地起桥调试
+
 ## 自我开发与更新
 
 AI 助理可以开发/更新自己（服务端能力）：

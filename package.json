@@ -27,6 +27,7 @@
     "desktop:ui": "npm run start -w @personal-ai/desktop-ui",
     "build:ui": "npm run build:renderer -w @personal-ai/desktop-ui",
     "desktop:agent": "tsx apps/desktop-agent/src/index.ts",
+    "weixin:bridge": "tsx services/weixin-bridge/src/index.ts",
     "infra:up": "docker compose -f infrastructure/docker-compose.yml up -d",
     "infra:down": "docker compose -f infrastructure/docker-compose.yml down",
     "infra:logs": "docker compose -f infrastructure/docker-compose.yml logs -f",

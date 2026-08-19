@@ -1,0 +1,19 @@
+{
+  "name": "@personal-ai/weixin-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "WeChat ClawBot bridge: iLink long-poll -> agent-server chat -> WeChat reply",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "fastify": "^5.0.0",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@types/qrcode": "^1.5.5"
+  }
+}

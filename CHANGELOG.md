@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.14.13] - 2026-08-20
+
+### 微信 ClawBot 接入（weixin-bridge，方案 A 自研轻量桥）
+
+- **新增 `services/weixin-bridge`**：不依赖 OpenClaw，直接对接腾讯 iLink
+  （`ilinkai.weixin.qq.com`）ClawBot HTTP 协议——扫码登录
+  （`get_bot_qrcode` / `get_qrcode_status`）、消息长轮询（`getupdates`）、
+  回复（`sendmessage`）、输入中（`sendtyping`）、起停通知
+  （`notifystart/stop`），鉴权用 `ilink_bot_token` + Bearer
+- **消息闭环**：微信私聊消息 → agent-server `/api/sessions/:id/chat`（按
+  对端自动建会话并持久化映射）→ Markdown 转纯文本 → 长回复分段 → 回微信
+- **权限策略**：L2/L3 工具在微信通道默认拒绝（自动提交 permission 拒绝），
+  并回微信提示"请到桌面端授权"
+- **登录页**：`GET /weixin/login` 提供扫码页（自动轮询状态、过期可刷新、
+  配对码输入）；token/同步游标/会话映射持久化到数据卷，重启自动续接
+- **部署**：compose 新增 `weixin-bridge` 服务（同镜像、端口 3100、数据卷
+  `weixin-data`）；已部署到腾讯云服务器
+
 ## [0.14.12] - 2026-08-20
 
 ### 远程服务器部署（腾讯云 Ubuntu 24.04）
