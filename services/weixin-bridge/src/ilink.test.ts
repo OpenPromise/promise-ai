@@ -1,3 +1,4 @@
+import { createDecipheriv } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import {
   aesEcbPaddedSize,
@@ -8,7 +9,6 @@ import {
   ILINK_APP_ID,
   STALE_TOKEN_ERRCODE,
 } from './ilink.js';
-import { createDecipheriv } from 'node:crypto';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -144,29 +144,6 @@ describe('media upload', () => {
     expect(headers['Content-Type']).toBe('application/octet-stream');
     const uploaded = cdnCall[1].body as Uint8Array;
     expect(uploaded.length).toBe(aesEcbPaddedSize(3));
-  });
-
-  it('sends voice with silk encode type by default', async () => {
-    const fetchImpl = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
-      const u = String(input);
-      if (u.includes('/getuploadurl')) {
-        return jsonResponse({ ret: 0, upload_full_url: 'https://cdn.example/upload' });
-      }
-      if (u.startsWith('https://cdn.example/')) {
-        return new Response('', { status: 200, headers: { 'x-encrypted-param': 'dl-param' } });
-      }
-      if (u.includes('/sendmessage')) return jsonResponse({ ret: 0 });
-      return jsonResponse({});
-    });
-    const client = new ILinkClient({ token: 't', fetchImpl });
-    await client.sendVoiceToUser({ to: 'wx_user', audio: Buffer.from('mp3bytes') });
-
-    const calls = fetchImpl.mock.calls as Array<[string, RequestInit]>;
-    const sendCall = calls.find(([u]) => u.includes('/sendmessage'))!;
-    const body = JSON.parse(sendCall[1].body as string);
-    expect(body.msg.item_list[0].type).toBe(3);
-    expect(body.msg.item_list[0].voice_item.encode_type).toBe(6);
-    expect(body.msg.item_list[0].voice_item.media.encrypt_query_param).toBe('dl-param');
   });
 
   it('constructs the CDN upload URL from upload_param using the WeChat CDN base', async () => {

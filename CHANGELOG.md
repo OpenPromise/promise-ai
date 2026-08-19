@@ -2,18 +2,27 @@
 
 ## [0.14.15] - 2026-08-20
 
-### 微信原生语音（silk）+ 媒体发送修复
+### 微信媒体发送修复 + 语音探索结论
 
-- **语音切换为微信原生格式**：`weixin.send_voice` 现在 TTS(mp3) → ffmpeg 转
-  pcm → silk-wasm 编码 → `voice_item`（encode_type=6，silk）发送，微信端
-  显示为原生语音气泡；容器内置 ffmpeg
 - **修复 CDN 上传域名**：媒体上传必须走微信 CDN
   `https://novac2c.cdn.weixin.qq.com/c2c`（此前误用 ilink 主站导致 404）；
   `getuploadurl` 只返回 `upload_param` 时按 CDN 拼接上传地址
 - **真实端到端验证**：向微信发送测试图片与 ElevenLabs 合成语音均成功
-  （`{"ok":true}`），登录态跨重启保持
+  （图片消息成功送达；语音消息服务端返回成功但客户端不显示——原生
+  voice_item 被服务端静默丢弃，参考实现同样不支持，详见 0.14.16）
 - **健康检查修复**：weixin-bridge 覆盖镜像内置的健康检查（:3100），容器
   显示 healthy
+
+## [0.14.16] - 2026-08-20
+
+### 移除微信语音发送
+
+- 微信原生语音气泡在 iLink 服务端不可用（协议枚举存在但服务端静默丢弃，
+  OpenClaw/hermes 等参考实现均未提供可用路径），**删除语音发送全部代码**：
+  `weixin.send_voice` 工具、桥 `/api/weixin/send-voice`、silk 转码模块、
+  `silk-wasm` 依赖、Dockerfile 中的 ffmpeg
+- 保留：微信**接收**语音并自动转文字（`voice_item.text`，平台自带转写）；
+  图片发送（`weixin.send_image`）继续可用
 
 ## [0.14.14] - 2026-08-20
 
@@ -23,13 +32,11 @@
   `/api/weixin/send-image` → iLink `getuploadurl` 预签名 + AES-128-ECB 加密
   上传 CDN（`x-encrypted-param`）→ `image_item` 消息；支持服务器本地图片
   路径或 http(s) URL
-- **语音发送链路**：`weixin.send_voice` 工具（L1）→ ElevenLabs TTS 合成 mp3
-  → 桥上传（`media_type=VOICE`）→ `voice_item` 消息（encode_type=7/mp3）
 - **会话绑定**：weixin-bridge 建会话时写入 `metadata.weixinPeer`，工具据此
   定位要发送的微信对端；compose 内 agent-server 通过
   `WEIXIN_BRIDGE_URL=http://weixin-bridge:3100` 回调桥
-- **测试**：新增媒体协议闭环（加密/上传/消息结构）、图片/语音工具、会话
-  元数据断言，全量 194 passed / 3 skipped
+- **测试**：新增媒体协议闭环（加密/上传/消息结构）、图片工具、会话元数据
+  断言
 
 ## [0.14.13] - 2026-08-20
 

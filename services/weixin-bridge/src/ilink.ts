@@ -78,7 +78,6 @@ export const UploadMediaType = {
   IMAGE: 1,
   VIDEO: 2,
   FILE: 3,
-  VOICE: 4,
 } as const;
 
 export interface GetUploadUrlReq {
@@ -451,47 +450,6 @@ export class ILinkClient {
               encrypt_type: 1,
             },
             mid_size: uploaded.ciphertextSize,
-          },
-        },
-      ],
-      ...(params.contextToken ? { context_token: params.contextToken } : {}),
-      ...(params.runId ? { run_id: params.runId } : {}),
-    });
-  }
-
-  /**
-   * 上传语音并发送给指定微信用户。
-   * encodeType 默认 6（silk，微信原生语音格式）。
-   */
-  async sendVoiceToUser(params: {
-    to: string;
-    audio: Buffer;
-    encodeType?: number;
-    sampleRate?: number;
-    playtimeMs?: number;
-    contextToken?: string;
-    runId?: string;
-  }): Promise<void> {
-    const { to, audio } = params;
-    const uploaded = await this.#uploadMedia(to, UploadMediaType.VOICE, audio);
-    await this.sendMessage({
-      from_user_id: '',
-      to_user_id: to,
-      client_id: `promise-ai-${randomUUID()}`,
-      message_type: 2,
-      message_state: 2,
-      item_list: [
-        {
-          type: 3,
-          voice_item: {
-            media: {
-              encrypt_query_param: uploaded.downloadParam,
-              aes_key: uploaded.aesKeyBase64,
-              encrypt_type: 1,
-            },
-            encode_type: params.encodeType ?? 6,
-            ...(params.sampleRate ? { sample_rate: params.sampleRate } : {}),
-            ...(params.playtimeMs ? { playtime: params.playtimeMs } : {}),
           },
         },
       ],

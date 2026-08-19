@@ -278,55 +278,6 @@ app.post('/api/weixin/send-image', async (request, reply) => {
   }
 });
 
-app.post('/api/weixin/send-voice', async (request, reply) => {
-  const body = (request.body ?? {}) as {
-    sessionId?: string;
-    audioBase64?: string;
-    encodeType?: number;
-    sampleRate?: number;
-    playtimeMs?: number;
-    contextToken?: string;
-    runId?: string;
-  };
-  const client = authedClient();
-  if (!client) return reply.code(401).send({ error: '微信未登录' });
-  const peer = resolvePeerBySession(body.sessionId);
-  if (!peer) return reply.code(404).send({ error: '找不到该会话对应的微信对端' });
-  const audio = Buffer.from(body.audioBase64 ?? '', 'base64');
-  if (audio.length === 0) return reply.code(400).send({ error: '缺少 audioBase64' });
-  try {
-    const encodeType = body.encodeType ?? 6;
-    if (encodeType === 6) {
-      // 微信原生语音：TTS mp3 -> pcm -> silk，走编码类型 6。
-      const { anyAudioToSilkVoice } = await import('./media/silk.js');
-      const voice = await anyAudioToSilkVoice(audio);
-      await client.sendVoiceToUser({
-        to: peer,
-        audio: voice.silk,
-        encodeType: 6,
-        sampleRate: voice.sampleRate,
-        playtimeMs: voice.durationMs,
-        contextToken: body.contextToken,
-        runId: body.runId,
-      });
-    } else {
-      await client.sendVoiceToUser({
-        to: peer,
-        audio,
-        encodeType,
-        sampleRate: body.sampleRate,
-        playtimeMs: body.playtimeMs,
-        contextToken: body.contextToken,
-        runId: body.runId,
-      });
-    }
-    return { ok: true };
-  } catch (error) {
-    app.log.error({ err: error }, 'send weixin voice failed');
-    return reply.code(502).send({ error: error instanceof Error ? error.message : String(error) });
-  }
-});
-
 app.get('/weixin/login', async (_request, reply) => {
   return reply.type('text/html; charset=utf-8').send(LOGIN_PAGE);
 });

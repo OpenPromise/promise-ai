@@ -268,7 +268,7 @@ for (const tool of createSelfTools({ memoryBackend, memory, personaDir })) {
 }
 // 微信媒体发送：weixin.send_image / weixin.send_voice（桥在服务端负责上传与投递）。
 const weixinBridgeUrl = process.env.WEIXIN_BRIDGE_URL ?? 'http://127.0.0.1:3100';
-for (const tool of createWeixinTools({ bridgeUrl: weixinBridgeUrl, store, tts: createTTS })) {
+for (const tool of createWeixinTools({ bridgeUrl: weixinBridgeUrl, store })) {
   toolRegistry.register(tool);
 }
 // 删除工具由桌面端提供（filesystem.delete，L1 自动执行、不限制路径）；内置版
