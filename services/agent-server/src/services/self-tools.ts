@@ -1,6 +1,9 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
+import { appendFile, mkdir } from 'node:fs/promises';
+import path from 'node:path';
+import type { MemoryStore } from '@personal-ai/memory';
 import type { PermissionLevel, Tool, ToolResult } from '@personal-ai/tools';
 
 const execFileAsync = promisify(execFile);
@@ -45,6 +48,31 @@ async function runNpm(cwd: string, args: string[], timeoutMs: number): Promise<R
   }
 }
 
+async function runGit(cwd: string, args: string[], timeoutMs = 30_000): Promise<RunResult> {
+  try {
+    const { stdout, stderr } = await execFileAsync('git', args, {
+      cwd,
+      windowsHide: true,
+      timeout: timeoutMs,
+      encoding: 'utf8',
+    });
+    return { ok: true, exitCode: 0, output: (stdout.trim() + '\n' + stderr.trim()).trim() };
+  } catch (error) {
+    const err = error as { code?: number; stdout?: string; stderr?: string; killed?: boolean };
+    return {
+      ok: false,
+      exitCode: err.code ?? 1,
+      output: [err.stdout ?? '', err.stderr ?? ''].join('\n').trim(),
+    };
+  }
+}
+
+/** 当前 git HEAD 短哈希；非 git 仓库返回 undefined。 */
+async function currentHead(cwd: string): Promise<string | undefined> {
+  const result = await runGit(cwd, ['rev-parse', '--short', 'HEAD'], 10_000);
+  return result.ok ? result.output.split(/\r?\n/)[0]?.trim() || undefined : undefined;
+}
+
 /** 从 vitest 输出里提取测试统计行（如 "Tests  152 passed | 3 skipped"）。 */
 function extractTestSummary(output: string): string | undefined {
   const match = output.match(/Tests\s+\d+ passed[^\n]*/);
@@ -61,16 +89,24 @@ function extractTestSummary(output: string): string | undefined {
  * 自我开发相关工具：
  * - self.info：项目根目录/版本/环境（L0）
  * - self.check：跑 typecheck + 测试，作为改动前后的健康门禁（L1）
+ * - self.refine：证据驱动的小步改进，追加经验规则 + 反馈记忆 + git 快照（L1）
+ * - self.rollback：回滚到指定 git 提交（L3，需用户确认）
  * - system.restart：优雅重启服务，让代码改动生效（L3 需用户确认）
  */
 export function createSelfTools(
   options: {
     projectRoot?: string;
     memoryBackend?: string;
+    /** 用于 self.refine 写入 [feedback] 记忆。 */
+    memory?: MemoryStore;
+    /** 经验规则追加目录（默认 <projectRoot>/persona）。 */
+    personaDir?: string;
   } = {},
 ): Tool[] {
   const projectRoot = options.projectRoot ?? process.cwd();
   const memoryBackend = options.memoryBackend ?? 'unknown';
+  const memory = options.memory;
+  const personaDir = options.personaDir ?? path.join(projectRoot, 'persona');
 
   return [
     {
@@ -151,6 +187,101 @@ export function createSelfTools(
             },
           },
           ...(!ok ? { error: 'self.check 未全部通过，请修复后再继续' } : {}),
+        };
+      },
+    },
+    {
+      name: 'self.refine',
+      description:
+        '证据驱动的自我改进（Prime /refine 思路）：把一条失败证据或用户反馈提炼成' +
+        '一条小规则，只追加到 persona/refinements.md（不改写基础人设），并写入 ' +
+        '[feedback] 长期记忆；返回当前 git 快照作为回滚点。每次只沉淀一条规则。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          evidence: {
+            type: 'string',
+            description: '失败证据或用户反馈：发生了什么、期望是什么',
+          },
+          rule: {
+            type: 'string',
+            description: '提炼出的一条可执行规则（一句话，正面表述）',
+          },
+        },
+        required: ['evidence', 'rule'],
+      },
+      permissionLevel: 1 as PermissionLevel,
+      async execute(input: unknown): Promise<ToolResult> {
+        const { evidence, rule } = (input ?? {}) as { evidence?: string; rule?: string };
+        if (!evidence?.trim() || !rule?.trim()) {
+          return { ok: false, error: '缺少 evidence 或 rule 参数' };
+        }
+
+        const snapshot = await currentHead(projectRoot);
+        const refinementsPath = path.join(personaDir, 'refinements.md');
+        await mkdir(personaDir, { recursive: true });
+        const date = new Date().toISOString().slice(0, 10);
+        await appendFile(
+          refinementsPath,
+          `- [${date}] 证据：${evidence.trim()} → 规则：${rule.trim()}\n`,
+          'utf8',
+        );
+
+        let memoryEntry: { id: string; kind: string } | undefined;
+        if (memory) {
+          const added = await memory.add({
+            kind: 'episodic',
+            content: `[feedback] ${evidence.trim()}（规则：${rule.trim()}）`,
+          });
+          memoryEntry = { id: added.id, kind: added.kind };
+        }
+
+        return {
+          ok: true,
+          data: {
+            snapshot: snapshot ?? 'n/a（非 git 仓库，无快照）',
+            refinementsFile: refinementsPath,
+            rule: rule.trim(),
+            ...(memoryEntry ? { memory: memoryEntry } : {}),
+            ...(snapshot ? { rollback: `git reset --hard ${snapshot}` } : {}),
+            note: '已追加到经验层（新会话生效）；如需撤销请用 self.rollback 回滚到 snapshot',
+          },
+        };
+      },
+    },
+    {
+      name: 'self.rollback',
+      description:
+        '把项目源码回滚到指定 git 提交（Prime 快照回滚）。高危操作：未提交的本地改动' +
+        '会被丢弃；执行前需要用户确认（L3）。回滚后调用 system.restart 让服务加载旧代码。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          commit: {
+            type: 'string',
+            description: '目标提交哈希（来自 self.refine 返回的 snapshot）',
+          },
+        },
+        required: ['commit'],
+      },
+      permissionLevel: 3 as PermissionLevel,
+      timeoutMs: 60_000,
+      async execute(input: unknown): Promise<ToolResult> {
+        const { commit } = (input ?? {}) as { commit?: string };
+        const sha = commit?.trim() ?? '';
+        if (!/^[0-9a-f]{7,40}$/i.test(sha)) {
+          return {
+            ok: false,
+            error: 'commit 必须是 git 提交哈希（如 self.refine 返回的 snapshot）',
+          };
+        }
+        const result = await runGit(projectRoot, ['reset', '--hard', sha], 60_000);
+        return {
+          ok: result.ok,
+          data: { commit: sha, output: result.output.slice(-2000) },
+          ...(result.ok
+            ? { note: '已回滚，调用 system.restart 让改动生效' }
+            : { error: `git reset --hard ${sha} 失败` }),
         };
       },
     },

@@ -12,7 +12,12 @@ import type { MemoryStore } from '@personal-ai/memory';
 import { createEnvelope } from '@personal-ai/protocol';
 import type { ProtocolEnvelope } from '@personal-ai/protocol';
 import type { ChatMessage, Session, TokenUsage, ToolCallInfo } from '@personal-ai/types';
-import type { ToolContext, ToolResult, ToolRegistry } from '@personal-ai/tools';
+import {
+  GOAL_PREFIX,
+  type ToolContext,
+  type ToolResult,
+  type ToolRegistry,
+} from '@personal-ai/tools';
 import { approvalFingerprint, ApprovalRegistry } from './approval.js';
 import { runToolCallWithApproval } from './tool-execution.js';
 
@@ -41,6 +46,10 @@ const COMPACTION_THRESHOLD = 60;
 const KEEP_RECENT_MESSAGES = 24;
 
 const MEMORY_PROMPT_PREFIX = '以下是关于用户的长期记忆（可能过时，如有冲突以用户当前的说法为准）：';
+const GOAL_PROMPT_PREFIX = '以下是用户的长期目标（goal，请持续关注并在对话中主动推进）：';
+const FEEDBACK_PROMPT_PREFIX = '以下是近期反馈与教训（[feedback]，请避免重蹈覆辙）：';
+const GOAL_CONTEXT_LIMIT = 5;
+const FEEDBACK_CONTEXT_LIMIT = 3;
 const COMPACTION_PROMPT = [
   '你是对话摘要助手。请把下面这段 AI 助理与用户的对话压缩成一份简洁的中文摘要，',
   '保留：用户的重要事实与偏好、已完成的任务和关键结果、尚未解决的事项。',
@@ -151,6 +160,32 @@ export function pruneToolResult(content: string, maxChars = TOOL_RESULT_MAX_CHAR
   const head = content.slice(0, TOOL_RESULT_HEAD_CHARS);
   const tail = content.slice(-TOOL_RESULT_TAIL_CHARS);
   return `${head}\n…[结果过长已截断，原 ${content.length} 字符，仅保留头尾]…\n${tail}`;
+}
+
+/**
+ * 持久上下文（Prime /goal + OpenCrabs 反馈台账思路）：把长期目标与近期
+ * 反馈教训组装成一段系统提示注入每次对话，让 AI 跨会话持续关注目标、
+ * 避免重复踩坑。目标与反馈都来自长期记忆，不引入新存储。
+ */
+export async function collectPersistentContext(memory: MemoryStore): Promise<string | null> {
+  const entries = await memory.list();
+  const goals = entries
+    .filter((entry) => entry.kind === 'semantic' && entry.content.startsWith(GOAL_PREFIX))
+    .slice(0, GOAL_CONTEXT_LIMIT);
+  const feedback = entries
+    .filter((entry) => entry.kind === 'episodic' && entry.content.startsWith('[feedback]'))
+    .slice(0, FEEDBACK_CONTEXT_LIMIT);
+
+  const blocks: string[] = [];
+  if (goals.length > 0) {
+    blocks.push(`${GOAL_PROMPT_PREFIX}\n${goals.map((entry) => `- ${entry.content}`).join('\n')}`);
+  }
+  if (feedback.length > 0) {
+    blocks.push(
+      `${FEEDBACK_PROMPT_PREFIX}\n${feedback.map((entry) => `- ${entry.content}`).join('\n')}`,
+    );
+  }
+  return blocks.length > 0 ? blocks.join('\n\n') : null;
 }
 
 /** Maps stored ChatMessage history into the LLM wire format (skips system rows). */
@@ -268,7 +303,10 @@ export class ConversationService {
     session = await this.#compactIfNeeded(session, input.signal);
     const messages = buildMessages(session, input.userMessage);
     const tools = toLLMTools(this.#tools);
-    const relevantMemories = await this.#memory.search(input.userMessage, MEMORY_LIMIT);
+    const [persistentContext, relevantMemories] = await Promise.all([
+      collectPersistentContext(this.#memory),
+      this.#memory.search(input.userMessage, MEMORY_LIMIT),
+    ]);
     let memoryInjected = false;
     let lastToolFingerprint: string | null = null;
     let toolRepeatCount = 0;
@@ -296,9 +334,14 @@ export class ConversationService {
       const messagesForTurn: LLMChatMessage[] = (() => {
         if (memoryInjected) return messages;
         memoryInjected = true;
-        if (relevantMemories.length === 0) return messages;
-        const memoryText = relevantMemories.map(({ entry }) => `- ${entry.content}`).join('\n');
-        return [{ role: 'system', content: `${MEMORY_PROMPT_PREFIX}\n${memoryText}` }, ...messages];
+        const blocks: string[] = [];
+        if (persistentContext) blocks.push(persistentContext);
+        if (relevantMemories.length > 0) {
+          const memoryText = relevantMemories.map(({ entry }) => `- ${entry.content}`).join('\n');
+          blocks.push(`${MEMORY_PROMPT_PREFIX}\n${memoryText}`);
+        }
+        if (blocks.length === 0) return messages;
+        return [{ role: 'system', content: blocks.join('\n\n') }, ...messages];
       })();
 
       const chatInput: ChatInput = {

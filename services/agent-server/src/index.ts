@@ -123,8 +123,9 @@ if (sessionBackend === 'postgres') {
   }
 }
 
+const personaDir = fileURLToPath(new URL('../../../persona', import.meta.url));
 const persona = new FilePersonaProvider({
-  personaDir: fileURLToPath(new URL('../../../persona', import.meta.url)),
+  personaDir,
   ...(config.elevenlabs.voiceId
     ? {
         voiceProfile: {
@@ -261,7 +262,7 @@ for (const tool of tools) {
 // coding.run 是服务端能力（服务器上驱动 dsh/Claude Code），不属于桌面客户端。
 toolRegistry.register(createCodingTool());
 // 自我开发：self.info / self.check / system.restart（守护进程/容器负责重启拉起）。
-for (const tool of createSelfTools({ memoryBackend })) {
+for (const tool of createSelfTools({ memoryBackend, memory, personaDir })) {
   toolRegistry.register(tool);
 }
 // 删除工具由桌面端提供（filesystem.delete，L1 自动执行、不限制路径）；内置版

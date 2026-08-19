@@ -13,6 +13,7 @@ export const PERSONA_FILES: PersonaFileSpec[] = [
   { name: 'speaking-style.md', title: '说话风格' },
   { name: 'behavior-rules.md', title: '行为准则' },
   { name: 'self-development.md', title: '自我开发规则' },
+  { name: 'refinements.md', title: '经验与改进' },
 ];
 
 export interface FilePersonaProviderOptions {

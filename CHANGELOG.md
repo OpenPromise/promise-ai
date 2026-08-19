@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.14.10] - 2026-08-20
+
+### Prime Agent 参考吸收（证据驱动改进 + 持久目标 + 反馈启动摘要）
+
+- **self.refine（证据驱动的自我改进）**：把失败证据/用户反馈沉淀成一条小规则，
+  只追加到 `persona/refinements.md`（经验层，不改写基础人设），同时写入
+  `[feedback]` 长期记忆；返回当前 git 快照作为回滚点
+- **self.rollback（快照回滚）**：L3 二次确认后 `git reset --hard` 回滚到
+  self.refine 记录的快照；回滚后调用 system.restart 让改动生效
+- **持久目标 goal.\***：`goal.set` / `goal.list` / `goal.done` 把长期目标以
+  `[goal]` 前缀写入长期记忆（跨会话存活、同 title 覆盖），无新增存储抽象
+- **反馈台账启动摘要**：每次对话自动注入「长期目标 + 近期 [feedback] 教训」
+  到系统提示词（上限 5 目标 / 3 条反馈），让 AI 跨会话推进目标、避免重复踩坑
+- **persona 经验层**：`FilePersonaProvider` 新增 `refinements.md`（可选文件），
+  存在即注入系统提示词，缺失自动跳过
+
 ## [0.14.9] - 2026-08-19
 
 ### OpenCrabs / Prime Agent 参考吸收（故障韧性 + 有界自我开发）

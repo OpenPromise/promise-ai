@@ -1,5 +1,6 @@
 import { createCalendarTools, InMemoryCalendarStore } from './calendar.js';
 import { createFilesystemSearchTool } from './filesystem.js';
+import { createGoalTools } from './goal-tools.js';
 import { createMemoryTools } from './memory-tools.js';
 import { createReminderTools, InMemoryReminderStore } from './reminders.js';
 import { createTaskTools, type TaskToolDeps } from './task-tools.js';
@@ -121,6 +122,7 @@ export function createBuiltinTools(options: BuiltinToolOptions = {}): BuiltinToo
     createFilesystemDeleteTool({ allowedRoots: options.allowedSearchRoots }),
     createNotificationSendTool(stores.notifications),
     ...createMemoryTools(options.memoryStore ?? new InMemoryMemoryStore()),
+    ...createGoalTools(options.memoryStore ?? new InMemoryMemoryStore()),
     ...(options.tasks ? createTaskTools(options.tasks) : []),
     ...createReminderTools(stores.reminders),
     ...createCalendarTools(stores.calendar),
@@ -142,4 +144,5 @@ export {
 } from './sensitive.js';
 export { validateToolArgs, type ValidationIssue } from './validate.js';
 export { createMemoryTools } from './memory-tools.js';
+export { createGoalTools, GOAL_PREFIX, parseGoal } from './goal-tools.js';
 export { createTaskTools, type TaskToolDeps } from './task-tools.js';

@@ -106,6 +106,56 @@ describe('ConversationService', () => {
     expect(refreshed.metadata?.compacted).toBeUndefined();
   });
 
+  it('injects persistent goals and feedback into the system prompt', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    const memory = new InMemoryMemoryStore();
+    await memory.add({
+      kind: 'semantic',
+      content: '[goal] 帮助用户减肥：三个月减 5 公斤',
+    });
+    await memory.add({
+      kind: 'episodic',
+      content: '[feedback] 用户反馈回复太长（规则：控制篇幅）',
+    });
+
+    let captured: ChatInput['messages'] | undefined;
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'qwen-test',
+      configured: true,
+      async *chat(input: ChatInput): AsyncIterable<ChatChunk> {
+        captured = input.messages;
+        yield { delta: '好的，我会持续关注。' };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+
+    const service = new ConversationService({
+      store,
+      llm,
+      tools: new ToolRegistry(),
+      approvals: new ApprovalRegistry(),
+      memory,
+    });
+
+    for await (const _envelope of service.runChat({
+      sessionId: session.id,
+      userMessage: '你好',
+    })) {
+      // drain
+    }
+
+    const systemContent = (captured ?? [])
+      .filter((message) => message.role === 'system')
+      .map((message) => message.content)
+      .join('\n');
+    expect(systemContent).toContain('[goal] 帮助用户减肥');
+    expect(systemContent).toContain('[feedback] 用户反馈回复太长');
+  });
+
   it('retries transient LLM failures before the first token', async () => {
     const store = new InMemorySessionStore();
     const session = await store.createSession({ systemPrompt: '你是助理。' });

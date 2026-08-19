@@ -130,6 +130,9 @@ AI 可以自主调用工具完成任务：`Agent → ToolRouter → Tool → Res
 | `memory.list`       | L0   | 列出长期记忆                         |
 | `memory.forget`     | L1   | 永久删除记忆                         |
 | `memory.edit`       | L1   | 修改记忆                             |
+| `goal.set`          | L1   | 设置/更新长期目标（跨会话存活）      |
+| `goal.list`         | L0   | 列出长期目标                         |
+| `goal.done`         | L1   | 移除长期目标                         |
 | `task.create`       | L1   | 创建定时任务（cron）                 |
 | `task.list`         | L0   | 列出定时任务                         |
 | `task.delete`       | L2   | 删除定时任务（需确认）               |
@@ -332,6 +335,11 @@ AI 助理可以开发/更新自己（服务端能力）：
 - 有界自主（Prime Agent 思路）：每次自我开发先定义 `goal`，最多 3 轮
   "改动-验证"迭代；`self.check` 质量门（typecheck + 测试）失败即停止并回滚；
   失败/反馈写入 `[feedback]` 记忆供后续会话复习
+- 证据驱动改进：`self.refine` 把失败反馈沉淀成一条规则，只追加到
+  `persona/refinements.md`（经验层）并写入 `[feedback]` 记忆、返回 git 快照；
+ 需要撤销时 `self.rollback`（L3）回滚到快照
+- 持久目标：`goal.set` / `goal.list` / `goal.done` 管理长期目标（跨会话存活）；
+  每次对话自动注入「目标 + 近期反馈」到系统提示词
 - 安全基线：仓库已纳入 git（首次提交为回滚点）；不自动发起自我开发、
   不改密钥、不绕权限系统、破坏性操作需确认
 
