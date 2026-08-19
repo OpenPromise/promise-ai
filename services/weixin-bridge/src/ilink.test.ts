@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  aesEcbPaddedSize,
   buildReplyMessage,
+  encryptAesEcb,
   extractInboundText,
   ILinkClient,
   ILINK_APP_ID,
   STALE_TOKEN_ERRCODE,
 } from './ilink.js';
+import { createDecipheriv } from 'node:crypto';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -98,5 +101,71 @@ describe('message helpers', () => {
       '语音转写',
     );
     expect(extractInboundText({ item_list: [{ type: 2 }] })).toBe('');
+  });
+});
+
+describe('media upload', () => {
+  it('encrypts with AES-128-ECB (PKCS7) and pads to 16-byte boundary', () => {
+    const key = Buffer.alloc(16, 7);
+    const plaintext = Buffer.from('hello weixin media');
+    const ciphertext = encryptAesEcb(plaintext, key);
+    expect(ciphertext.length).toBe(aesEcbPaddedSize(plaintext.length));
+    const decipher = createDecipheriv('aes-128-ecb', key, null);
+    const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+    expect(decrypted).toEqual(plaintext);
+  });
+
+  it('uploads an image end-to-end (getUploadUrl -> CDN -> sendMessage)', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
+      const u = String(input);
+      if (u.includes('/getuploadurl')) {
+        return jsonResponse({ ret: 0, upload_full_url: 'https://cdn.example/upload' });
+      }
+      if (u.startsWith('https://cdn.example/')) {
+        return new Response('', { status: 200, headers: { 'x-encrypted-param': 'dl-param' } });
+      }
+      if (u.includes('/sendmessage')) return jsonResponse({ ret: 0 });
+      return jsonResponse({});
+    });
+    const client = new ILinkClient({ token: 't', fetchImpl });
+    await client.sendImageToUser({ to: 'wx_user', image: Buffer.from([1, 2, 3]) });
+
+    const calls = fetchImpl.mock.calls as Array<[string, RequestInit]>;
+    const sendCall = calls.find(([u]) => u.includes('/sendmessage'))!;
+    const body = JSON.parse(sendCall[1].body as string);
+    expect(body.msg.to_user_id).toBe('wx_user');
+    expect(body.msg.item_list[0].type).toBe(2);
+    expect(body.msg.item_list[0].image_item.mid_size).toBe(aesEcbPaddedSize(3));
+    expect(body.msg.item_list[0].image_item.media.encrypt_query_param).toBe('dl-param');
+    expect(body.msg.item_list[0].image_item.media.encrypt_type).toBe(1);
+
+    const cdnCall = calls.find(([u]) => u.startsWith('https://cdn.example/'))!;
+    const headers = cdnCall[1].headers as Record<string, string>;
+    expect(headers['Content-Type']).toBe('application/octet-stream');
+    const uploaded = cdnCall[1].body as Uint8Array;
+    expect(uploaded.length).toBe(aesEcbPaddedSize(3));
+  });
+
+  it('sends voice with mp3 encode type by default', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
+      const u = String(input);
+      if (u.includes('/getuploadurl')) {
+        return jsonResponse({ ret: 0, upload_full_url: 'https://cdn.example/upload' });
+      }
+      if (u.startsWith('https://cdn.example/')) {
+        return new Response('', { status: 200, headers: { 'x-encrypted-param': 'dl-param' } });
+      }
+      if (u.includes('/sendmessage')) return jsonResponse({ ret: 0 });
+      return jsonResponse({});
+    });
+    const client = new ILinkClient({ token: 't', fetchImpl });
+    await client.sendVoiceToUser({ to: 'wx_user', audio: Buffer.from('mp3bytes') });
+
+    const calls = fetchImpl.mock.calls as Array<[string, RequestInit]>;
+    const sendCall = calls.find(([u]) => u.includes('/sendmessage'))!;
+    const body = JSON.parse(sendCall[1].body as string);
+    expect(body.msg.item_list[0].type).toBe(3);
+    expect(body.msg.item_list[0].voice_item.encode_type).toBe(7);
+    expect(body.msg.item_list[0].voice_item.media.encrypt_query_param).toBe('dl-param');
   });
 });

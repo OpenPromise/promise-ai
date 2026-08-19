@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.14.14] - 2026-08-20
+
+### 微信媒体发送（图片 + 语音）
+
+- **图片发送链路**：`weixin.send_image` 工具（L1）→ weixin-bridge
+  `/api/weixin/send-image` → iLink `getuploadurl` 预签名 + AES-128-ECB 加密
+  上传 CDN（`x-encrypted-param`）→ `image_item` 消息；支持服务器本地图片
+  路径或 http(s) URL
+- **语音发送链路**：`weixin.send_voice` 工具（L1）→ ElevenLabs TTS 合成 mp3
+  → 桥上传（`media_type=VOICE`）→ `voice_item` 消息（encode_type=7/mp3）
+- **会话绑定**：weixin-bridge 建会话时写入 `metadata.weixinPeer`，工具据此
+  定位要发送的微信对端；compose 内 agent-server 通过
+  `WEIXIN_BRIDGE_URL=http://weixin-bridge:3100` 回调桥
+- **测试**：新增媒体协议闭环（加密/上传/消息结构）、图片/语音工具、会话
+  元数据断言，全量 194 passed / 3 skipped
+
 ## [0.14.13] - 2026-08-20
 
 ### 微信 ClawBot 接入（weixin-bridge，方案 A 自研轻量桥）

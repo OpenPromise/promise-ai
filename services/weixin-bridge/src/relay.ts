@@ -138,7 +138,7 @@ async function ensureSession(
     const response = await fetchImpl(`${agentUrl.replace(/\/+$/, '')}/api/sessions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: '{}',
+      body: JSON.stringify({ metadata: { weixinPeer: peer } }),
     });
     if (!response.ok) return undefined;
     const session = (await response.json()) as { id?: string };

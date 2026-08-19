@@ -361,6 +361,17 @@ http://<服务器IP>:3100/weixin/login
 - 重新登录：`POST /api/weixin/logout` 后再次扫码，或直接用
   `npm run weixin:bridge` 本地起桥调试
 
+### 微信媒体发送
+
+微信会话中可以让助手直接发图/发语音（由 agent-server 工具触发）：
+
+- `weixin.send_image`：发一张图片，`source` 为服务器本地图片路径或 http(s) URL
+- `weixin.send_voice`：用 ElevenLabs TTS 把文本合成语音后发送（mp3）
+
+发送链路：agent-server 工具 → weixin-bridge（`/api/weixin/send-image` /
+`/api/weixin/send-voice`）→ iLink CDN（AES-128-ECB 加密上传）→ 微信消息。
+只在微信发起的会话可用（会话元数据 `weixinPeer` 决定发送对象）。
+
 ## 自我开发与更新
 
 AI 助理可以开发/更新自己（服务端能力）：

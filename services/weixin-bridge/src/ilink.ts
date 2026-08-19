@@ -5,7 +5,7 @@
  * - 消息：getupdates 长轮询 / sendmessage / sendtyping / getconfig / notifystart/stop
  * - 鉴权：AuthorizationType=ilink_bot_token + Bearer token + X-WECHAT-UIN
  */
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createCipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
 
 export const ILINK_DEFAULT_BASE_URL = 'https://ilinkai.weixin.qq.com';
 export const ILINK_APP_ID = 'bot';
@@ -30,6 +30,7 @@ export interface MessageItem {
   type?: number;
   text_item?: TextItem;
   voice_item?: VoiceItem;
+  image_item?: ImageItem;
 }
 
 export interface WeixinMessage {
@@ -69,6 +70,50 @@ export interface GetConfigResp {
   ret?: number;
   errmsg?: string;
   typing_ticket?: string;
+}
+
+export const UploadMediaType = {
+  IMAGE: 1,
+  VIDEO: 2,
+  FILE: 3,
+  VOICE: 4,
+} as const;
+
+export interface GetUploadUrlReq {
+  filekey?: string;
+  media_type?: number;
+  to_user_id?: string;
+  rawsize?: number;
+  rawfilemd5?: string;
+  filesize?: number;
+  no_need_thumb?: boolean;
+  aeskey?: string;
+}
+
+export interface GetUploadUrlResp {
+  upload_param?: string;
+  upload_full_url?: string;
+}
+
+export interface CDNMedia {
+  encrypt_query_param?: string;
+  aes_key?: string;
+  encrypt_type?: number;
+  full_url?: string;
+}
+
+export interface ImageItem {
+  media?: CDNMedia;
+  mid_size?: number;
+}
+
+export interface VoiceItem {
+  media?: CDNMedia;
+  /** 1=pcm 2=adpcm 3=feature 4=speex 5=amr 6=silk 7=mp3 8=ogg-speex */
+  encode_type?: number;
+  bits_per_sample?: number;
+  sample_rate?: number;
+  playtime?: number;
 }
 
 export interface QrCodeResponse {
@@ -318,6 +363,189 @@ export class ILinkClient {
       10_000,
     );
   }
+
+  /** 获取 CDN 预签名上传参数（图片/语音等媒体）。 */
+  async getUploadUrl(params: GetUploadUrlReq): Promise<GetUploadUrlResp> {
+    const resp = await this.#postJson<GetUploadUrlResp & { ret?: number; errmsg?: string }>(
+      'ilink/bot/getuploadurl',
+      { ...params, base_info: this.#baseInfo() },
+      15_000,
+    );
+    if (resp.ret !== undefined && resp.ret !== 0) {
+      throw new ILinkError(`getUploadUrl ret=${resp.ret} errmsg=${resp.errmsg ?? ''}`, resp.ret);
+    }
+    return resp;
+  }
+
+  /**
+   * AES-128-ECB 加密并上传到微信 CDN，返回下载用的 encrypt_query_param。
+   * 4xx 直接失败，5xx 重试最多 3 次。
+   */
+  async uploadBufferToCdn(params: {
+    plaintext: Buffer;
+    filekey: string;
+    aeskey: Buffer;
+    uploadFullUrl?: string;
+    uploadParam?: string;
+  }): Promise<string> {
+    const { plaintext, filekey, aeskey } = params;
+    const uploadUrl =
+      params.uploadFullUrl?.trim() ||
+      `${this.baseUrl}/upload?encrypted_query_param=${encodeURIComponent(params.uploadParam ?? '')}&filekey=${encodeURIComponent(filekey)}`;
+    const ciphertext = encryptAesEcb(plaintext, aeskey);
+
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        const response = await this.#fetch(uploadUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/octet-stream' },
+          body: new Uint8Array(ciphertext),
+        });
+        if (response.status >= 400 && response.status < 500) {
+          const detail = response.headers.get('x-error-message') ?? (await response.text());
+          throw new ILinkError(`CDN 上传客户端错误 ${response.status}: ${detail.slice(0, 200)}`);
+        }
+        if (response.status !== 200) {
+          const detail = response.headers.get('x-error-message') ?? `status ${response.status}`;
+          throw new ILinkError(`CDN 上传服务端错误：${detail.slice(0, 200)}`);
+        }
+        const downloadParam = response.headers.get('x-encrypted-param');
+        if (!downloadParam) throw new ILinkError('CDN 响应缺少 x-encrypted-param');
+        return downloadParam;
+      } catch (error) {
+        lastError = error;
+        if (error instanceof ILinkError && error.message.includes('客户端错误')) throw error;
+        if (attempt < 3) continue;
+      }
+    }
+    throw lastError instanceof Error ? lastError : new ILinkError('CDN 上传失败');
+  }
+
+  /** 上传图片并发送给指定微信用户。 */
+  async sendImageToUser(params: {
+    to: string;
+    image: Buffer;
+    contextToken?: string;
+    runId?: string;
+  }): Promise<void> {
+    const { to, image } = params;
+    const uploaded = await this.#uploadMedia(to, UploadMediaType.IMAGE, image);
+    await this.sendMessage({
+      from_user_id: '',
+      to_user_id: to,
+      client_id: `promise-ai-${randomUUID()}`,
+      message_type: 2,
+      message_state: 2,
+      item_list: [
+        {
+          type: 2,
+          image_item: {
+            media: {
+              encrypt_query_param: uploaded.downloadParam,
+              aes_key: uploaded.aesKeyBase64,
+              encrypt_type: 1,
+            },
+            mid_size: uploaded.ciphertextSize,
+          },
+        },
+      ],
+      ...(params.contextToken ? { context_token: params.contextToken } : {}),
+      ...(params.runId ? { run_id: params.runId } : {}),
+    });
+  }
+
+  /**
+   * 上传语音并发送给指定微信用户。
+   * encodeType 默认 7（mp3）；如服务端不支持可切换 6（silk）。
+   */
+  async sendVoiceToUser(params: {
+    to: string;
+    audio: Buffer;
+    encodeType?: number;
+    sampleRate?: number;
+    playtimeMs?: number;
+    contextToken?: string;
+    runId?: string;
+  }): Promise<void> {
+    const { to, audio } = params;
+    const uploaded = await this.#uploadMedia(to, UploadMediaType.VOICE, audio);
+    await this.sendMessage({
+      from_user_id: '',
+      to_user_id: to,
+      client_id: `promise-ai-${randomUUID()}`,
+      message_type: 2,
+      message_state: 2,
+      item_list: [
+        {
+          type: 3,
+          voice_item: {
+            media: {
+              encrypt_query_param: uploaded.downloadParam,
+              aes_key: uploaded.aesKeyBase64,
+              encrypt_type: 1,
+            },
+            encode_type: params.encodeType ?? 7,
+            ...(params.sampleRate ? { sample_rate: params.sampleRate } : {}),
+            ...(params.playtimeMs ? { playtime: params.playtimeMs } : {}),
+          },
+        },
+      ],
+      ...(params.contextToken ? { context_token: params.contextToken } : {}),
+      ...(params.runId ? { run_id: params.runId } : {}),
+    });
+  }
+
+  async #uploadMedia(
+    toUserId: string,
+    mediaType: number,
+    plaintext: Buffer,
+  ): Promise<{ downloadParam: string; aesKeyBase64: string; ciphertextSize: number }> {
+    const rawsize = plaintext.length;
+    const rawfilemd5 = createHashMd5(plaintext);
+    const filekey = randomBytes(16).toString('hex');
+    const aeskey = randomBytes(16);
+    const filesize = aesEcbPaddedSize(rawsize);
+
+    const resp = await this.getUploadUrl({
+      filekey,
+      media_type: mediaType,
+      to_user_id: toUserId,
+      rawsize,
+      rawfilemd5,
+      filesize,
+      no_need_thumb: true,
+      aeskey: aeskey.toString('hex'),
+    });
+    const downloadParam = await this.uploadBufferToCdn({
+      plaintext,
+      filekey,
+      aeskey,
+      uploadFullUrl: resp.upload_full_url,
+      uploadParam: resp.upload_param,
+    });
+    return {
+      downloadParam,
+      // 与参考客户端保持一致：aes_key 为 hex 字符串的 base64 编码。
+      aesKeyBase64: Buffer.from(aeskey.toString('hex'), 'utf8').toString('base64'),
+      ciphertextSize: filesize,
+    };
+  }
+}
+
+/** AES-128-ECB 加密（PKCS7 padding，Node 默认）。 */
+export function encryptAesEcb(plaintext: Buffer, key: Buffer): Buffer {
+  const cipher = createCipheriv('aes-128-ecb', key, null);
+  return Buffer.concat([cipher.update(plaintext), cipher.final()]);
+}
+
+/** AES-128-ECB 密文大小（PKCS7 补齐到 16 字节边界）。 */
+export function aesEcbPaddedSize(plaintextSize: number): number {
+  return Math.ceil((plaintextSize + 1) / 16) * 16;
+}
+
+function createHashMd5(input: Buffer): string {
+  return createHash('md5').update(input).digest('hex');
 }
 
 /** 构造回复消息（text）。 */

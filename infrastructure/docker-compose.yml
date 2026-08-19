@@ -30,6 +30,8 @@ services:
       - ../.env
     environment:
       NODE_ENV: production
+      # 微信媒体发送工具回调桥
+      WEIXIN_BRIDGE_URL: http://weixin-bridge:3100
       PORT: 3000
       # 容器内通过 compose 网络访问 postgres 服务，而非 localhost
       DATABASE_URL: postgres://${POSTGRES_USER:-assistant}:${POSTGRES_PASSWORD:-assistant}@postgres:5432/${POSTGRES_DB:-assistant}

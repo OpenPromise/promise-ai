@@ -26,6 +26,7 @@ import { ReminderService } from './services/reminder-service.js';
 import { createCodingTool } from './services/coding-tool.js';
 import { createSelfTools } from './services/self-tools.js';
 import { recoverInterruptedSessions } from './services/restart-recovery.js';
+import { createWeixinTools } from './services/weixin-tools.js';
 
 const config = loadConfig();
 
@@ -263,6 +264,11 @@ for (const tool of tools) {
 toolRegistry.register(createCodingTool());
 // 自我开发：self.info / self.check / system.restart（守护进程/容器负责重启拉起）。
 for (const tool of createSelfTools({ memoryBackend, memory, personaDir })) {
+  toolRegistry.register(tool);
+}
+// 微信媒体发送：weixin.send_image / weixin.send_voice（桥在服务端负责上传与投递）。
+const weixinBridgeUrl = process.env.WEIXIN_BRIDGE_URL ?? 'http://127.0.0.1:3100';
+for (const tool of createWeixinTools({ bridgeUrl: weixinBridgeUrl, store, tts: createTTS })) {
   toolRegistry.register(tool);
 }
 // 删除工具由桌面端提供（filesystem.delete，L1 自动执行、不限制路径）；内置版

@@ -46,12 +46,29 @@ function makeClient(options: ILinkClientOptions = {}): ILinkClient {
   });
 }
 
+function authedClient(): ILinkClient | undefined {
+  const account = stateStore.account;
+  if (!account?.token) return undefined;
+  return makeClient({ token: account.token, baseUrl: account.baseUrl });
+}
+
+/** 通过 sessionId 反查微信对端（state.peerSessions: peer -> sessionId）。 */
+function resolvePeerBySession(sessionId: string | undefined): string | undefined {
+  if (!sessionId) return undefined;
+  const account = stateStore.account;
+  if (!account) return undefined;
+  for (const [peer, sid] of Object.entries(account.peerSessions)) {
+    if (sid === sessionId) return peer;
+  }
+  return undefined;
+}
+
 async function startRelay(): Promise<void> {
   const account = stateStore.account;
   if (!account?.token) return;
   relayController?.abort();
   relayController = new AbortController();
-  const client = makeClient({ token: account.token });
+  const client = makeClient({ token: account.token, baseUrl: account.baseUrl });
   const signal = relayController.signal;
   relayRunning = true;
   relayStale = false;
@@ -232,6 +249,66 @@ app.post('/api/weixin/logout', async () => {
   await stopRelay();
   await stateStore.clearAccount();
   return { ok: true };
+});
+
+app.post('/api/weixin/send-image', async (request, reply) => {
+  const body = (request.body ?? {}) as {
+    sessionId?: string;
+    imageBase64?: string;
+    contextToken?: string;
+    runId?: string;
+  };
+  const client = authedClient();
+  if (!client) return reply.code(401).send({ error: '微信未登录' });
+  const peer = resolvePeerBySession(body.sessionId);
+  if (!peer) return reply.code(404).send({ error: '找不到该会话对应的微信对端' });
+  const image = Buffer.from(body.imageBase64 ?? '', 'base64');
+  if (image.length === 0) return reply.code(400).send({ error: '缺少 imageBase64' });
+  try {
+    await client.sendImageToUser({
+      to: peer,
+      image,
+      contextToken: body.contextToken,
+      runId: body.runId,
+    });
+    return { ok: true };
+  } catch (error) {
+    app.log.error({ err: error }, 'send weixin image failed');
+    return reply.code(502).send({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.post('/api/weixin/send-voice', async (request, reply) => {
+  const body = (request.body ?? {}) as {
+    sessionId?: string;
+    audioBase64?: string;
+    encodeType?: number;
+    sampleRate?: number;
+    playtimeMs?: number;
+    contextToken?: string;
+    runId?: string;
+  };
+  const client = authedClient();
+  if (!client) return reply.code(401).send({ error: '微信未登录' });
+  const peer = resolvePeerBySession(body.sessionId);
+  if (!peer) return reply.code(404).send({ error: '找不到该会话对应的微信对端' });
+  const audio = Buffer.from(body.audioBase64 ?? '', 'base64');
+  if (audio.length === 0) return reply.code(400).send({ error: '缺少 audioBase64' });
+  try {
+    await client.sendVoiceToUser({
+      to: peer,
+      audio,
+      encodeType: body.encodeType ?? 7,
+      sampleRate: body.sampleRate,
+      playtimeMs: body.playtimeMs,
+      contextToken: body.contextToken,
+      runId: body.runId,
+    });
+    return { ok: true };
+  } catch (error) {
+    app.log.error({ err: error }, 'send weixin voice failed');
+    return reply.code(502).send({ error: error instanceof Error ? error.message : String(error) });
+  }
 });
 
 app.get('/weixin/login', async (_request, reply) => {

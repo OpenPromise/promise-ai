@@ -124,9 +124,11 @@ describe('runWeixinRelay', () => {
     };
     const persist = vi.fn(async () => {});
 
+    const relayCalls: Array<{ url: string; body?: string }> = [];
     const fetchImpl = vi.fn(async (url: string, _init: RequestInit) => {
       const u = String(url);
       if (u.endsWith('/api/sessions')) {
+        relayCalls.push({ url: u, body: (_init.body as string) ?? '' });
         return new Response(JSON.stringify({ id: 'session-abc' }), { status: 201 });
       }
       if (u.endsWith('/chat')) {
@@ -159,6 +161,7 @@ describe('runWeixinRelay', () => {
     expect(sent[0]?.item_list?.[0]?.text_item?.text).toBe('今天是晴天');
     expect(state.peerSessions.wx_peer).toBe('session-abc');
     expect(state.syncBuf).toBe('buf-2');
+    expect(JSON.parse(relayCalls[0]!.body ?? '').metadata).toEqual({ weixinPeer: 'wx_peer' });
 
     controller.abort();
     const result = await relayPromise;
