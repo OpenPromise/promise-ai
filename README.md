@@ -340,6 +340,11 @@ npm run server:up
 注意：服务器对外暴露前请设置防火墙并只开放必要端口；语音链路为 WebSocket，
 如有反代需开启 WebSocket 支持。
 
+国内网络服务器（如腾讯云 Ubuntu）可用 `scripts/deploy/install-docker.sh`
+一键安装 Docker + 镜像加速；部署完成后 `APP_PORT=3000 npm run server:up`。
+已实测：客户端把 `AGENT_URL` 指向 `http://<服务器IP>:3000`、
+`AGENT_WS_URL` 指向 `ws://<服务器IP>:3000/ws/desktop` 即可接入远端大脑。
+
 ## 自我开发与更新
 
 AI 助理可以开发/更新自己（服务端能力）：

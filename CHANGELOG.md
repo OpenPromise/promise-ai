@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.14.12] - 2026-08-20
+
+### 远程服务器部署（腾讯云 Ubuntu 24.04）
+
+- **新增部署脚本** `scripts/deploy/install-docker.sh`：腾讯云/国内网络环境下
+  安装 Docker CE + compose 插件（腾讯云镜像源），并配置 registry 镜像加速
+  （腾讯云内网 + DaoCloud 兜底）
+- **部署验证**：`122.152.209.182:3000` 全链路可用——/health 正常、LLM
+  fallback 生效、postgres 记忆后端、dsh 内置；公网对话验证 `self.info` +
+  `memory.remember` 落库成功
+- **安全加固**：postgres 仅绑定 127.0.0.1（`infrastructure/.env` 的
+  `POSTGRES_PORT`），ufw 只放行 22/3000，Docker 转发策略设为 ACCEPT
+
 ## [0.14.11] - 2026-08-20
 
 ### 文件权限体验对齐 + Docker 全链路部署验证
