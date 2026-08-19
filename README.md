@@ -346,6 +346,11 @@ npm run server:up
 已实测：客户端把 `AGENT_URL` 指向 `http://<服务器IP>:3000`、
 `AGENT_WS_URL` 指向 `ws://<服务器IP>:3000/ws/desktop` 即可接入远端大脑。
 
+**bot 自我开发改动的同步**（永久保留）：bot 在服务器上写的代码先由
+`scripts/deploy/sync-bot-changes.sh` 提交到服务器 git 仓库，再用
+`npm run sync:bot`（需 `SYNC_SERVER` / `SYNC_USER` / `SYNC_PASSWORD`
+环境变量）拉回本地仓库提交；`.env` 与文件库不入库。
+
 ## 微信 ClawBot（weixin-bridge）
 
 服务端内置微信桥接（`services/weixin-bridge`，自研轻量实现，不依赖 OpenClaw）：
