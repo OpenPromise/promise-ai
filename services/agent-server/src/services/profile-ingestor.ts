@@ -234,6 +234,7 @@ export class ProfileIngestor {
       console.log(`[profile] extraction facts: ${facts.length}`);
       if (facts.length === 0) return;
       const { applied } = await applyExtractedFacts(this.#store, userId, facts);
+      console.log(`[profile] applyExtractedFacts applied=${applied}`);
       if (applied > 0) {
         console.log(`[profile] 对话后自动抽取：应用 ${applied} 条画像更新`);
       }
@@ -260,6 +261,7 @@ export class ProfileIngestor {
       }
       // Letta memory pressure：画像过多时自动整理（带冷却，失败静默）。
       const updated = await this.#store.getProfile(userId);
+      console.log(`[profile] profile count=${updated?.entries.length ?? 0}`);
       const count = updated?.entries.length ?? 0;
       const now = Date.now();
       if (
