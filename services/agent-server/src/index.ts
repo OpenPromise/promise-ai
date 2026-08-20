@@ -311,7 +311,7 @@ toolRegistry.register(createServerShellTool());
 // system.status：服务器健康巡检（L0 只读）——定时任务自主监控用。
 toolRegistry.register(createSystemStatusTool());
 // 用户画像：结构化记住用户的事实/偏好/习惯，跨会话注入。
-for (const tool of createProfileTools({ store: profileStore })) {
+for (const tool of createProfileTools({ store: profileStore, llm })) {
   toolRegistry.register(tool);
 }
 // 自我开发：self.info / self.check / system.restart（守护进程/容器负责重启拉起）。

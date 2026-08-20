@@ -1,12 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import { InMemoryProfileStore } from '@personal-ai/memory';
+import type { GenerateResult, LLMProvider } from '@personal-ai/llm';
 import { createProfileTools } from './profile-tools.js';
 
 function makeTools() {
   const store = new InMemoryProfileStore();
-  const tools = createProfileTools({ store });
+  const llm: LLMProvider = {
+    name: 'fake',
+    model: 'test',
+    configured: true,
+    async *chat() {
+      yield { delta: '' };
+    },
+    async generate(): Promise<GenerateResult> {
+      return {
+        text: '{"facts":[{"key":"name","value":"夜夜","category":"fact"}]}',
+      };
+    },
+  };
+  const tools = createProfileTools({ store, llm });
   const byName = new Map(tools.map((tool) => [tool.name, tool]));
-  return { store, byName };
+  return { store, byName, llm };
 }
 
 describe('profile.* 用户画像工具', () => {
@@ -15,6 +29,7 @@ describe('profile.* 用户画像工具', () => {
     expect(byName.get('profile.list')?.permissionLevel).toBe(0);
     expect(byName.get('profile.set')?.permissionLevel).toBe(1);
     expect(byName.get('profile.forget')?.permissionLevel).toBe(1);
+    expect(byName.get('profile.compact')?.permissionLevel).toBe(1);
   });
 
   it('set 记录并覆盖，list 返回全部', async () => {
@@ -55,5 +70,24 @@ describe('profile.* 用户画像工具', () => {
       { sessionId: 's1' },
     );
     expect(tooLong.ok).toBe(false);
+  });
+
+  it('compact 在条数超过 20 时整理画像', async () => {
+    const { store, byName } = makeTools();
+    for (let i = 0; i < 25; i++) {
+      await store.upsertEntry('default', {
+        key: `条目${i}`,
+        value: `值${i}`,
+        category: 'fact',
+      });
+    }
+    const result = await byName.get('profile.compact')!.execute({}, { sessionId: 's1' });
+    expect(result.ok).toBe(true);
+    const data = result.data as { compacted: boolean; before: number; after: number };
+    expect(data.compacted).toBe(true);
+    expect(data.before).toBe(25);
+    expect(data.after).toBe(1);
+    const profile = await store.getProfile('default');
+    expect(profile?.entries).toHaveLength(1);
   });
 });

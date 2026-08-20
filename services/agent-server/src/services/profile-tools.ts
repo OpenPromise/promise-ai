@@ -3,7 +3,9 @@ import type {
   ProfileStore,
 } from '@personal-ai/memory';
 import { resolveProfileUserId } from '@personal-ai/memory';
+import type { LLMProvider } from '@personal-ai/llm';
 import type { PermissionLevel, Tool, ToolResult } from '@personal-ai/tools';
+import { compactProfile } from './profile-ingestor.js';
 
 /**
  * 用户画像工具：结构化记住用户的事实 / 偏好 / 习惯 / 语气倾向，
@@ -17,10 +19,12 @@ const CATEGORIES: ProfileCategory[] = ['fact', 'preference', 'habit', 'tone'];
 
 export interface ProfileToolOptions {
   store: ProfileStore;
+  /** 画像整理用 LLM（flash 即可）。 */
+  llm: LLMProvider;
 }
 
 export function createProfileTools(options: ProfileToolOptions): Tool[] {
-  const { store } = options;
+  const { store, llm } = options;
 
   const tools: Tool[] = [
     {
@@ -122,6 +126,50 @@ export function createProfileTools(options: ProfileToolOptions): Tool[] {
             note: `已删除用户画像条目：${trimmedKey}`,
           },
         };
+      },
+    },
+    {
+      name: 'profile.compact',
+      description:
+        '整理用户画像（L1）：合并语义重复条目、删除陈旧/矛盾条目、精简冗长表述，' +
+        '防止画像越积越多、注入上下文膨胀（Letta memory pressure）。' +
+        '条目少于 20 条时直接跳过；整理后不超过 30 条。',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+      permissionLevel: 1 as PermissionLevel,
+      async execute(): Promise<ToolResult> {
+        try {
+          const result = await compactProfile(store, llm, resolveProfileUserId());
+          if (!result) {
+            const profile = await store.getProfile(resolveProfileUserId());
+            return {
+              ok: true,
+              data: {
+                compacted: false,
+                count: profile?.entries.length ?? 0,
+                note: '画像条数不多，无需整理',
+              },
+            };
+          }
+          return {
+            ok: true,
+            data: {
+              compacted: true,
+              before: result.before,
+              after: result.after,
+              removedKeys: result.removedKeys,
+              note: `画像已整理：${result.before} → ${result.after} 条`,
+            },
+          };
+        } catch (error) {
+          return {
+            ok: false,
+            error: `画像整理失败：${error instanceof Error ? error.message : String(error)}`,
+          };
+        }
       },
     },
   ];

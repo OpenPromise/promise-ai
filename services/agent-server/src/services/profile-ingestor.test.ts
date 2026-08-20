@@ -3,7 +3,9 @@ import type { GenerateResult, LLMProvider } from '@personal-ai/llm';
 import { InMemoryProfileStore } from '@personal-ai/memory';
 import {
   applyExtractedFacts,
+  buildCompactPrompt,
   buildExtractionPrompt,
+  compactProfile,
   parseExtractionResponse,
   ProfileIngestor,
 } from './profile-ingestor.js';
@@ -125,5 +127,45 @@ describe('ProfileIngestor', () => {
     expect(joined).toContain('[fact] name：旧名');
     expect(joined).toContain('我叫夜夜');
     expect(joined).toContain('ADD|UPDATE|DELETE|NONE');
+  });
+});
+
+describe('compactProfile（Letta memory pressure）', () => {
+  it('条数超过阈值时合并精简并整表替换', async () => {
+    const store = new InMemoryProfileStore();
+    for (let i = 0; i < 25; i++) {
+      await store.upsertEntry('default', {
+        key: `条目${i}`,
+        value: `值${i}`,
+        category: 'fact',
+      });
+    }
+    const llm = fakeLlm(
+      '{"facts":[{"key":"合并后","value":"精简","category":"fact"},{"key":"保留","value":"重要","category":"preference"}]}',
+    );
+    const result = await compactProfile(store, llm, 'default');
+    expect(result?.before).toBe(25);
+    expect(result?.after).toBe(2);
+    // 合并后的 key 是全新的，25 条原条目全部被替换（removedKeys 指原 key 不再保留）
+    expect(result?.removedKeys.length).toBe(25);
+    const profile = await store.getProfile('default');
+    expect(profile?.entries).toHaveLength(2);
+  });
+
+  it('条数 ≤ 20 时跳过，不调 LLM', async () => {
+    const store = new InMemoryProfileStore();
+    await store.upsertEntry('default', { key: 'a', value: '1', category: 'fact' });
+    const llm = fakeLlm('{"facts":[]}');
+    const result = await compactProfile(store, llm, 'default');
+    expect(result).toBeNull();
+  });
+
+  it('compact prompt 带整理准则与现有条目', () => {
+    const messages = buildCompactPrompt([
+      { key: 'a', value: '1', category: 'fact', updatedAt: '' },
+    ]);
+    const joined = messages.map((m) => m.content).join('\n');
+    expect(joined).toContain('合并语义重复');
+    expect(joined).toContain('[fact] a：1');
   });
 });

@@ -27,7 +27,16 @@ export interface ProfileIngestorOptions {
   store: ProfileStore;
   /** 两次抽取的最小间隔（毫秒），防止每条消息都调 LLM。 */
   minIntervalMs?: number;
+  /** 画像超过该条数时自动触发整理（Letta memory pressure）。 */
+  compactThreshold?: number;
+  /** 两次自动整理的最小间隔（毫秒）。 */
+  compactCooldownMs?: number;
 }
+
+/** 画像少于该条数时，整理直接跳过（不值得花一次 LLM）。 */
+export const COMPACT_MIN_ENTRIES = 20;
+/** 整理目标：合并后不超过该条数（与上下文注入上限对齐）。 */
+export const COMPACT_TARGET = 30;
 
 /** 抽取 prompt：质量门 + 携带现有画像做更新决策（Mem0 两阶段合一）。 */
 export function buildExtractionPrompt(
@@ -100,6 +109,62 @@ export function parseExtractionResponse(text: string): ExtractedFact[] {
   }
 }
 
+/** 画像整理 prompt（Letta memory pressure：合并重复/删陈旧/精简表述）。 */
+export function buildCompactPrompt(
+  entries: ProfileEntry[],
+): Array<{ role: 'system' | 'user'; content: string }> {
+  return [
+    {
+      role: 'system',
+      content:
+        '你是用户画像整理员。现有用户画像条目过多，需要压缩整理：' +
+        '1) 合并语义重复的条目（保留信息量最大的表述，key 取更通用的）；' +
+        '2) 删除明显陈旧/自相矛盾的条目；3) 精简冗长表述；' +
+        `4) 整理后总条数不超过 ${COMPACT_TARGET} 条。` +
+        '保留真正有价值的用户事实/偏好/习惯/语气倾向，不要丢失重要信息。' +
+        '只输出 JSON：{"facts":[{"key":"...","value":"...","category":"fact|preference|habit|tone"}]}',
+    },
+    {
+      role: 'user',
+      content: `当前用户画像（${entries.length} 条）：\n${entries
+        .map((e) => `- [${e.category}] ${e.key}：${e.value}`)
+        .join('\n')}\n\n请整理并输出 JSON。`,
+    },
+  ];
+}
+
+/**
+ * 整理用户画像：合并/精简后整表替换。
+ * 条目 ≤ COMPACT_MIN_ENTRIES 时跳过（返回 null，不浪费一次 LLM）。
+ */
+export async function compactProfile(
+  store: ProfileStore,
+  llm: LLMProvider,
+  userId: string,
+): Promise<{ before: number; after: number; removedKeys: string[] } | null> {
+  const profile = await store.getProfile(userId);
+  const entries = profile?.entries ?? [];
+  if (entries.length <= COMPACT_MIN_ENTRIES) return null;
+
+  const result = await llm.generate({ messages: buildCompactPrompt(entries) });
+  const consolidated = parseExtractionResponse(result.text)
+    .filter((fact) => fact.event !== 'DELETE')
+    .slice(0, COMPACT_TARGET);
+  if (consolidated.length === 0) return null;
+
+  const beforeKeys = new Set(entries.map((e) => e.key));
+  const afterKeys = new Set(consolidated.map((e) => e.key));
+  await store.replaceAll(
+    userId,
+    consolidated.map(({ key, value, category }) => ({ key, value, category })),
+  );
+  return {
+    before: entries.length,
+    after: consolidated.length,
+    removedKeys: [...beforeKeys].filter((key) => !afterKeys.has(key)),
+  };
+}
+
 /** 把抽取结果应用到画像存储（ADD/UPDATE 覆盖写，DELETE 删除，NONE 跳过）。 */
 export async function applyExtractedFacts(
   store: ProfileStore,
@@ -128,12 +193,17 @@ export class ProfileIngestor {
   readonly #llm: LLMProvider;
   readonly #store: ProfileStore;
   readonly #minIntervalMs: number;
+  readonly #compactThreshold: number;
+  readonly #compactCooldownMs: number;
   #lastRunAt = 0;
+  #lastCompactAt = 0;
 
   constructor(options: ProfileIngestorOptions) {
     this.#llm = options.llm;
     this.#store = options.store;
     this.#minIntervalMs = options.minIntervalMs ?? 10 * 60 * 1000;
+    this.#compactThreshold = options.compactThreshold ?? 50;
+    this.#compactCooldownMs = options.compactCooldownMs ?? 30 * 60 * 1000;
   }
 
   /** 节流：距上次抽取不足 minIntervalMs 时跳过。 */
@@ -158,6 +228,25 @@ export class ProfileIngestor {
       const { applied } = await applyExtractedFacts(this.#store, userId, facts);
       if (applied > 0) {
         console.log(`[profile] 对话后自动抽取：应用 ${applied} 条画像更新`);
+      }
+      // Letta memory pressure：画像过多时自动整理（带冷却，失败静默）。
+      const updated = await this.#store.getProfile(userId);
+      const count = updated?.entries.length ?? 0;
+      const now = Date.now();
+      if (
+        count > this.#compactThreshold &&
+        now - this.#lastCompactAt >= this.#compactCooldownMs
+      ) {
+        this.#lastCompactAt = now;
+        const compacted = await compactProfile(this.#store, this.#llm, userId);
+        if (compacted) {
+          console.log(
+            `[profile] 自动整理画像：${compacted.before} → ${compacted.after} 条` +
+              (compacted.removedKeys.length > 0
+                ? `，移除 ${compacted.removedKeys.join('、')}`
+                : ''),
+          );
+        }
       }
     } catch (error) {
       console.warn(

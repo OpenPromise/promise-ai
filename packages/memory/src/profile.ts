@@ -32,6 +32,11 @@ export interface ProfileStore {
   ): Promise<UserProfile>;
   /** 删除某个 key；不存在时返回当前画像。 */
   removeEntry(userId: string, key: string): Promise<UserProfile>;
+  /** 整表替换（画像整理/压缩用）。 */
+  replaceAll(
+    userId: string,
+    entries: Array<Omit<ProfileEntry, 'updatedAt'>>,
+  ): Promise<UserProfile>;
   clear(userId: string): Promise<void>;
 }
 
@@ -68,6 +73,18 @@ export class InMemoryProfileStore implements ProfileStore {
       entries,
       updatedAt: now,
     };
+    this.#profiles.set(userId, profile);
+    return profile;
+  }
+
+  async replaceAll(
+    userId: string,
+    entries: Array<Omit<ProfileEntry, 'updatedAt'>>,
+  ): Promise<UserProfile> {
+    const now = new Date().toISOString();
+    const normalized = entries.map((entry) => ({ ...entry, updatedAt: now }));
+    normalized.sort((a, b) => a.key.localeCompare(b.key));
+    const profile: UserProfile = { userId, entries: normalized, updatedAt: now };
     this.#profiles.set(userId, profile);
     return profile;
   }
@@ -165,6 +182,22 @@ export class PostgresProfileStore implements ProfileStore {
       [userId, JSON.stringify(entries), now],
     );
     return { userId, entries, updatedAt: now };
+  }
+
+  async replaceAll(
+    userId: string,
+    entries: Array<Omit<ProfileEntry, 'updatedAt'>>,
+  ): Promise<UserProfile> {
+    const now = new Date().toISOString();
+    const normalized = entries.map((entry) => ({ ...entry, updatedAt: now }));
+    normalized.sort((a, b) => a.key.localeCompare(b.key));
+    await this.#pool.query(
+      `INSERT INTO user_profiles (user_id, entries, updated_at)
+       VALUES ($1, $2::jsonb, $3)
+       ON CONFLICT (user_id) DO UPDATE SET entries = $2::jsonb, updated_at = $3`,
+      [userId, JSON.stringify(normalized), now],
+    );
+    return { userId, entries: normalized, updatedAt: now };
   }
 
   async clear(userId: string): Promise<void> {
