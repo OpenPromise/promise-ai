@@ -14,6 +14,22 @@ if echo "$SYNC_OUTPUT" | grep -q "推送失败"; then
   exit 1
 fi
 
+# 1.5) 同步后仍有未提交/未跟踪改动（bot 正在编辑、或 self.commit 漏提交）：
+#      先快照备份再继续，绝不静默丢弃——任何误清都能从备份恢复。
+BACKUP_ROOT=/home/ubuntu/deploy-backups
+mkdir -p "$BACKUP_ROOT"
+if git status --porcelain | grep -q .; then
+  BACKUP_DIR="$BACKUP_ROOT/$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir -p "$BACKUP_DIR"
+  git diff > "$BACKUP_DIR/working.patch" 2>/dev/null || true
+  git ls-files --others --exclude-standard -z \
+    | tar --null -T - -cf "$BACKUP_DIR/untracked.tar" 2>/dev/null || true
+  echo "[deploy] 警告：检测到未提交/未跟踪改动，已备份到 $BACKUP_DIR"
+  du -sh "$BACKUP_DIR"
+fi
+# 只保留最近 7 份备份，避免备份目录无限膨胀
+ls -1d "$BACKUP_ROOT"/2* 2>/dev/null | sort | head -n -7 | xargs -r rm -rf
+
 # 记录部署前 HEAD：用于判断本次是否发生依赖变更
 PREV_HEAD=$(git rev-parse HEAD)
 

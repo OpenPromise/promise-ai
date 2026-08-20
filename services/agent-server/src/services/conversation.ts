@@ -317,6 +317,7 @@ export class ConversationService {
 
   async *#runChatInner(input: RunChatInput): AsyncIterable<ProtocolEnvelope> {
     const requestId = input.requestId ?? randomUUID();
+    const requestStartedAt = Date.now();
     let session = await this.#store.getSession(input.sessionId);
     yield createEnvelope({
       type: 'agent.state',
@@ -416,7 +417,7 @@ export class ConversationService {
           type: 'chat.error',
           sessionId: input.sessionId,
           requestId,
-          payload: { error: detail },
+          payload: { error: detail, durationMs: Date.now() - requestStartedAt },
         });
         yield createEnvelope({
           type: 'agent.state',
@@ -436,7 +437,7 @@ export class ConversationService {
           type: 'chat.done',
           sessionId: input.sessionId,
           requestId,
-          payload: { text: fullText, usage },
+          payload: { text: fullText, usage, durationMs: Date.now() - requestStartedAt },
         });
         yield createEnvelope({
           type: 'agent.state',
@@ -479,6 +480,7 @@ export class ConversationService {
           signal: input.signal,
         };
         let result: ToolResult | undefined;
+        let toolStartedAt: number | undefined;
         if (toolRepeatCount >= TOOL_REPEAT_LIMIT) {
           // 连续相同调用达到阈值：不再执行，直接返回错误结果并结束循环。
           stopToolLoop = true;
@@ -487,6 +489,7 @@ export class ConversationService {
             error: `检测到连续 ${TOOL_REPEAT_LIMIT} 次调用相同工具（${call.name}，参数相同），疑似循环，已停止执行`,
           };
         } else {
+          toolStartedAt = Date.now();
           const iterator = runToolCallWithApproval(
             this.#approvals,
             this.#tools,
@@ -528,6 +531,9 @@ export class ConversationService {
             callId: call.id,
             name: call.name,
             result,
+            ...(toolStartedAt !== undefined
+              ? { durationMs: Date.now() - toolStartedAt }
+              : {}),
           },
         });
       }
@@ -542,7 +548,7 @@ export class ConversationService {
           type: 'chat.done',
           sessionId: input.sessionId,
           requestId,
-          payload: { text: note },
+          payload: { text: note, durationMs: Date.now() - requestStartedAt },
         });
         yield createEnvelope({
           type: 'agent.state',
