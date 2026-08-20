@@ -154,6 +154,38 @@ describe('server.shell（云服务器即她的世界）', () => {
     );
     expect((result.data as { stdout: string }).stdout).toContain('got:夜夜');
   });
+
+  it('sandbox=true 时用隔离容器包装命令', async () => {
+    const runner = vi.fn(async (command: string) => ({
+      exitCode: 0,
+      stdout: `wrapped:${command.slice(0, 80)}`,
+      stderr: '',
+      timedOut: false,
+    }));
+    const tool = createServerShellTool({ runner, defaultCwd: process.cwd() });
+    const result = await tool.execute(
+      { command: 'rm -rf /tmp/x', sandbox: true },
+      { sessionId: 's1' },
+    );
+    expect(result.ok).toBe(true);
+    expect(runner).toHaveBeenCalledWith(
+      expect.stringContaining('docker run --rm --network none --memory 256m'),
+      expect.anything(),
+    );
+    expect((result.data as { stdout: string }).stdout).toContain('docker run');
+  });
+
+  it('sandbox 与 interactive 同时使用时报错', async () => {
+    const runner = vi.fn();
+    const tool = createServerShellTool({ runner, defaultCwd: process.cwd() });
+    const result = await tool.execute(
+      { command: 'read x', sandbox: true, interactive: true },
+      { sessionId: 's1' },
+    );
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('不能同时使用');
+    expect(runner).not.toHaveBeenCalled();
+  });
 });
 
 describe('collectSecrets / redactOutput', () => {

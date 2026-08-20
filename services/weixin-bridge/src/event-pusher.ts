@@ -18,6 +18,14 @@ interface TaskEvent {
   error?: string;
 }
 
+interface HookEvent {
+  hookName?: string;
+  summary?: string;
+  output?: string;
+  error?: string;
+  status?: string;
+}
+
 export interface EventPusherOptions {
   agentUrl: string;
   client: ILinkClient;
@@ -49,6 +57,18 @@ export function formatEvent(event: string, data: unknown): string | undefined {
       return undefined;
     }
     return `${ok ? '✅' : '❌'} 定时任务${ok ? '完成' : '失败'}：${name}${detail ? `\n${detail}` : ''}`;
+  }
+  if (event === 'hook.run') {
+    const hook = data as HookEvent;
+    const output = (hook.output || hook.error || '').toString().slice(0, 300);
+    // 外部事件无需要求打扰（HEARTBEAT_OK）时静默。
+    if (
+      hook.status !== 'error' &&
+      output.trim().toUpperCase().includes('HEARTBEAT_OK')
+    ) {
+      return undefined;
+    }
+    return `🔔 外部事件（${hook.hookName ?? 'unknown'}）：${hook.summary ?? ''}${output ? `\n${output}` : ''}`;
   }
   return undefined;
 }

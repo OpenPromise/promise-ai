@@ -38,6 +38,7 @@ import { createSystemStatusTool } from './services/system-status.js';
 import { createProfileTools } from './services/profile-tools.js';
 import { ProfileIngestor } from './services/profile-ingestor.js';
 import { createTimelineTools } from './services/timeline-tools.js';
+import { HookService } from './services/hook-service.js';
 
 const config = loadConfig();
 const processStartedAt = Date.now();
@@ -356,6 +357,13 @@ toolRegistry.unregister('filesystem.delete');
 taskService.start();
 const reminderService = new ReminderService({ reminders: stores.reminders });
 reminderService.start();
+// 事件驱动监听：外部 webhook 推入 → AI 主动评估/处理 → 微信汇报。
+const hookService = new HookService({
+  conversation,
+  sessions: store,
+  systemPrompt: () => persona.getSystemPrompt(),
+  timeline: timelineStore,
+});
 
 // 宿主机是否刚开机：决定是否发"云服务器重启完成"通知（真重启才发，
 // 普通部署/容器重启不误报）。
@@ -382,6 +390,9 @@ const app = buildApp({
   sessionBackend,
   subscribeTaskEvents: (listener) => taskService.onRun(listener),
   subscribeReminderEvents: (listener) => reminderService.onDue(listener),
+  subscribeHookEvents: (listener) => hookService.onRun(listener),
+  hooks: hookService,
+  hookSecret: process.env.HOOK_SECRET,
   processStartedAt,
   hostBootedRecently,
   createVoice,

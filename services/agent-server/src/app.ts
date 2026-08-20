@@ -20,10 +20,12 @@ import { registerQwenVoiceRoutes } from './routes/qwen-voice.js';
 import { registerQwenS2SVoiceRoutes } from './routes/qwen-voice-s2s.js';
 import { registerDesktopRoutes } from './routes/desktop.js';
 import { registerEventRoutes } from './routes/events.js';
+import { registerHookRoutes } from './routes/hooks.js';
 import { ApprovalRegistry } from './services/approval.js';
 import { ConversationService } from './services/conversation.js';
 import type { ReminderDueEvent } from './services/reminder-service.js';
 import type { TaskRunEvent } from './services/task-service.js';
+import type { HookRunEvent, HookService } from './services/hook-service.js';
 
 export interface AppDeps {
   config: AppConfig;
@@ -52,6 +54,12 @@ export interface AppDeps {
   subscribeTaskEvents?: (listener: (event: TaskRunEvent) => void) => () => void;
   /** 提醒到期事件订阅（桌面端通知闭环）。 */
   subscribeReminderEvents?: (listener: (event: ReminderDueEvent) => void) => () => void;
+  /** 外部事件（webhook）处理结果订阅。 */
+  subscribeHookEvents?: (listener: (event: HookRunEvent) => void) => () => void;
+  /** 事件驱动监听服务（webhook 入口）。 */
+  hooks?: HookService;
+  /** webhook 共享密钥（可选）。 */
+  hookSecret?: string;
   /** 进程启动时间戳：用于重启完成通知（开机自启闭环）。 */
   processStartedAt?: number;
   /** 宿主机是否刚开机（< 10 分钟）；区分真重启与部署/容器重启。 */
@@ -94,9 +102,13 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     registerEventRoutes(app, {
       subscribeTaskEvents: deps.subscribeTaskEvents ?? (() => () => {}),
       subscribeReminderEvents: deps.subscribeReminderEvents ?? (() => () => {}),
+      subscribeHookEvents: deps.subscribeHookEvents,
       processStartedAt: deps.processStartedAt,
       hostBootedRecently: deps.hostBootedRecently,
     });
+  }
+  if (deps.hooks) {
+    registerHookRoutes(app, { hooks: deps.hooks, secret: deps.hookSecret });
   }
   registerSessionRoutes(app, {
     store: deps.store,

@@ -141,6 +141,18 @@ export function normalizePtyOutput(output: string): string {
     .replace(ANSI_CURSOR, '');
 }
 
+/** 沙箱镜像（本地已有，无需拉取）；可用环境变量覆盖。 */
+const SANDBOX_IMAGE = process.env.SERVER_SHELL_SANDBOX_IMAGE ?? 'infrastructure-app:latest';
+
+/** 把命令包进隔离的一次性容器：断网、限内存/CPU、只挂 /projects。 */
+function sandboxWrapper(command: string): string {
+  return (
+    `docker run --rm --network none --memory 256m --cpus 1 ` +
+    `--entrypoint /bin/bash -v /projects:/projects:rw ` +
+    `${shellSingleQuote(SANDBOX_IMAGE)} -lc ${shellSingleQuote(command)}`
+  );
+}
+
 export interface ServerShellToolOptions {
   /** 测试注入：自定义命令执行器；缺省走 /bin/bash。 */
   runner?: ShellRunner;
@@ -173,7 +185,9 @@ export function createServerShellTool(
     command: string,
     opts: { cwd: string; timeoutMs: number; signal: AbortSignal; input?: string },
     interactive: boolean,
+    sandbox: boolean,
   ): Promise<ShellOutput> => {
+    if (sandbox) return runner(sandboxWrapper(command), opts);
     if (!interactive) return runner(command, opts);
     // PTY：用 util-linux 的 script 给命令分配伪终端（容器已内置，零新依赖），
     // 适合交互式命令（提示输入/颜色/进度条等无 TTY 时行为不同的程序）。
@@ -196,7 +210,9 @@ export function createServerShellTool(
       '命令输出中的 API 密钥等敏感值会自动脱敏为 [REDACTED]；' +
       '超时/取消会终止整个进程树，不留孤儿进程。' +
       'interactive=true 时在伪终端（PTY）下运行，适合交互式命令；' +
-      'input 可写入命令标准输入（如回答交互式提示）。',
+      'input 可写入命令标准输入（如回答交互式提示）。' +
+      'sandbox=true 时在隔离的一次性容器里执行（断网、限内存/CPU、只挂 /projects），' +
+      '适合高风险/陌生命令；sandbox 与 interactive 不能同时用。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -221,6 +237,11 @@ export function createServerShellTool(
           type: 'string',
           description: '写入命令标准输入的内容（如回答交互式提示），可选',
         },
+        sandbox: {
+          type: 'boolean',
+          description:
+            '是否在隔离沙箱容器执行（断网/限资源/不碰主系统），适合高风险命令',
+        },
       },
       required: ['command'],
     },
@@ -232,16 +253,21 @@ export function createServerShellTool(
         cwd,
         timeoutSeconds = 60,
         interactive = false,
+        sandbox = false,
         input: stdinInput,
       } = (input ?? {}) as {
         command?: string;
         cwd?: string;
         timeoutSeconds?: number;
         interactive?: boolean;
+        sandbox?: boolean;
         input?: string;
       };
       if (!command?.trim()) {
         return { ok: false, error: '缺少 command 参数' };
+      }
+      if (sandbox && interactive) {
+        return { ok: false, error: 'sandbox 与 interactive 不能同时使用' };
       }
       const resolvedCwd = cwd?.trim() || defaultCwd;
       try {
@@ -262,6 +288,7 @@ export function createServerShellTool(
               ...(stdinInput !== undefined ? { input: stdinInput } : {}),
             },
             interactive,
+            sandbox,
           ),
         );
         const secrets = collectSecrets();
