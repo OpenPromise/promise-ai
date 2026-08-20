@@ -3,9 +3,34 @@ import type { ChatChunk, ChatInput, GenerateResult, LLMProvider } from '@persona
 import { InMemoryMemoryStore, InMemorySessionStore } from '@personal-ai/memory';
 import { ToolRegistry } from '@personal-ai/tools';
 import { ApprovalRegistry } from './approval.js';
-import { ConversationService, pruneToolResult, repairToolResultPairing } from './conversation.js';
+import {
+  collectPersistentContext,
+  ConversationService,
+  pruneToolResult,
+  repairToolResultPairing,
+} from './conversation.js';
+import { InMemoryProfileStore } from '@personal-ai/memory';
 
 describe('ConversationService', () => {
+  it('用户画像注入持久上下文', async () => {
+    const memory = new InMemoryMemoryStore();
+    const profile = new InMemoryProfileStore();
+    await profile.upsertEntry('default', {
+      key: '称呼',
+      value: '小夜',
+      category: 'fact',
+    });
+    await profile.upsertEntry('default', {
+      key: '作息',
+      value: '夜猫子',
+      category: 'habit',
+    });
+    const context = await collectPersistentContext(memory, profile);
+    expect(context).toContain('用户画像');
+    expect(context).toContain('[fact] 称呼：小夜');
+    expect(context).toContain('[habit] 作息：夜猫子');
+  });
+
   it('LLM 工具名下划线化传输，tool_calls 返回时还原为真实名执行', async () => {
     const store = new InMemorySessionStore();
     const session = await store.createSession({ systemPrompt: '你是助理。' });

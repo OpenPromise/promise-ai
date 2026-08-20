@@ -5,7 +5,7 @@ import type { AppConfig } from '@personal-ai/config';
 import type { PersonaProvider } from '@personal-ai/core';
 import type { TTSProvider, VoiceGateway } from '@personal-ai/elevenlabs';
 import type { LLMProvider } from '@personal-ai/llm';
-import type { MemoryStore, SessionStore } from '@personal-ai/memory';
+import type { MemoryStore, ProfileStore, SessionStore } from '@personal-ai/memory';
 import type { QwenRealtimeClient } from '@personal-ai/qwen-realtime';
 import type { ToolRegistry } from '@personal-ai/tools';
 import { registerHealthRoutes } from './routes/health.js';
@@ -30,6 +30,8 @@ export interface AppDeps {
   tools: ToolRegistry;
   approvals: ApprovalRegistry;
   memory: MemoryStore;
+  /** 用户画像存储（结构化长期关系记忆，注入对话上下文）。 */
+  profile?: ProfileStore;
   memoryBackend: string;
   sessionBackend: string;
   createVoice: () => VoiceGateway;
@@ -66,6 +68,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     tools: deps.tools,
     approvals: deps.approvals,
     memory: deps.memory,
+    profile: deps.profile,
     autoApproveAll: deps.config.autoApproveAll,
   });
 

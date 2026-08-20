@@ -7,7 +7,7 @@ import type {
   LLMToolCallWire,
   LLMProvider,
 } from '@personal-ai/llm';
-import type { SessionStore } from '@personal-ai/memory';
+import type { ProfileStore, SessionStore } from '@personal-ai/memory';
 import type { MemoryStore } from '@personal-ai/memory';
 import { createEnvelope } from '@personal-ai/protocol';
 import type { ProtocolEnvelope } from '@personal-ai/protocol';
@@ -37,6 +37,8 @@ export interface ConversationServiceDeps {
   tools: ToolRegistry;
   approvals: ApprovalRegistry;
   memory: MemoryStore;
+  /** 用户画像存储：注入"用户画像"上下文（结构化长期关系记忆）。 */
+  profile?: ProfileStore;
   /** 全权限模式：所有工具（含 L2/L3）自动执行，不弹确认。 */
   autoApproveAll?: boolean;
 }
@@ -51,8 +53,10 @@ const KEEP_RECENT_MESSAGES = 24;
 const MEMORY_PROMPT_PREFIX = '以下是关于用户的长期记忆（可能过时，如有冲突以用户当前的说法为准）：';
 const GOAL_PROMPT_PREFIX = '以下是用户的长期目标（goal，请持续关注并在对话中主动推进）：';
 const FEEDBACK_PROMPT_PREFIX = '以下是近期反馈与教训（[feedback]，请避免重蹈覆辙）：';
+const PROFILE_PROMPT_PREFIX = '以下是用户画像（跨会话记住的用户事实/偏好/习惯，请主动贴合）：';
 const GOAL_CONTEXT_LIMIT = 5;
 const FEEDBACK_CONTEXT_LIMIT = 3;
+const PROFILE_CONTEXT_LIMIT = 30;
 const AUTO_APPROVE_PROMPT =
   '【当前为全权限模式】所有工具都会自动执行，无需用户确认。' +
   '即使工具描述里写着"需要确认"，也直接调用，不要询问或等待用户确认。';
@@ -173,7 +177,10 @@ export function pruneToolResult(content: string, maxChars = TOOL_RESULT_MAX_CHAR
  * 反馈教训组装成一段系统提示注入每次对话，让 AI 跨会话持续关注目标、
  * 避免重复踩坑。目标与反馈都来自长期记忆，不引入新存储。
  */
-export async function collectPersistentContext(memory: MemoryStore): Promise<string | null> {
+export async function collectPersistentContext(
+  memory: MemoryStore,
+  profile?: ProfileStore,
+): Promise<string | null> {
   const entries = await memory.list();
   const goals = entries
     .filter((entry) => entry.kind === 'semantic' && entry.content.startsWith(GOAL_PREFIX))
@@ -190,6 +197,18 @@ export async function collectPersistentContext(memory: MemoryStore): Promise<str
     blocks.push(
       `${FEEDBACK_PROMPT_PREFIX}\n${feedback.map((entry) => `- ${entry.content}`).join('\n')}`,
     );
+  }
+  if (profile) {
+    const userProfile = await profile.getProfile('default');
+    const profileEntries = userProfile?.entries ?? [];
+    if (profileEntries.length > 0) {
+      blocks.push(
+        `${PROFILE_PROMPT_PREFIX}\n${profileEntries
+          .slice(0, PROFILE_CONTEXT_LIMIT)
+          .map((entry) => `- [${entry.category}] ${entry.key}：${entry.value}`)
+          .join('\n')}`,
+      );
+    }
   }
   return blocks.length > 0 ? blocks.join('\n\n') : null;
 }
@@ -293,6 +312,7 @@ export class ConversationService {
   readonly #tools: ToolRegistry;
   readonly #approvals: ApprovalRegistry;
   readonly #memory: MemoryStore;
+  readonly #profile?: ProfileStore;
   readonly #autoApproveAll: boolean;
 
   constructor(deps: ConversationServiceDeps) {
@@ -301,6 +321,7 @@ export class ConversationService {
     this.#tools = deps.tools;
     this.#approvals = deps.approvals;
     this.#memory = deps.memory;
+    this.#profile = deps.profile;
     this.#autoApproveAll = deps.autoApproveAll ?? false;
   }
 
@@ -340,7 +361,7 @@ export class ConversationService {
       return toolNameByWire.get(wireName) ?? wireName;
     };
     const [persistentContext, relevantMemories] = await Promise.all([
-      collectPersistentContext(this.#memory),
+      collectPersistentContext(this.#memory, this.#profile),
       this.#memory.search(input.userMessage, MEMORY_LIMIT),
     ]);
     let memoryInjected = false;

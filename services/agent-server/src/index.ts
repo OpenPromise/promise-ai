@@ -13,7 +13,9 @@ import {
   InMemoryMemoryStore,
   InMemorySessionStore,
   InMemoryTaskStore,
+  InMemoryProfileStore,
   PostgresMemoryStore,
+  PostgresProfileStore,
   PostgresSessionStore,
   PostgresTaskStore,
 } from '@personal-ai/memory';
@@ -30,6 +32,7 @@ import { createWeixinTools } from './services/weixin-tools.js';
 import { createCloudTools } from './services/cloud-tools.js';
 import { createServerShellTool } from './services/server-shell.js';
 import { createSystemStatusTool } from './services/system-status.js';
+import { createProfileTools } from './services/profile-tools.js';
 
 const config = loadConfig();
 const processStartedAt = Date.now();
@@ -91,17 +94,21 @@ if (config.databaseUrl) {
 let memory: InMemoryMemoryStore | PostgresMemoryStore = new InMemoryMemoryStore();
 let memoryBackend = 'memory';
 let taskStore: InMemoryTaskStore | PostgresTaskStore = new InMemoryTaskStore();
+let profileStore: InMemoryProfileStore | PostgresProfileStore = new InMemoryProfileStore();
 if (config.databaseUrl) {
   const postgresMemory = new PostgresMemoryStore({
     connectionString: config.databaseUrl,
     embedder: memoryEmbedder,
   });
   const postgresTasks = new PostgresTaskStore({ connectionString: config.databaseUrl });
+  const postgresProfiles = new PostgresProfileStore({ connectionString: config.databaseUrl });
   try {
     await postgresMemory.init();
     await postgresTasks.init();
+    await postgresProfiles.init();
     memory = postgresMemory;
     taskStore = postgresTasks;
+    profileStore = postgresProfiles;
     memoryBackend = 'postgres';
     console.log(`[memory] embedding: dashscope/${memoryEmbedder.dimensions ?? 'local'}`);
     console.log(`[memory] using postgres (${config.databaseUrl.split('@')[1] ?? ''})`);
@@ -260,6 +267,7 @@ const conversation = new ConversationService({
   tools: toolRegistry,
   approvals,
   memory,
+  profile: profileStore,
   autoApproveAll: config.autoApproveAll,
 });
 const taskService = new TaskService({
@@ -287,6 +295,10 @@ toolRegistry.register(createCodingTool());
 toolRegistry.register(createServerShellTool());
 // system.status：服务器健康巡检（L0 只读）——定时任务自主监控用。
 toolRegistry.register(createSystemStatusTool());
+// 用户画像：结构化记住用户的事实/偏好/习惯，跨会话注入。
+for (const tool of createProfileTools({ store: profileStore })) {
+  toolRegistry.register(tool);
+}
 // 自我开发：self.info / self.check / system.restart（守护进程/容器负责重启拉起）。
 for (const tool of createSelfTools({ memoryBackend, memory, personaDir })) {
   toolRegistry.register(tool);
@@ -325,6 +337,7 @@ const app = buildApp({
   tools: toolRegistry,
   approvals,
   memory,
+  profile: profileStore,
   memoryBackend,
   sessionBackend,
   subscribeTaskEvents: (listener) => taskService.onRun(listener),

@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   collectSecrets,
   createServerShellTool,
+  normalizePtyOutput,
   redactOutput,
+  shellSingleQuote,
   type ShellRunner,
 } from './server-shell.js';
 
@@ -109,6 +111,49 @@ describe('server.shell（云服务器即她的世界）', () => {
     expect((result.data as { timedOut: boolean }).timedOut).toBe(true);
     expect((result.data as { note?: string }).note).toContain('进程树');
   });
+
+  it('interactive=true 时用 script 分配 PTY 并清理控制字符', async () => {
+    const runner = vi.fn(async () => ({
+      exitCode: 0,
+      stdout: 'Progress: \x1b[32m100%\x1b[0m\r\nDone\r',
+      stderr: '',
+      timedOut: false,
+    }));
+    const tool = createServerShellTool({ runner, defaultCwd: process.cwd() });
+    const result = await tool.execute(
+      { command: 'apt-get install -y x', interactive: true },
+      { sessionId: 's1' },
+    );
+    expect(result.ok).toBe(true);
+    expect(runner).toHaveBeenCalledWith(
+      `script -qec ${shellSingleQuote('apt-get install -y x')} /dev/null`,
+      expect.anything(),
+    );
+    const stdout = (result.data as { stdout: string }).stdout;
+    expect(stdout).toContain('Progress: 100%');
+    expect(stdout).not.toContain('\x1b');
+    expect(stdout).not.toContain('\r');
+  });
+
+  it('input 参数透传给命令标准输入（交互式提示应答）', async () => {
+    const runner = vi.fn(async (_command: string, options: { input?: string }) => ({
+      exitCode: 0,
+      stdout: `got:${options.input ?? ''}`,
+      stderr: '',
+      timedOut: false,
+    }));
+    const tool = createServerShellTool({ runner, defaultCwd: process.cwd() });
+    const result = await tool.execute(
+      { command: 'read -p "name: " x; echo hi $x', input: '夜夜\n' },
+      { sessionId: 's1' },
+    );
+    expect(result.ok).toBe(true);
+    expect(runner).toHaveBeenCalledWith(
+      'read -p "name: " x; echo hi $x',
+      expect.objectContaining({ input: '夜夜\n' }),
+    );
+    expect((result.data as { stdout: string }).stdout).toContain('got:夜夜');
+  });
 });
 
 describe('collectSecrets / redactOutput', () => {
@@ -131,5 +176,17 @@ describe('collectSecrets / redactOutput', () => {
       'sk-abc-1234567890',
     ]);
     expect(out).toBe('key=[REDACTED] and again [REDACTED]');
+  });
+});
+
+describe('PTY 辅助函数', () => {
+  it('shellSingleQuote 正确处理命令中的单引号', () => {
+    expect(shellSingleQuote("echo it's ok")).toBe("'echo it'\\''s ok'");
+    expect(shellSingleQuote('echo hi')).toBe("'echo hi'");
+  });
+
+  it('normalizePtyOutput 去掉 CR 与 ANSI 控制序列', () => {
+    const out = normalizePtyOutput('\x1b[1;32mOK\x1b[0m\r\nline2\r');
+    expect(out).toBe('OK\nline2\n');
   });
 });

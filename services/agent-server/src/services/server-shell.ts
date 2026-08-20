@@ -20,19 +20,19 @@ export interface ShellOutput {
 
 export type ShellRunner = (
   command: string,
-  options: { cwd: string; timeoutMs: number; signal: AbortSignal },
+  options: { cwd: string; timeoutMs: number; signal: AbortSignal; input?: string },
 ) => Promise<ShellOutput>;
 
 function defaultRunner(
   command: string,
-  options: { cwd: string; timeoutMs: number; signal: AbortSignal },
+  options: { cwd: string; timeoutMs: number; signal: AbortSignal; input?: string },
 ): Promise<ShellOutput> {
   return new Promise((resolve, reject) => {
     // detached=true：bash 自成进程组，超时/取消时对整个进程组发信号，
     // 保证 sleep/npm install/docker 等子进程不会成为孤儿继续跑（OpenClaw kill-tree 思路）。
     const child = spawn('/bin/bash', ['-lc', command], {
       cwd: options.cwd,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       env: process.env,
       detached: process.platform !== 'win32',
     });
@@ -76,6 +76,10 @@ function defaultRunner(
       const timedOut = signal === 'SIGTERM' || signal === 'SIGKILL';
       resolve({ exitCode: timedOut ? 124 : (code ?? 1), stdout, stderr, timedOut });
     });
+    if (options.input !== undefined) {
+      child.stdin.write(options.input);
+    }
+    child.stdin.end();
   });
 }
 
@@ -106,6 +110,37 @@ export function redactOutput(output: string, secrets: string[]): string {
   return result;
 }
 
+/** bash 单引号包裹（处理命令里的单引号），用于安全嵌入 script -c。 */
+export function shellSingleQuote(command: string): string {
+  return `'${command.replace(/'/g, `'\\''`)}'`;
+}
+
+// no-control-regex 不允许源码出现控制字符转义，用运行时构造等价正则。
+const ESC = String.fromCharCode(27);
+const BEL = String.fromCharCode(7);
+const ANSI_CSI = new RegExp(`${ESC}\\[[0-9;?]*[a-zA-Z]`, 'g');
+const ANSI_OSC = new RegExp(`${ESC}][^${BEL}]*${BEL}`, 'g');
+const ANSI_FE = new RegExp(`${ESC}[()][0-9A-B]`, 'g');
+const ANSI_SIMPLIFIED = new RegExp(`${ESC}[=>]`, 'g');
+const ANSI_SAVE_RESTORE = new RegExp(`${ESC}[78]`, 'g');
+const ANSI_CURSOR = new RegExp(`${ESC}\\[[0-9]*[A-D]`, 'g');
+
+/**
+ * 清理 PTY 输出的控制字符：CRLF→LF、回车、ANSI 颜色/光标控制序列。
+ * 让模型拿到干净的文本而不是一坨转义码。
+ */
+export function normalizePtyOutput(output: string): string {
+  return output
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(ANSI_CSI, '')
+    .replace(ANSI_OSC, '')
+    .replace(ANSI_FE, '')
+    .replace(ANSI_SIMPLIFIED, '')
+    .replace(ANSI_SAVE_RESTORE, '')
+    .replace(ANSI_CURSOR, '');
+}
+
 export interface ServerShellToolOptions {
   /** 测试注入：自定义命令执行器；缺省走 /bin/bash。 */
   runner?: ShellRunner;
@@ -134,6 +169,22 @@ export function createServerShellTool(
 ): Tool {
   const runner = options.runner ?? defaultRunner;
   const defaultCwd = options.defaultCwd ?? '/projects';
+  const executeCommand = (
+    command: string,
+    opts: { cwd: string; timeoutMs: number; signal: AbortSignal; input?: string },
+    interactive: boolean,
+  ): Promise<ShellOutput> => {
+    if (!interactive) return runner(command, opts);
+    // PTY：用 util-linux 的 script 给命令分配伪终端（容器已内置，零新依赖），
+    // 适合交互式命令（提示输入/颜色/进度条等无 TTY 时行为不同的程序）。
+    return runner(`script -qec ${shellSingleQuote(command)} /dev/null`, opts).then(
+      (result) => ({
+        ...result,
+        stdout: normalizePtyOutput(result.stdout),
+        stderr: normalizePtyOutput(result.stderr),
+      }),
+    );
+  };
 
   return {
     name: 'server.shell',
@@ -143,7 +194,9 @@ export function createServerShellTool(
       '默认工作目录 /projects（宿主机持久工作区，重启不丢）。' +
       '输出最多返回 20000 字符；长任务请拆分或加大 timeoutSeconds。' +
       '命令输出中的 API 密钥等敏感值会自动脱敏为 [REDACTED]；' +
-      '超时/取消会终止整个进程树，不留孤儿进程。',
+      '超时/取消会终止整个进程树，不留孤儿进程。' +
+      'interactive=true 时在伪终端（PTY）下运行，适合交互式命令；' +
+      'input 可写入命令标准输入（如回答交互式提示）。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -158,16 +211,34 @@ export function createServerShellTool(
           maximum: 300,
           description: '超时上限（秒），默认 60',
         },
+        interactive: {
+          type: 'boolean',
+          description:
+            '是否在伪终端（PTY）下运行：交互式命令（提示输入、颜色、进度条）用 true；' +
+            '普通命令默认 false',
+        },
+        input: {
+          type: 'string',
+          description: '写入命令标准输入的内容（如回答交互式提示），可选',
+        },
       },
       required: ['command'],
     },
     permissionLevel: 3 as PermissionLevel,
     timeoutMs: 5 * 60 * 1000,
     async execute(input: unknown): Promise<ToolResult> {
-      const { command, cwd, timeoutSeconds = 60 } = (input ?? {}) as {
+      const {
+        command,
+        cwd,
+        timeoutSeconds = 60,
+        interactive = false,
+        input: stdinInput,
+      } = (input ?? {}) as {
         command?: string;
         cwd?: string;
         timeoutSeconds?: number;
+        interactive?: boolean;
+        input?: string;
       };
       if (!command?.trim()) {
         return { ok: false, error: '缺少 command 参数' };
@@ -182,11 +253,16 @@ export function createServerShellTool(
       const controller = new AbortController();
       try {
         const result = await withShellLock(() =>
-          runner(command.trim(), {
-            cwd: resolvedCwd,
-            timeoutMs,
-            signal: controller.signal,
-          }),
+          executeCommand(
+            command.trim(),
+            {
+              cwd: resolvedCwd,
+              timeoutMs,
+              signal: controller.signal,
+              ...(stdinInput !== undefined ? { input: stdinInput } : {}),
+            },
+            interactive,
+          ),
         );
         const secrets = collectSecrets();
         return {

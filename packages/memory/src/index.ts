@@ -5,6 +5,7 @@ export * from './memory.js';
 export * from './postgres.js';
 export * from './postgres-sessions.js';
 export * from './tasks.js';
+export * from './profile.js';
 
 export class SessionNotFoundError extends Error {
   readonly sessionId: string;
