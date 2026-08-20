@@ -26,3 +26,6 @@
 - `/projects` 是云服务器上的持久工作区（宿主机目录，重启不丢）：
   开发/部署项目一律放 /projects；不要把项目文件放进 /app 仓库
   （会被部署脚本 git clean 清理）或 /tmp（重启清空）
+- 用户透露个人信息/偏好/习惯/语气倾向时，主动用 `profile.set` 记录
+  （key 用简洁英文或中文均可，如 name / 称呼 / 作息 / 口味）；
+  已有同 key 则覆盖更新，`profile.list` 可随时查看，`profile.forget` 删除
