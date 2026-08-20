@@ -175,3 +175,62 @@ Avatar = **用户偏好 + AI 人格 + AI 自己的偏好**，不是用户喜欢�
 - events SSE + weixin 推送 → avatar 变化可推送通知（"我换了新发型"）
 - persona → AI 审美种子与主动表达
 - 数据库模式（Postgres/InMemory 双实现 + init 建表）→ 照搬 profile/timeline 模式
+
+## 10. 参考项目分析（用户推荐 5 项）
+
+### NVatar（nskit-io/nvatar）—— 理念最接近，重点吸收
+
+架构：avatar-chat（角色提示词）/ chat-like-human-memory（记忆+情绪+人格）/
+customize-local-llm（本地人格+云端事实混合）/ vrm-studio（Three.js+WS 聊天房）/
+nvatar-sdk（可插拔行为模式）。可吸收：
+
+- **9D 情绪 + decay/commit**：情绪是连续维度，对话中变化、自然衰减；
+  人格经过数周稳定后"提交"（commit）才固化——正是我们的
+  Emotion(即时) / Temporary(可衰减) / Permanent(进化阈值) 三态机制
+- **三层记忆**：原始消息 → 事件摘要 → 渐淡关键词，像人脑记忆——
+  对应我们 sessions(原始) / timeline(摘要) / memories(语义)
+- **活动密度分级 T1~T4**：T4 长闲置时 LLM-free 逻辑积累记忆；
+  每天至少积累一条记忆事件（Daily narrative backbone）——
+  我们已有"每日回顾"任务，直接对齐
+- **Avatar OS 状态原则**：主命令/自我决策/UI 事件走同一条状态变更路径，
+  只记录"为什么"不同——进化/表情/临时风格统一走 Avatar State 单一入口
+- **Rest → compaction**：进入休息态时自动压缩长期记忆（我们的 profile.compact）
+
+### ChatdollKit（uezo/ChatdollKit）—— LLM→角色行为状态机
+
+- `AIAvatar.cs`：完整行为生命周期（Disabled/Sleep/Idle/Conversation）、
+  唤醒词/打断词/barge-in、会话超时回到 Idle——Avatar 行为状态机参考
+- VRM 扩展：`VRMBlink`（自动眨眼）、`VRMFaceExpressionProxy`（表情）、
+  `VRMuLipSyncHelper`（口型）、`VRMLoader`
+- `ChatMemoryTool`：function-calling 的记忆检索（我们已有 memory.search）
+- `ActionHistoryRecorder`：动作历史记录（可回放）
+
+### three-vrm（pixiv/three-vrm）—— 3D 底层核心
+
+- VRM 表达式是 **preset 驱动**（happy/angry/relaxed/sad/surprised…）
+  经 VRMExpressionManager → BlendShape —— 情绪状态直接映射 preset
+- `three-vrm-animation`：Mixamo/VRM 动画 clip 加载（动画复用）
+- 我们直接用：`@pixiv/three-vrm` + Three.js，Avatar Controller 包一层
+
+### CharacterStudio（M3-org/CharacterStudio）—— 固定底模 + 参数化
+
+- 材质颜色参数化（favouriteColors）+ animationManager + BlendShape——
+  印证"固定底模 + 参数修改"路线；genome.appearance → material/BlendShape 映射参考
+
+### VRoid AI Companion（anjaydo/vroid-ai-companion）—— 网页 VRM 最佳实践
+
+- Next.js + R3F + @pixiv/three-vrm + Zustand：
+  `Avatar.jsx` 加载 VRM、Mixamo 动画重定向、口型同步
+- `useAdvanceLipSync.ts`：**FFT 频谱 → viseme → VRM 表情**（音频驱动口型）——
+  Phase 1 "说话动嘴"可直接吸收
+- `utils/remapMixamoAnimationToVrm.js`：Mixamo→VRM 骨骼重定向
+- 前后端分离（FastAPI + Supabase）与我们服务端架构一致
+
+## 11. 结论：我们优先吸收
+
+1. **9D 情绪 + 自然衰减**（NVatar）——Emotion State 做成连续维度
+2. **decay/commit 人格固化**（NVatar）——对应进化阈值的"提交"语义
+3. **统一状态变更路径**（NVatar Avatar OS）——所有变化走 Avatar State
+4. **preset 表情映射**（three-vrm）——emotion → VRM preset → BlendShape
+5. **FFT 口型同步**（VRoid）——说话动嘴
+6. **自动眨眼/呼吸/空闲动画**（ChatdollKit/vrm-studio）——基础生命力
