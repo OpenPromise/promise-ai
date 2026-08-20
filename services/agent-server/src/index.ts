@@ -332,7 +332,7 @@ toolRegistry.register(createServerShellTool());
 // system.status：服务器健康巡检（L0 只读）——定时任务自主监控用。
 toolRegistry.register(createSystemStatusTool());
 // 用户画像：结构化记住用户的事实/偏好/习惯，跨会话注入。
-for (const tool of createProfileTools({ store: profileStore, llm })) {
+for (const tool of createProfileTools({ store: profileStore, llm, avatarStore })) {
   toolRegistry.register(tool);
 }
 // 事件时间线：记录/查看"我们之间发生过什么"。

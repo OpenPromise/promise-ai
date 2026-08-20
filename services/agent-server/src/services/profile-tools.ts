@@ -1,8 +1,10 @@
 import type {
+  AvatarStore,
   ProfileCategory,
   ProfileStore,
 } from '@personal-ai/memory';
 import { resolveProfileUserId } from '@personal-ai/memory';
+import { mapPreferenceToAvatar } from '@personal-ai/memory';
 import type { LLMProvider } from '@personal-ai/llm';
 import type { PermissionLevel, Tool, ToolResult } from '@personal-ai/tools';
 import { compactProfile } from './profile-ingestor.js';
@@ -21,10 +23,12 @@ export interface ProfileToolOptions {
   store: ProfileStore;
   /** 画像整理用 LLM（flash 即可）。 */
   llm: LLMProvider;
+  /** Avatar 偏好存储：preference 类画像写入时同步喂进化证据（user 源）。 */
+  avatarStore?: AvatarStore;
 }
 
 export function createProfileTools(options: ProfileToolOptions): Tool[] {
-  const { store, llm } = options;
+  const { store, llm, avatarStore } = options;
 
   const tools: Tool[] = [
     {
@@ -68,6 +72,20 @@ export function createProfileTools(options: ProfileToolOptions): Tool[] {
           value: trimmedValue,
           category: resolvedCategory,
         });
+        // Avatar 进化证据：偏好类记录同步喂给 avatar_preferences（user 源），
+        // 保证"用户在对话里表达的审美"累积置信度，最终触发外观演化。
+        if (avatarStore && resolvedCategory === 'preference') {
+          const hits = mapPreferenceToAvatar(`${trimmedKey} ${trimmedValue}`);
+          for (const hit of hits) {
+            await avatarStore.addPreferenceEvidence({
+              parameter: hit.parameter,
+              direction: hit.direction,
+              source: 'user',
+              confidence: 0.3,
+              consistency: 1,
+            });
+          }
+        }
         return {
           ok: true,
           data: {

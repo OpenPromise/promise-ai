@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { GenerateResult, LLMProvider } from '@personal-ai/llm';
-import { InMemoryProfileStore } from '@personal-ai/memory';
+import { InMemoryAvatarStore, InMemoryProfileStore } from '@personal-ai/memory';
 import {
   applyExtractedFacts,
   buildCompactPrompt,
@@ -127,6 +127,37 @@ describe('ProfileIngestor', () => {
     expect(joined).toContain('[fact] name：旧名');
     expect(joined).toContain('我叫夜夜');
     expect(joined).toContain('ADD|UPDATE|DELETE|NONE');
+  });
+
+  it('新偏好事实自动喂给 avatar_preferences（user 源）', async () => {
+    const store = new InMemoryProfileStore();
+    const avatarStore = new InMemoryAvatarStore();
+    const llm = fakeLlm(
+      '{"facts":[{"key":"喜好","value":"喜欢蓝色","category":"preference","event":"ADD"}]}',
+    );
+    const ingestor = new ProfileIngestor({
+      llm,
+      store,
+      avatarStore,
+      minIntervalMs: 0,
+    });
+    await ingestor.ingest('我喜欢蓝色');
+    const prefs = await avatarStore.listPreferences();
+    expect(prefs.some((p) => p.source === 'user' && p.parameter === 'hairColor' && p.direction === 1)).toBe(
+      true,
+    );
+  });
+
+  it('NONE/重复事实不重复喂证据', async () => {
+    const store = new InMemoryProfileStore();
+    const avatarStore = new InMemoryAvatarStore();
+    const llm = fakeLlm(
+      '{"facts":[{"key":"喜好","value":"喜欢蓝色","category":"preference","event":"NONE"}]}',
+    );
+    const ingestor = new ProfileIngestor({ llm, store, avatarStore, minIntervalMs: 0 });
+    await ingestor.ingest('蓝色');
+    const prefs = await avatarStore.listPreferences();
+    expect(prefs).toHaveLength(0);
   });
 });
 
