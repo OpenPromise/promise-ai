@@ -45,7 +45,7 @@ export interface ConversationServiceDeps {
   autoApproveAll?: boolean;
 }
 
-const MAX_TOOL_TURNS = 5;
+const MAX_TOOL_TURNS = 8;
 const MEMORY_LIMIT = 3;
 /** Message count that triggers context compaction (OpenClaw-style "compress first"). */
 const COMPACTION_THRESHOLD = 60;
@@ -602,14 +602,34 @@ export class ConversationService {
       }
     }
 
+    // 工具轮次用尽：再跑一次不带工具的总结，避免多轮任务后收到空回复。
+    let finalText = '';
+    try {
+      for await (const chunk of chatWithTimeoutAndRetry(this.#llm, {
+        messages,
+        ...(input.signal ? { signal: input.signal } : {}),
+      })) {
+        finalText += chunk.delta;
+      }
+    } catch (error) {
+      finalText = `（工具轮次已达上限，最终总结生成失败：${error instanceof Error ? error.message : String(error)}）`;
+    }
+    const finalSummary =
+      finalText.trim().length > 0
+        ? finalText
+        : '（本轮任务工具轮次已达上限，但未生成可见总结；如需结果请让我继续说明。）';
+    await this.#store.addMessage(input.sessionId, {
+      role: 'assistant',
+      content: finalSummary,
+    });
     yield createEnvelope({
       type: 'chat.done',
       sessionId: input.sessionId,
       requestId,
       payload: {
-        text: '',
+        text: finalSummary,
         usage: undefined,
-        note: `Reached the maximum of ${MAX_TOOL_TURNS} tool turns`,
+        note: `已执行 ${MAX_TOOL_TURNS} 轮工具，以上为最终总结`,
       },
     });
     yield createEnvelope({
