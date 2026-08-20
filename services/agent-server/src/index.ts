@@ -33,6 +33,7 @@ import { createCloudTools } from './services/cloud-tools.js';
 import { createServerShellTool } from './services/server-shell.js';
 import { createSystemStatusTool } from './services/system-status.js';
 import { createProfileTools } from './services/profile-tools.js';
+import { ProfileIngestor } from './services/profile-ingestor.js';
 
 const config = loadConfig();
 const processStartedAt = Date.now();
@@ -226,6 +227,8 @@ const llm = new FallbackLLMProvider({
       }
     : {}),
 });
+// 对话后自动抽取画像（Mem0 两阶段思路）：快模型 + 节流 + 失败静默。
+const profileIngestor = new ProfileIngestor({ llm, store: profileStore });
 // Voice cascade may use a faster model than text chat to cut latency; with
 // DashScope the same Qwen model is used for both.
 const primaryVoiceLlm =
@@ -268,6 +271,7 @@ const conversation = new ConversationService({
   approvals,
   memory,
   profile: profileStore,
+  profileIngest: (message) => void profileIngestor.ingest(message),
   autoApproveAll: config.autoApproveAll,
 });
 const taskService = new TaskService({
@@ -338,6 +342,7 @@ const app = buildApp({
   approvals,
   memory,
   profile: profileStore,
+  profileIngest: (message) => void profileIngestor.ingest(message),
   memoryBackend,
   sessionBackend,
   subscribeTaskEvents: (listener) => taskService.onRun(listener),

@@ -32,6 +32,8 @@ export interface AppDeps {
   memory: MemoryStore;
   /** 用户画像存储（结构化长期关系记忆，注入对话上下文）。 */
   profile?: ProfileStore;
+  /** 对话正常结束后异步抽取画像（Mem0 两阶段思路）。 */
+  profileIngest?: (userMessage: string) => void;
   memoryBackend: string;
   sessionBackend: string;
   createVoice: () => VoiceGateway;
@@ -69,6 +71,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     approvals: deps.approvals,
     memory: deps.memory,
     profile: deps.profile,
+    profileIngest: deps.profileIngest,
     autoApproveAll: deps.config.autoApproveAll,
   });
 

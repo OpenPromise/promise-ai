@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ChatChunk, ChatInput, GenerateResult, LLMProvider } from '@personal-ai/llm';
 import { InMemoryMemoryStore, InMemorySessionStore } from '@personal-ai/memory';
 import { ToolRegistry } from '@personal-ai/tools';
@@ -171,6 +171,39 @@ describe('ConversationService', () => {
     expect(
       refreshed.messages.some((m) => m.role === 'tool' && m.content.includes('"ran":true')),
     ).toBe(true);
+  });
+
+  it('对话正常结束后触发异步画像抽取（fire-and-forget）', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    const tools = new ToolRegistry();
+    const profileIngest = vi.fn();
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'deepseek-test',
+      configured: true,
+      async *chat(): AsyncIterable<ChatChunk> {
+        yield { delta: '记住了。' };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+    const service = new ConversationService({
+      store,
+      llm,
+      tools,
+      approvals: new ApprovalRegistry(),
+      memory: new InMemoryMemoryStore(),
+      profileIngest,
+    });
+    for await (const _envelope of service.runChat({
+      sessionId: session.id,
+      userMessage: '我叫夜夜，记住我',
+    })) {
+      // drain
+    }
+    expect(profileIngest).toHaveBeenCalledWith('我叫夜夜，记住我');
   });
 
   it('模型只出推理不出正文时，用兜底文案避免静默空回复', async () => {

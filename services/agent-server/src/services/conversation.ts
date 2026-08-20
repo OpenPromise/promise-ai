@@ -39,6 +39,8 @@ export interface ConversationServiceDeps {
   memory: MemoryStore;
   /** 用户画像存储：注入"用户画像"上下文（结构化长期关系记忆）。 */
   profile?: ProfileStore;
+  /** 对话正常结束后异步抽取画像（Mem0 两阶段思路）；不阻塞回复。 */
+  profileIngest?: (userMessage: string) => void;
   /** 全权限模式：所有工具（含 L2/L3）自动执行，不弹确认。 */
   autoApproveAll?: boolean;
 }
@@ -313,6 +315,7 @@ export class ConversationService {
   readonly #approvals: ApprovalRegistry;
   readonly #memory: MemoryStore;
   readonly #profile?: ProfileStore;
+  readonly #profileIngest?: (userMessage: string) => void;
   readonly #autoApproveAll: boolean;
 
   constructor(deps: ConversationServiceDeps) {
@@ -322,6 +325,7 @@ export class ConversationService {
     this.#approvals = deps.approvals;
     this.#memory = deps.memory;
     this.#profile = deps.profile;
+    this.#profileIngest = deps.profileIngest;
     this.#autoApproveAll = deps.autoApproveAll ?? false;
   }
 
@@ -466,6 +470,7 @@ export class ConversationService {
           requestId,
           payload: { text: finalText, usage, durationMs: Date.now() - requestStartedAt },
         });
+        this.#profileIngest?.(input.userMessage);
         yield createEnvelope({
           type: 'agent.state',
           sessionId: input.sessionId,
