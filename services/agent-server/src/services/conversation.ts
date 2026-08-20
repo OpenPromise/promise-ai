@@ -52,6 +52,9 @@ const GOAL_PROMPT_PREFIX = '以下是用户的长期目标（goal，请持续关
 const FEEDBACK_PROMPT_PREFIX = '以下是近期反馈与教训（[feedback]，请避免重蹈覆辙）：';
 const GOAL_CONTEXT_LIMIT = 5;
 const FEEDBACK_CONTEXT_LIMIT = 3;
+const AUTO_APPROVE_PROMPT =
+  '【当前为全权限模式】所有工具都会自动执行，无需用户确认。' +
+  '即使工具描述里写着"需要确认"，也直接调用，不要询问或等待用户确认。';
 const COMPACTION_PROMPT = [
   '你是对话摘要助手。请把下面这段 AI 助理与用户的对话压缩成一份简洁的中文摘要，',
   '保留：用户的重要事实与偏好、已完成的任务和关键结果、尚未解决的事项。',
@@ -237,8 +240,13 @@ export function repairToolResultPairing(messages: LLMChatMessage[]): LLMChatMess
   return repaired;
 }
 
-function buildMessages(session: Session, userMessage: string): LLMChatMessage[] {
+function buildMessages(
+  session: Session,
+  userMessage: string,
+  autoApproveAll = false,
+): LLMChatMessage[] {
   const messages: LLMChatMessage[] = [];
+  if (autoApproveAll) messages.push({ role: 'system', content: AUTO_APPROVE_PROMPT });
   if (session.systemPrompt) {
     messages.push({ role: 'system', content: session.systemPrompt });
   }
@@ -305,7 +313,7 @@ export class ConversationService {
       payload: { state: 'thinking' },
     });
     session = await this.#compactIfNeeded(session, input.signal);
-    const messages = buildMessages(session, input.userMessage);
+    const messages = buildMessages(session, input.userMessage, this.#autoApproveAll);
     const tools = toLLMTools(this.#tools);
     const [persistentContext, relevantMemories] = await Promise.all([
       collectPersistentContext(this.#memory),
