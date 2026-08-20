@@ -85,4 +85,34 @@ describe('OpenRouterProvider', () => {
       })(),
     ).rejects.toThrow(OpenRouterApiError);
   });
+
+  it('name 选项：错误消息前缀显示真实后端（deepseek/dashscope）', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('insufficient tool messages', { status: 400 })),
+    );
+    const deepseek = new OpenRouterProvider({
+      apiKey: 'sk-ds',
+      baseUrl: 'https://api.deepseek.com/v1',
+      name: 'deepseek',
+    });
+    const error = await (async () => {
+      try {
+        for await (const _chunk of deepseek.chat({ messages: [] })) {
+          // noop
+        }
+      } catch (caught) {
+        return caught as Error;
+      }
+    })();
+    expect(error?.message).toContain('deepseek API error 400');
+    expect(error?.message).not.toContain('OpenRouter');
+
+    const dashscope = new OpenRouterProvider({
+      apiKey: 'sk-ds2',
+      baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      name: 'dashscope',
+    });
+    expect(dashscope.name).toBe('dashscope');
+  });
 });

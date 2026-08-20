@@ -657,6 +657,115 @@ describe('ConversationService', () => {
     expect(repaired.at(-1)?.content).toContain('缺失');
   });
 
+  it('repairToolResultPairing 修复顺序错乱：tool 响应被 user 消息隔开', () => {
+    // 并发竞态残留：assistant(tool_calls) 之后插入了 user 消息，tool 响应在后
+    const repaired = repairToolResultPairing([
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: 'call_a', type: 'function', function: { name: 'tool.a', arguments: '{}' } },
+        ],
+      },
+      { role: 'user', content: '你还在吗' },
+      { role: 'assistant', content: '（回复生成失败：xxx）' },
+      { role: 'tool', content: '{"ok":true}', tool_call_id: 'call_a' },
+      { role: 'user', content: '继续' },
+    ]);
+    // assistant(tool_calls) 后必须紧跟 tool 响应，user 消息被延迟到配对之后
+    expect(repaired[1]).toMatchObject({ role: 'tool', tool_call_id: 'call_a' });
+    const roles = repaired.map((m) => m.role);
+    expect(roles.indexOf('tool')).toBeLessThan(roles.lastIndexOf('user'));
+    expect(repaired.filter((m) => m.role === 'user').length).toBe(2);
+    expect(repaired.some((m) => m.role === 'tool' && m.tool_call_id === 'call_a')).toBe(true);
+  });
+
+  it('repairToolResultPairing 多轮工具调用保持各自配对顺序', () => {
+    const repaired = repairToolResultPairing([
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: 'call_1', type: 'function', function: { name: 'tool.one', arguments: '{}' } },
+        ],
+      },
+      { role: 'tool', content: '{"ok":1}', tool_call_id: 'call_1' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: 'call_2', type: 'function', function: { name: 'tool.two', arguments: '{}' } },
+        ],
+      },
+      { role: 'user', content: '插队消息' },
+      { role: 'tool', content: '{"ok":2}', tool_call_id: 'call_2' },
+      { role: 'user', content: '结束' },
+    ]);
+    expect(repaired[3]).toMatchObject({ role: 'tool', tool_call_id: 'call_2' });
+    expect(repaired[4]).toMatchObject({ role: 'user', content: '插队消息' });
+    const callIds = repaired.filter((m) => m.tool_call_id).map((m) => m.tool_call_id);
+    expect(callIds).toEqual(['call_1', 'call_2']);
+  });
+
+  it('repairToolResultPairing 丢弃孤儿 tool 消息（assistant 已被压缩）', () => {
+    const repaired = repairToolResultPairing([
+      { role: 'user', content: '[历史对话摘要] ...' },
+      { role: 'tool', content: '{"ok":true}', tool_call_id: 'orphan_1' },
+      { role: 'user', content: '继续' },
+    ]);
+    expect(repaired.some((m) => m.role === 'tool')).toBe(false);
+    expect(repaired.filter((m) => m.role === 'user').length).toBe(2);
+  });
+
+  it('同一会话并发请求串行执行（工具间隙发消息不再产生错乱历史）', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    const order: string[] = [];
+    let releaseFirstChat!: () => void;
+    const firstChatGate = new Promise<void>((resolve) => {
+      releaseFirstChat = resolve;
+    });
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'test',
+      configured: true,
+      async *chat(): AsyncIterable<ChatChunk> {
+        order.push('llm');
+        await firstChatGate;
+        yield { delta: 'done' };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+    const service = new ConversationService({
+      store,
+      llm,
+      tools: new ToolRegistry(),
+      approvals: new ApprovalRegistry(),
+      memory: new InMemoryMemoryStore(),
+    });
+    const drain = async (message: string) => {
+      for await (const _ of service.runChat({ sessionId: session.id, userMessage: message })) {
+        // drain
+      }
+    };
+    const first = drain('第一条');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const second = drain('第二条');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // 第二个请求被串行锁挡住，尚未进入 LLM
+    expect(order).toEqual(['llm']);
+    releaseFirstChat();
+    await Promise.all([first, second]);
+    expect(order).toEqual(['llm', 'llm']);
+    const messages = (await store.getSession(session.id)).messages;
+    expect(messages.filter((m) => m.role === 'user').map((m) => m.content)).toEqual([
+      '第一条',
+      '第二条',
+    ]);
+  });
+
   it('stops the loop when the same tool call repeats', async () => {
     const store = new InMemorySessionStore();
     const session = await store.createSession({ systemPrompt: '你是助理。' });

@@ -266,30 +266,59 @@ function toLLMMessages(history: ChatMessage[]): LLMChatMessage[] {
 }
 
 /**
- * 补全"有 assistant tool_calls 但缺对应 tool result"的历史（服务中断/崩溃残留）：
- * 为每个悬空调用追加合成错误结果，避免 OpenAI 兼容接口因悬空 tool_call 拒绝请求，
- * 也防止模型把"未执行的调用"当作已执行。
+ * 修复会话历史里的工具调用配对（服务中断/并发写入残留），保证发给 LLM 的
+ * messages 中每个 assistant(tool_calls) 之后紧跟其 tool 响应：
+ * 1. 配对错乱：assistant(tool_calls) 与它的 tool 响应之间被 user/assistant
+ *    消息隔开（并发请求把用户消息插进了工具执行间隙）——把这类非 tool 消息
+ *    延迟到该轮工具配对完成后再输出；
+ * 2. 完全缺失：为每个悬空调用追加合成错误结果，让模型知道调用被中断；
+ * 3. 孤儿 tool：assistant 已被压缩/丢失——直接丢弃，避免 API 拒绝。
  */
 export function repairToolResultPairing(messages: LLMChatMessage[]): LLMChatMessage[] {
   const repaired: LLMChatMessage[] = [];
   const pendingIds = new Set<string>();
+  const deferred: LLMChatMessage[] = [];
+
+  const flushPending = (): void => {
+    for (const id of pendingIds) {
+      repaired.push({
+        role: 'tool',
+        content: '[缺失的工具结果：该工具调用被中断，未返回结果]',
+        tool_call_id: id,
+      });
+    }
+    pendingIds.clear();
+    repaired.push(...deferred);
+    deferred.length = 0;
+  };
+
   for (const message of messages) {
-    repaired.push(message);
-    if (message.role === 'assistant' && message.tool_calls) {
-      for (const call of message.tool_calls) {
-        pendingIds.add(call.id);
-      }
+    if (message.role === 'assistant' && message.tool_calls && message.tool_calls.length > 0) {
+      // 上一条 assistant 的工具还没配对完就来了新的 assistant：
+      // 说明前一轮工具结果确实缺失，先补丁再继续。
+      if (pendingIds.size > 0) flushPending();
+      repaired.push(message);
+      for (const call of message.tool_calls) pendingIds.add(call.id);
     } else if (message.role === 'tool' && message.tool_call_id) {
-      pendingIds.delete(message.tool_call_id);
+      if (pendingIds.has(message.tool_call_id)) {
+        repaired.push(message);
+        pendingIds.delete(message.tool_call_id);
+        if (pendingIds.size === 0) {
+          repaired.push(...deferred);
+          deferred.length = 0;
+        }
+      }
+      // 孤儿 tool（找不到对应 assistant）：丢弃，避免 API 拒绝
+    } else {
+      // user / assistant（无 tool_calls）等：等当前工具轮配对完成再输出
+      if (pendingIds.size > 0) {
+        deferred.push(message);
+      } else {
+        repaired.push(message);
+      }
     }
   }
-  for (const id of pendingIds) {
-    repaired.push({
-      role: 'tool',
-      content: '[缺失的工具结果：该工具调用被中断，未返回结果]',
-      tool_call_id: id,
-    });
-  }
+  if (pendingIds.size > 0) flushPending();
   return repaired;
 }
 
@@ -350,6 +379,8 @@ export class ConversationService {
   readonly #worldStore?: WorldStore;
   readonly #profileIngest?: (userMessage: string) => void;
   readonly #autoApproveAll: boolean;
+  /** 会话级串行队列：同一会话的请求排队执行，防止并发写入错乱历史。 */
+  readonly #sessionQueues = new Map<string, Promise<unknown>>();
 
   constructor(deps: ConversationServiceDeps) {
     this.#store = deps.store;
@@ -366,13 +397,30 @@ export class ConversationService {
 
   /**
    * 运行一次对话请求。任务级权限授权（requestId 作用域）在请求结束后清理，
-   * 避免 "Allow once" 泄漏到下一次请求。
+   * 避免 "Allow once" 泄漏到下一次请求。同一会话的请求串行执行：用户在
+   * 工具执行间隙发新消息时，新请求排队等上一轮（含工具结果）写完，避免
+   * assistant(tool_calls) 与其 tool 响应之间被 user 消息隔开（DeepSeek 等
+   * OpenAI 兼容 API 会因此拒绝请求）。
    */
   async *runChat(input: RunChatInput): AsyncIterable<ProtocolEnvelope> {
+    const sessionId = input.sessionId;
+    const previous = this.#sessionQueues.get(sessionId) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const myChain = previous.then(() => gate);
+    this.#sessionQueues.set(sessionId, myChain);
+    await previous;
     try {
       yield* this.#runChatInner(input);
     } finally {
       this.#approvals.clearForRequest(input.requestId);
+      release();
+      // 若队列里没有更晚的请求，移除条目避免 Map 无限增长
+      if (this.#sessionQueues.get(sessionId) === myChain) {
+        this.#sessionQueues.delete(sessionId);
+      }
     }
   }
 

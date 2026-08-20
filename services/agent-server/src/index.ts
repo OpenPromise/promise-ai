@@ -224,6 +224,7 @@ const primaryLlm =
         apiKey: config.openrouter.apiKey,
         baseUrl: config.openrouter.baseUrl,
         model: config.openrouter.model,
+        name: 'openrouter',
       })
     : config.llmProvider === 'deepseek'
       ? // 统一使用 deepseek-v4-flash（快、省），不做 pro 路由。
@@ -231,11 +232,13 @@ const primaryLlm =
           apiKey: config.deepseek.apiKey,
           baseUrl: config.deepseek.baseUrl,
           model: config.deepseek.model,
+          name: 'deepseek',
         })
       : new OpenRouterProvider({
           apiKey: config.dashscope.apiKey,
           baseUrl: config.dashscope.baseUrl,
           model: config.dashscope.model,
+          name: 'dashscope',
         });
 const fallbackLlm =
   config.llmFallback.provider === 'openrouter'
@@ -243,12 +246,14 @@ const fallbackLlm =
         apiKey: config.openrouter.apiKey,
         baseUrl: config.openrouter.baseUrl,
         model: config.llmFallback.model ?? config.openrouter.model,
+        name: 'openrouter',
       })
     : config.llmFallback.provider === 'dashscope'
       ? new OpenRouterProvider({
           apiKey: config.dashscope.apiKey,
           baseUrl: config.dashscope.baseUrl,
           model: config.llmFallback.model ?? config.dashscope.model,
+          name: 'dashscope',
         })
       : undefined;
 const llm = new FallbackLLMProvider({

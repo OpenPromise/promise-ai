@@ -32,6 +32,8 @@ export interface OpenRouterProviderOptions {
   baseUrl?: string;
   model?: string;
   siteTitle?: string;
+  /** 展示名（用于错误消息）：openrouter / deepseek / dashscope / grok… */
+  name?: string;
 }
 
 interface RawChatResponse {
@@ -67,7 +69,7 @@ function toTokenUsage(raw: {
 }
 
 export class OpenRouterProvider implements LLMProvider {
-  readonly name = 'openrouter';
+  readonly name: string;
   readonly configured: boolean;
   readonly model: string;
   readonly #apiKey: string | undefined;
@@ -75,6 +77,7 @@ export class OpenRouterProvider implements LLMProvider {
   readonly #siteTitle: string;
 
   constructor(options: OpenRouterProviderOptions = {}) {
+    this.name = options.name ?? 'openrouter';
     this.#apiKey = options.apiKey?.trim() || undefined;
     this.configured = Boolean(this.#apiKey);
     this.model = options.model?.trim() || 'x-ai/grok-4.6';
@@ -84,7 +87,7 @@ export class OpenRouterProvider implements LLMProvider {
 
   async *chat(input: ChatInput): AsyncIterable<ChatChunk> {
     if (!this.#apiKey) {
-      throw new OpenRouterConfigError('OPENROUTER_API_KEY is not configured');
+      throw new OpenRouterConfigError(`${this.name} API key is not configured`);
     }
 
     const response = await this.#post(
@@ -138,7 +141,7 @@ export class OpenRouterProvider implements LLMProvider {
 
   async generate(input: ChatInput): Promise<GenerateResult> {
     if (!this.#apiKey) {
-      throw new OpenRouterConfigError('OPENROUTER_API_KEY is not configured');
+      throw new OpenRouterConfigError(`${this.name} API key is not configured`);
     }
 
     const response = await this.#post(
@@ -190,7 +193,7 @@ export class OpenRouterProvider implements LLMProvider {
       });
     } catch (error) {
       throw new OpenRouterApiError(
-        `OpenRouter network error: ${error instanceof Error ? error.message : String(error)}`,
+        `${this.name} network error: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
 
@@ -202,7 +205,7 @@ export class OpenRouterProvider implements LLMProvider {
         // ignore body read failure
       }
       throw new OpenRouterApiError(
-        `OpenRouter API error ${response.status}${detail ? `: ${detail.slice(0, 500)}` : ''}`,
+        `${this.name} API error ${response.status}${detail ? `: ${detail.slice(0, 500)}` : ''}`,
         response.status,
       );
     }
