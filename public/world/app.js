@@ -142,14 +142,47 @@ roomGroup.add(painting);
 
 scene.add(roomGroup);
 
+// 飘浮尘埃粒子（让房间有"空气感"）
+const DUST_COUNT = 70;
+const dustPositions = new Float32Array(DUST_COUNT * 3);
+for (let i = 0; i < DUST_COUNT; i++) {
+  dustPositions[i * 3] = (Math.random() - 0.5) * 6;
+  dustPositions[i * 3 + 1] = 0.2 + Math.random() * 2.4;
+  dustPositions[i * 3 + 2] = (Math.random() - 0.5) * 6;
+}
+const dustGeo = new THREE.BufferGeometry();
+dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPositions, 3));
+const dustMat = new THREE.PointsMaterial({
+  color: 0xfff2d8,
+  size: 0.022,
+  transparent: true,
+  opacity: 0.55,
+});
+const dust = new THREE.Points(dustGeo, dustMat);
+scene.add(dust);
+
 // ---------- Avatar Controller（她） ----------
 const avatar = {
   vrm: null,
   clock: new THREE.Clock(),
-  blinkTimer: 2,
+  blinkTimer: 1.2,
   blinkPhase: 'idle',
   breathPhase: 0,
+  gesture: null,
+  gestureTime: 0,
+  pose: { headX: 0 },
 };
+
+// 周期性小动作：让她看起来"有自己的想法"，每 5~12 秒随机触发一个
+const IDLE_GESTURES = [
+  { headX: 0.3, headY: 0.0, label: '低头看书' },
+  { headX: 0.16, headY: 0.24, label: '望向窗外' },
+  { headX: 0.0, headY: -0.32, label: '向右看看' },
+  { headX: 0.0, headY: 0.32, label: '向左看看' },
+  { headX: 0.22, headY: -0.12, label: '整理思绪' },
+  { headX: -0.12, headY: 0.18, label: '抬头舒展' },
+];
+const GESTURE_DURATION = 1.8;
 
 function setExpression(presetName, weight) {
   const vrm = avatar.vrm;
@@ -170,21 +203,51 @@ function setExpression(presetName, weight) {
 function updateAvatar(dt) {
   const vrm = avatar.vrm;
   if (!vrm) return;
+  const t = avatar.clock.elapsedTime;
+
+  // 眨眼：2~5.5 秒一次，闭眼 0.15 秒
   avatar.blinkTimer -= dt;
   if (avatar.blinkTimer <= 0) {
     avatar.blinkPhase = avatar.blinkPhase === 'idle' ? 'closing' : 'idle';
-    avatar.blinkTimer = avatar.blinkPhase === 'closing' ? 0.12 : 1.8 + Math.random() * 3;
+    avatar.blinkTimer = avatar.blinkPhase === 'closing' ? 0.15 : 2 + Math.random() * 3.5;
   }
   setExpression('blink', avatar.blinkPhase === 'closing' ? 1 : 0);
-  setExpression('happy', 0.12);
-  avatar.breathPhase += dt * 1.2;
-  const breath = Math.sin(avatar.breathPhase) * 0.012;
+
+  // 小动作调度：空闲时随机触发，平滑进出
+  if (!avatar.gesture && avatar.gestureTime <= 0) {
+    if (Math.random() < dt / 8) {
+      avatar.gesture = IDLE_GESTURES[Math.floor(Math.random() * IDLE_GESTURES.length)];
+      avatar.gestureTime = GESTURE_DURATION;
+    }
+  } else if (avatar.gesture) {
+    avatar.gestureTime -= dt;
+    if (avatar.gestureTime <= 0) avatar.gesture = null;
+  }
+  let gestureX = 0;
+  let gestureY = 0;
+  if (avatar.gesture) {
+    const p = 1 - Math.max(0, avatar.gestureTime) / GESTURE_DURATION;
+    const ease = p < 0.18 ? p / 0.18 : p > 0.82 ? (1 - p) / 0.18 : 1;
+    gestureX = avatar.gesture.headX * ease;
+    gestureY = avatar.gesture.headY * ease;
+  }
+
+  // 呼吸：胸腔起伏，幅度更明显
+  avatar.breathPhase += dt * 1.3;
+  const breath = Math.sin(avatar.breathPhase) * 0.025;
   const chest = vrm.humanoid?.getNormalizedBoneNode?.('chest');
   if (chest) chest.rotation.x = breath * 0.6;
+  // 身体轻摆（自然站立感）
+  const hips = vrm.humanoid?.getNormalizedBoneNode?.('hips');
+  if (hips) hips.rotation.z = Math.sin(t * 0.5) * 0.02;
+  // 头部：扫视 + 小动作 + 活动姿态
   const head = vrm.humanoid?.getNormalizedBoneNode?.('head');
   if (head) {
-    head.rotation.y = Math.sin(avatar.breathPhase * 0.22) * 0.12;
-    head.rotation.z = Math.sin(avatar.breathPhase * 0.14) * 0.02;
+    const lookY = Math.sin(t * 0.45) * 0.14; // 左右张望
+    const lookX = Math.sin(t * 0.32) * 0.04; // 微微点头
+    head.rotation.y = lookY + gestureY;
+    head.rotation.x = lookX + gestureX + (avatar.pose?.headX ?? 0);
+    head.rotation.z = Math.sin(t * 0.2) * 0.03;
   }
   vrm.update(dt);
 }
@@ -223,8 +286,11 @@ function renderState(state) {
   const a = state.activity;
   if (a) {
     ACTIVITY_EL.textContent = `${a.emoji} 在${a.location}${a.label}`;
+    // 活动影响姿态：看书/工作时微微低头
+    avatar.pose = a.kind === 'reading' || a.kind === 'working' ? { headX: -0.14 } : { headX: 0 };
   } else {
     ACTIVITY_EL.textContent = '✨ 正在安顿自己…';
+    avatar.pose = { headX: 0 };
   }
   const now = new Date();
   META_EL.innerHTML =
@@ -290,6 +356,14 @@ function animate() {
   requestAnimationFrame(animate);
   const dt = Math.min(avatar.clock.getDelta(), 0.05);
   if (avatar.vrm) updateAvatar(dt);
+  // 房间氛围：尘埃漂移 + 窗户光呼吸
+  dust.rotation.y += dt * 0.015;
+  dust.position.y = Math.sin(avatar.clock.elapsedTime * 0.15) * 0.06;
+  windowGlow.material.color.setHSL(
+    0.56,
+    0.55,
+    0.48 + Math.sin(avatar.clock.elapsedTime * 0.3) * 0.14,
+  );
   controls.update();
   renderer.render(scene, camera);
 }
