@@ -3,7 +3,13 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { ILinkClient, WeixinMessage } from './ilink.js';
-import { chatOnce, consumeSse, parseApprovalText, runWeixinRelay } from './relay.js';
+import {
+  chatOnce,
+  consumeSse,
+  parseApprovalText,
+  runWeixinRelay,
+  takeEarlySegment,
+} from './relay.js';
 import type { AccountState } from './state.js';
 
 function sseResponse(lines: string[]): Response {
@@ -23,7 +29,9 @@ describe('consumeSse', () => {
       },
     });
     const lines: string[] = [];
-    await consumeSse(new Response(stream), (line) => lines.push(line));
+    await consumeSse(new Response(stream), (line) => {
+      lines.push(line);
+    });
     expect(lines.filter((line) => line.trim().length > 0)).toEqual([
       'data: {"a":1}',
       'data: {"b":2}',
@@ -79,6 +87,43 @@ describe('parseApprovalText', () => {
     expect(parseApprovalText('no')).toBe('deny');
     expect(parseApprovalText('帮我看看')).toBeUndefined();
     expect(parseApprovalText('')).toBeUndefined();
+  });
+});
+
+describe('takeEarlySegment', () => {
+  it('按 \\n\\n 段落边界提前切出完整段落，尾部半段留缓冲', () => {
+    expect(takeEarlySegment('第一段\n\n第二段，未完', false)).toEqual({
+      send: '第一段',
+      keep: '第二段，未完',
+    });
+    expect(takeEarlySegment('收到，已派给小黑。\n\n', false)).toEqual({
+      send: '收到，已派给小黑。',
+      keep: '',
+    });
+  });
+
+  it('首段达最小长度且有句末标点时，切在第一个完整句末（关键节点短消息）', () => {
+    expect(takeEarlySegment('收到，已派给小黑。接下来我会继续。', false)).toEqual({
+      send: '收到，已派给小黑。',
+      keep: '接下来我会继续。',
+    });
+  });
+
+  it('首段过短、或已提前发过首条时，不提前切（避免碎片刷屏）', () => {
+    expect(takeEarlySegment('好的。继续', false)).toBeUndefined();
+    expect(takeEarlySegment('收到，已派给小黑。', true)).toBeUndefined();
+  });
+
+  it('没有任何句末标点时保持缓冲，不提前切', () => {
+    expect(takeEarlySegment('没有任何标点的长文本', false)).toBeUndefined();
+  });
+
+  it('超过阈值的长文本按最后一个句末标点切分', () => {
+    const pending = `${'这是很长的一段话，'.repeat(50)}最后一句。`;
+    const seg = takeEarlySegment(pending, true);
+    expect(seg).toBeDefined();
+    expect(seg!.send).toBe(pending);
+    expect(seg!.keep).toBe('');
   });
 });
 
@@ -388,6 +433,194 @@ describe('runWeixinRelay', () => {
     expect(chatBody?.message).toContain('[用户发来文件：报告.pdf');
     expect(chatBody?.message).toContain('已保存到文件库');
     expect(sent[0]?.item_list?.[0]?.text_item?.text).toBe('文件已收到');
+
+    controller.abort();
+    await relayPromise;
+  });
+
+  it('多段落回复：完整段落提前发送，剩余在 chat.done 补发', async () => {
+    const sent: WeixinMessage[] = [];
+    const controller = new AbortController();
+    let polls = 0;
+
+    const client = {
+      baseUrl: 'https://ilinkai.weixin.qq.com',
+      async notifyStart() {},
+      async notifyStop() {},
+      async getUpdates(_buf: string, options: { signal?: AbortSignal }) {
+        polls += 1;
+        if (polls === 1) {
+          return {
+            ret: 0,
+            get_updates_buf: 'buf-2',
+            msgs: [
+              {
+                from_user_id: 'wx_peer',
+                message_type: 1,
+                message_state: 2,
+                context_token: 'ctx',
+                run_id: 'r1',
+                item_list: [{ type: 1, text_item: { text: '查一下任务' } }],
+              },
+            ],
+          };
+        }
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, 60_000);
+          options.signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            resolve(undefined);
+          });
+        });
+        throw new Error('aborted');
+      },
+      async getConfig() {
+        return { ret: 0, typing_ticket: 'ticket' };
+      },
+      async sendTyping() {},
+      async sendMessage(msg: WeixinMessage) {
+        sent.push(msg);
+      },
+    } as unknown as ILinkClient;
+
+    const state: AccountState = {
+      token: 'tok',
+      baseUrl: 'https://ilinkai.weixin.qq.com',
+      accountId: 'bot-1',
+      peerSessions: {},
+      savedAt: new Date().toISOString(),
+    };
+
+    const fetchImpl = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith('/api/sessions')) {
+        return new Response(JSON.stringify({ id: 'session-abc' }), { status: 201 });
+      }
+      if (u.endsWith('/chat')) {
+        return sseResponse([
+          JSON.stringify({ type: 'chat.token', payload: { delta: '收到，已派给小黑。' } }),
+          JSON.stringify({ type: 'chat.token', payload: { delta: '\n\n我正在处理' } }),
+          JSON.stringify({ type: 'chat.token', payload: { delta: '，请稍候。' } }),
+        ]);
+      }
+      return new Response('{}', { status: 200 });
+    });
+
+    const relayPromise = runWeixinRelay(
+      {
+        agentUrl: 'http://agent:3000',
+        client,
+        state,
+        persist: vi.fn(async () => {}),
+        log: () => {},
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      },
+      controller.signal,
+    );
+
+    // 等两段都发出：首段提前发，剩余在 chat.done 补发
+    const deadline = Date.now() + 5000;
+    while (sent.length < 2 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const texts = sent.map((m) => m.item_list?.[0]?.text_item?.text);
+    expect(texts).toEqual(['收到，已派给小黑。', '我正在处理，请稍候。']);
+
+    controller.abort();
+    await relayPromise;
+  });
+
+  it('提前分段发送失败不影响最终送达（内容补发，不重复）', async () => {
+    const sent: WeixinMessage[] = [];
+    const controller = new AbortController();
+    let polls = 0;
+    let sendCalls = 0;
+
+    const client = {
+      baseUrl: 'https://ilinkai.weixin.qq.com',
+      async notifyStart() {},
+      async notifyStop() {},
+      async getUpdates(_buf: string, options: { signal?: AbortSignal }) {
+        polls += 1;
+        if (polls === 1) {
+          return {
+            ret: 0,
+            get_updates_buf: 'buf-2',
+            msgs: [
+              {
+                from_user_id: 'wx_peer',
+                message_type: 1,
+                message_state: 2,
+                context_token: 'ctx',
+                run_id: 'r1',
+                item_list: [{ type: 1, text_item: { text: '查一下任务' } }],
+              },
+            ],
+          };
+        }
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, 60_000);
+          options.signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            resolve(undefined);
+          });
+        });
+        throw new Error('aborted');
+      },
+      async getConfig() {
+        return { ret: 0, typing_ticket: 'ticket' };
+      },
+      async sendTyping() {},
+      async sendMessage(msg: WeixinMessage) {
+        sendCalls += 1;
+        // 第一次（提前分段发送）失败，之后（最终补发）成功
+        if (sendCalls === 1) throw new Error('simulated send failure');
+        sent.push(msg);
+      },
+    } as unknown as ILinkClient;
+
+    const state: AccountState = {
+      token: 'tok',
+      baseUrl: 'https://ilinkai.weixin.qq.com',
+      accountId: 'bot-1',
+      peerSessions: {},
+      savedAt: new Date().toISOString(),
+    };
+
+    const fetchImpl = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith('/api/sessions')) {
+        return new Response(JSON.stringify({ id: 'session-abc' }), { status: 201 });
+      }
+      if (u.endsWith('/chat')) {
+        return sseResponse([
+          JSON.stringify({ type: 'chat.token', payload: { delta: '收到，已派给小黑。' } }),
+          JSON.stringify({ type: 'chat.token', payload: { delta: '\n\n最终结果。' } }),
+        ]);
+      }
+      return new Response('{}', { status: 200 });
+    });
+
+    const relayPromise = runWeixinRelay(
+      {
+        agentUrl: 'http://agent:3000',
+        client,
+        state,
+        persist: vi.fn(async () => {}),
+        log: () => {},
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      },
+      controller.signal,
+    );
+
+    // 提前发送失败被吞掉，最终一次性补发全部内容（不重复、不丢失）
+    const deadline = Date.now() + 5000;
+    while (sent.length === 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.item_list?.[0]?.text_item?.text).toBe('收到，已派给小黑。\n\n最终结果。');
+    expect(sendCalls).toBe(2);
 
     controller.abort();
     await relayPromise;

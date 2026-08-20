@@ -25,9 +25,64 @@ const MAX_CONSECUTIVE_FAILURES = 3;
 const RETRY_DELAY_MS = 2_000;
 const BACKOFF_DELAY_MS = 30_000;
 
+/** 提前推送分段策略常量（见 takeEarlySegment）。 */
+const PARAGRAPH_SEPARATOR = '\n\n';
+/** 首段最小长度：低于它不提前发，避免「好的。」这类碎片消息刷屏。 */
+const FIRST_SEGMENT_MIN_CHARS = 6;
+/** 长文本兜底切分时，切点之后的句子至少保留的字数，避免切出碎片。 */
+const SEGMENT_MIN_CHARS = 20;
+/** 无段落边界时，缓冲超过该长度即按句末标点提前切一次。 */
+const FLUSH_THRESHOLD_CHARS = 400;
+
 export interface ChatReply {
   text: string;
   error?: string;
+  /** 已通过 onSegment 提前发送的原始文本前缀（最终发送时需减去，避免重复）。 */
+  preflushed?: string;
+}
+
+/**
+ * 从待发送缓冲中取出一段「已完整、可提前发送」的文本。
+ * 规则（按优先级）：
+ *   1. 段落边界：出现 \n\n 时，把 \n\n 之前的完整内容整段提前发（尾部半段留缓冲）；
+ *   2. 首段：尚未提前发过首条且已积累到最小长度时，切在第一个完整句末，
+ *      让「收到，已派给小黑。」这类关键节点短消息立即送达；
+ *   3. 长文本兜底：无段落边界但缓冲超过阈值时，从最后一个句末标点切开，
+ *      避免长回复全程静默。
+ * 不满足任何规则时返回 undefined（继续累积，最终随 chat.done 一次性发出，
+ * 保持原有无分段文本的行为不变）。切分只落在句末标点/换行处，不拆半句。
+ */
+export function takeEarlySegment(
+  pending: string,
+  alreadySentFirst: boolean,
+): { send: string; keep: string } | undefined {
+  const para = pending.lastIndexOf(PARAGRAPH_SEPARATOR);
+  if (para >= 0) {
+    const send = pending.slice(0, para).trim();
+    if (send) return { send, keep: pending.slice(para + PARAGRAPH_SEPARATOR.length) };
+  }
+  if (!alreadySentFirst && pending.length >= FIRST_SEGMENT_MIN_CHARS) {
+    const end = findSentenceEnd(pending, FIRST_SEGMENT_MIN_CHARS - 1, false);
+    if (end >= 0) {
+      return { send: pending.slice(0, end + 1).trim(), keep: pending.slice(end + 1) };
+    }
+  }
+  if (pending.length >= FLUSH_THRESHOLD_CHARS) {
+    const end = findSentenceEnd(pending, SEGMENT_MIN_CHARS - 1, true);
+    if (end >= 0) {
+      return { send: pending.slice(0, end + 1).trim(), keep: pending.slice(end + 1) };
+    }
+  }
+  return undefined;
+}
+
+/** 查找 >= minIndex 的第一个句末标点下标（includeNewline 时换行也算边界）。 */
+function findSentenceEnd(text: string, minIndex: number, includeNewline: boolean): number {
+  const re = includeNewline ? /[。！？!?；;.!?\n]/ : /[。！？!?；;.!?]/;
+  for (let i = minIndex; i < text.length; i += 1) {
+    if (re.test(text[i]!)) return i;
+  }
+  return -1;
 }
 
 interface PendingApproval {
@@ -45,7 +100,10 @@ const inflightSessions = new Set<string>();
 
 /** 解析微信文字授权答复：允许 / 拒绝 / 未识别。 */
 export function parseApprovalText(text: string): 'allow' | 'deny' | undefined {
-  const t = text.trim().replace(/[。！!？?，,、\s]+$/g, '').toLowerCase();
+  const t = text
+    .trim()
+    .replace(/[。！!？?，,、\s]+$/g, '')
+    .toLowerCase();
   if (/^(允许|同意|可以|好|行|是|继续|执行|确认|yes|ok|approve|allow)$/.test(t)) {
     return 'allow';
   }
@@ -66,6 +124,8 @@ export async function chatOnce(
     log?: (message: string) => void;
     /** 权限请求到达时回调（发送微信授权提示）。 */
     onPermissionRequest?: (info: { requestId: string; toolName: string }) => void;
+    /** 检测到完整段落/句子时回调：提前发送该段。reject 视为发送失败，内容保留到最终补发。 */
+    onSegment?: (segmentText: string) => Promise<void>;
   } = {},
 ): Promise<ChatReply> {
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -84,10 +144,14 @@ export async function chatOnce(
   }
 
   let text = '';
+  let preflushed = '';
   let error: string | undefined;
   let lastRequestId: string | undefined;
+  /** 尚未提前发送的原始文本缓冲（始终是 text 的后缀）。 */
+  let earlyBuffer = '';
+  let alreadySentFirst = false;
   try {
-    await consumeSse(response, (line) => {
+    await consumeSse(response, async (line) => {
       const trimmed = line.trim();
       if (!trimmed.startsWith('data: ')) return;
       let envelope: {
@@ -104,9 +168,28 @@ export async function chatOnce(
         return;
       }
       switch (envelope.type) {
-        case 'chat.token':
+        case 'chat.token': {
           text += envelope.payload?.delta ?? '';
+          earlyBuffer += envelope.payload?.delta ?? '';
+          // 段落感知提前推送：完整段落/句子即时发出，避免整段回复攒到最后。
+          while (true) {
+            const seg = takeEarlySegment(earlyBuffer, alreadySentFirst);
+            if (!seg) break;
+            alreadySentFirst = true;
+            earlyBuffer = seg.keep;
+            if (!seg.send) continue;
+            try {
+              await options.onSegment?.(seg.send);
+              preflushed += seg.send;
+            } catch (err) {
+              // 提前发送失败不阻塞回复：吞掉错误，内容保留到 chat.done 一次性补发。
+              options.log?.(
+                `[weixin] 提前分段发送失败：${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+          }
           break;
+        }
         case 'permission.request': {
           const requestId = envelope.payload?.request?.requestId ?? '';
           const toolName = envelope.payload?.request?.toolName ?? '';
@@ -149,13 +232,13 @@ export async function chatOnce(
     }
   }
 
-  return { text, error };
+  return { text, preflushed, error };
 }
 
-/** 逐行消费 SSE 响应（跨 chunk 处理半行）。 */
+/** 逐行消费 SSE 响应（跨 chunk 处理半行；onLine 可为异步，逐行 await 保证顺序）。 */
 export async function consumeSse(
   response: Response,
-  onLine: (line: string) => void,
+  onLine: (line: string) => void | Promise<void>,
 ): Promise<void> {
   if (!response.body) return;
   const reader = response.body.getReader();
@@ -168,7 +251,7 @@ export async function consumeSse(
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';
-      for (const line of lines) onLine(line);
+      for (const line of lines) await onLine(line);
     }
   } finally {
     reader.releaseLock();
@@ -363,9 +446,23 @@ async function handleInboundMessage(msg: WeixinMessage, options: RelayOptions): 
             )
             .catch(() => {});
         },
+        // 段落感知提前推送：完整段落/句子到达即发，不再攒到 chat.done。
+        // 失败由 chatOnce 吞掉（内容保留到最终补发），这里直接抛出让其记账。
+        onSegment: async (segmentText) => {
+          await client.sendMessage(
+            buildReplyMessage({
+              to: peer,
+              text: markdownToPlain(segmentText),
+              contextToken: msg.context_token,
+              runId: msg.run_id,
+            }),
+          );
+        },
       });
       const replyParts: string[] = [];
-      if (reply.text) replyParts.push(markdownToPlain(reply.text));
+      // 已提前发送的前缀不再重复发送，只补发剩余部分。
+      const remaining = reply.text.slice(reply.preflushed?.length ?? 0);
+      if (remaining.trim()) replyParts.push(markdownToPlain(remaining));
       if (reply.error) replyParts.push(`❌ ${reply.error}`);
       if (replyParts.length === 0) return;
       for (const chunk of splitLongText(replyParts.join('\n\n'))) {
@@ -454,11 +551,7 @@ export async function runWeixinRelay(
       for (const msg of resp.msgs ?? []) {
         try {
           // 单条消息处理护栏：下载/视觉/对话任一环节卡死都不能阻塞轮询。
-          await withTimeout(
-            handleInboundMessage(msg, options),
-            90_000,
-            '处理微信消息超时',
-          );
+          await withTimeout(handleInboundMessage(msg, options), 90_000, '处理微信消息超时');
         } catch (error) {
           log?.(`[weixin] 处理消息失败：${error instanceof Error ? error.message : String(error)}`);
         }
