@@ -13,12 +13,14 @@ import {
   createResilientEmbedder,
   InMemoryMemoryStore,
   InMemoryAvatarStore,
+  InMemoryWorldStore,
   InMemoryTimelineStore,
   InMemorySessionStore,
   InMemoryTaskStore,
   InMemoryProfileStore,
   PostgresMemoryStore,
   PostgresAvatarStore,
+  PostgresWorldStore,
   PostgresProfileStore,
   PostgresSessionStore,
   PostgresTaskStore,
@@ -42,6 +44,9 @@ import { ProfileIngestor } from './services/profile-ingestor.js';
 import { createTimelineTools } from './services/timeline-tools.js';
 import { createAvatarTools } from './services/avatar-tools.js';
 import { AvatarEventBus } from './services/avatar-events.js';
+import { createWorldTools } from './services/world-tools.js';
+import { WorldEventBus } from './services/world-events.js';
+import { WorldService } from './services/world-service.js';
 import { HookService } from './services/hook-service.js';
 
 const config = loadConfig();
@@ -117,6 +122,7 @@ let taskStore: InMemoryTaskStore | PostgresTaskStore = new InMemoryTaskStore();
 let profileStore: InMemoryProfileStore | PostgresProfileStore = new InMemoryProfileStore();
 let timelineStore: InMemoryTimelineStore | PostgresTimelineStore = new InMemoryTimelineStore();
 let avatarStore: InMemoryAvatarStore | PostgresAvatarStore = new InMemoryAvatarStore();
+let worldStore: InMemoryWorldStore | PostgresWorldStore = new InMemoryWorldStore();
 if (config.databaseUrl) {
   const postgresMemory = new PostgresMemoryStore({
     connectionString: config.databaseUrl,
@@ -126,17 +132,20 @@ if (config.databaseUrl) {
   const postgresProfiles = new PostgresProfileStore({ connectionString: config.databaseUrl });
   const postgresTimeline = new PostgresTimelineStore({ connectionString: config.databaseUrl });
   const postgresAvatar = new PostgresAvatarStore({ connectionString: config.databaseUrl });
+  const postgresWorld = new PostgresWorldStore({ connectionString: config.databaseUrl });
   try {
     await postgresMemory.init();
     await postgresTasks.init();
     await postgresProfiles.init();
     await postgresTimeline.init();
     await postgresAvatar.init();
+    await postgresWorld.init();
     memory = postgresMemory;
     taskStore = postgresTasks;
     profileStore = postgresProfiles;
     timelineStore = postgresTimeline;
     avatarStore = postgresAvatar;
+    worldStore = postgresWorld;
     memoryBackend = 'postgres';
     console.log(`[memory] embedding: dashscope/${memoryEmbedder.dimensions ?? 'local'}`);
     console.log(`[memory] using postgres (${config.databaseUrl.split('@')[1] ?? ''})`);
@@ -303,6 +312,7 @@ const conversation = new ConversationService({
   memory,
   profile: profileStore,
   timeline: timelineStore,
+  worldStore,
   profileIngest: (message) => void profileIngestor.ingest(message),
   autoApproveAll: config.autoApproveAll,
 });
@@ -345,6 +355,17 @@ for (const tool of createAvatarTools({
   store: avatarStore,
   onChange: (snapshot) => avatarEventBus.publish(snapshot),
 })) {
+  toolRegistry.register(tool);
+}
+// 「她的世界」：世界状态 + 活动循环 + 工具（AI Town world model 单角色版）。
+const worldEventBus = new WorldEventBus();
+const worldService = new WorldService({
+  store: worldStore,
+  timeline: timelineStore,
+  bus: worldEventBus,
+});
+worldService.start();
+for (const tool of createWorldTools({ store: worldStore, service: worldService })) {
   toolRegistry.register(tool);
 }
 // AI 自身审美种子：persona 主题（夜猫子/独立）初始化为最小化/科技倾向，
@@ -441,6 +462,9 @@ const app = buildApp({
   hostBootedRecently,
   avatarStore,
   avatarEvents: avatarEventBus,
+  worldStore,
+  worldService,
+  worldEvents: worldEventBus,
   publicDir: fileURLToPath(new URL('../../../public', import.meta.url)),
   createVoice,
   createTTS,
@@ -476,6 +500,7 @@ const shutdown = async (signal: string): Promise<void> => {
   app.log.info({ signal }, 'shutting down agent-server');
   taskService.stop();
   reminderService.stop();
+  worldService.stop();
   await app.close();
   process.exit(0);
 };

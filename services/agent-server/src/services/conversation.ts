@@ -7,7 +7,7 @@ import type {
   LLMToolCallWire,
   LLMProvider,
 } from '@personal-ai/llm';
-import type { ProfileStore, SessionStore, TimelineStore } from '@personal-ai/memory';
+import type { ProfileStore, SessionStore, TimelineStore, WorldStore } from '@personal-ai/memory';
 import type { MemoryStore } from '@personal-ai/memory';
 import { createEnvelope } from '@personal-ai/protocol';
 import type { ProtocolEnvelope } from '@personal-ai/protocol';
@@ -45,6 +45,8 @@ export interface ConversationServiceDeps {
   profile?: ProfileStore;
   /** 事件时间线：记录/注入"我们之间发生过什么"。 */
   timeline?: TimelineStore;
+  /** 「她的世界」状态：注入"她现在在哪、在做什么"，让世界与对话不脱节。 */
+  worldStore?: WorldStore;
   /** 对话正常结束后异步抽取画像（Mem0 两阶段思路）；不阻塞回复。 */
   profileIngest?: (userMessage: string) => void;
   /** 全权限模式：所有工具（含 L2/L3）自动执行，不弹确认。 */
@@ -63,6 +65,7 @@ const GOAL_PROMPT_PREFIX = '以下是用户的长期目标（goal，请持续关
 const FEEDBACK_PROMPT_PREFIX = '以下是近期反馈与教训（[feedback]，请避免重蹈覆辙）：';
 const PROFILE_PROMPT_PREFIX = '以下是用户画像（跨会话记住的用户事实/偏好/习惯，请主动贴合）：';
 const TIMELINE_PROMPT_PREFIX = '以下是最近发生的事件时间线（供回忆上下文，按时间倒序）：';
+const WORLD_PROMPT_PREFIX = '以下是你在「她的世界」里的实时状态（当前正在做的事，回答"你在干嘛/你在哪"时直接引用）：';
 const GOAL_CONTEXT_LIMIT = 5;
 const FEEDBACK_CONTEXT_LIMIT = 3;
 const PROFILE_CONTEXT_LIMIT = 30;
@@ -191,6 +194,7 @@ export async function collectPersistentContext(
   memory: MemoryStore,
   profile?: ProfileStore,
   timeline?: TimelineStore,
+  world?: WorldStore,
 ): Promise<string | null> {
   const entries = await memory.list();
   const goals = entries
@@ -228,6 +232,14 @@ export async function collectPersistentContext(
         `${TIMELINE_PROMPT_PREFIX}\n${events
           .map((event) => `- [${event.type}] ${event.createdAt.slice(0, 16)} ${event.summary}`)
           .join('\n')}`,
+      );
+    }
+  }
+  if (world) {
+    const worldState = await world.getWorld();
+    if (worldState?.activity) {
+      blocks.push(
+        `${WORLD_PROMPT_PREFIX}${worldState.activity.emoji} 她在${worldState.activity.location}${worldState.activity.label}（持续到 ${worldState.activity.until.slice(11, 16)}）`,
       );
     }
   }
@@ -335,6 +347,7 @@ export class ConversationService {
   readonly #memory: MemoryStore;
   readonly #profile?: ProfileStore;
   readonly #timeline?: TimelineStore;
+  readonly #worldStore?: WorldStore;
   readonly #profileIngest?: (userMessage: string) => void;
   readonly #autoApproveAll: boolean;
 
@@ -346,6 +359,7 @@ export class ConversationService {
     this.#memory = deps.memory;
     this.#profile = deps.profile;
     this.#timeline = deps.timeline;
+    this.#worldStore = deps.worldStore;
     this.#profileIngest = deps.profileIngest;
     this.#autoApproveAll = deps.autoApproveAll ?? false;
   }
@@ -386,7 +400,7 @@ export class ConversationService {
       return toolNameByWire.get(wireName) ?? wireName;
     };
     const [persistentContext, relevantMemories] = await Promise.all([
-      collectPersistentContext(this.#memory, this.#profile, this.#timeline),
+      collectPersistentContext(this.#memory, this.#profile, this.#timeline, this.#worldStore),
       this.#memory.search(input.userMessage, MEMORY_LIMIT),
     ]);
     let memoryInjected = false;

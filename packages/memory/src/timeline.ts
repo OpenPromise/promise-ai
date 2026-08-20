@@ -15,6 +15,7 @@ export type TimelineEventType =
   | 'profile'
   | 'cloud'
   | 'system'
+  | 'world'
   | 'note';
 
 export interface TimelineEvent {

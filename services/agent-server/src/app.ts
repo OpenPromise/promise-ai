@@ -11,6 +11,7 @@ import type {
   ProfileStore,
   SessionStore,
   TimelineStore,
+  WorldStore,
 } from '@personal-ai/memory';
 import type { QwenRealtimeClient } from '@personal-ai/qwen-realtime';
 import type { ToolRegistry } from '@personal-ai/tools';
@@ -23,7 +24,10 @@ import { registerDesktopRoutes } from './routes/desktop.js';
 import { registerEventRoutes } from './routes/events.js';
 import { registerHookRoutes } from './routes/hooks.js';
 import { registerAvatarRoutes } from './routes/avatar.js';
+import { registerWorldRoutes } from './routes/world.js';
 import type { AvatarEventBus } from './services/avatar-events.js';
+import type { WorldEventBus } from './services/world-events.js';
+import type { WorldService } from './services/world-service.js';
 import { ApprovalRegistry } from './services/approval.js';
 import { ConversationService } from './services/conversation.js';
 import type { ReminderDueEvent } from './services/reminder-service.js';
@@ -67,6 +71,12 @@ export interface AppDeps {
   avatarStore?: AvatarStore;
   /** Avatar 状态变更事件总线。 */
   avatarEvents?: AvatarEventBus;
+  /** 「她的世界」状态存储（可选，配置后注册 /world 与 API）。 */
+  worldStore?: WorldStore;
+  /** 世界活动循环服务。 */
+  worldService?: WorldService;
+  /** 世界状态变更事件总线。 */
+  worldEvents?: WorldEventBus;
   /** public/ 静态资源目录（avatar 页面/模型）。 */
   publicDir?: string;
   /** 进程启动时间戳：用于重启完成通知（开机自启闭环）。 */
@@ -124,6 +134,15 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       store: deps.avatarStore,
       publicDir: deps.publicDir,
       avatarEvents: deps.avatarEvents,
+    });
+  }
+  if (deps.worldStore && deps.publicDir) {
+    registerWorldRoutes(app, {
+      store: deps.worldStore,
+      service: deps.worldService!,
+      timeline: deps.timeline,
+      publicDir: deps.publicDir,
+      worldEvents: deps.worldEvents,
     });
   }
   registerSessionRoutes(app, {

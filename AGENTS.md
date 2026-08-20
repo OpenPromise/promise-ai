@@ -13,6 +13,15 @@
    RRF、重启恢复上报、反馈台账与启动摘要等设计，不复制其 Rust 代码）
 8. Prime Agent（RLM/Continual Harness，仅借鉴持久目标、预算化自主模式、
    证据驱动的 /refine 持续改进与回滚快照等设计，不复制其代码）
+9. AI Town（a16z-infra/ai-town，仅借鉴世界模型 + Agent tick 行动循环、
+   Operation 异步队列/超时、对话状态机、记忆摘要/反思/加权检索设计，
+   不复制其 Convex/PixiJS 外壳）
+10. Project AIRI（moeru-ai/airi，仅借鉴数字生命体形态：多端 Stage、
+    VRM 呈现、游戏世界代理（Minecraft/Factorio）与记忆插件设计，
+    不复制其代码）
+11. Generative Agents（joonspk-research/generative_agents，仅借鉴
+    memory stream / recency-importance-relevance 检索 / reflection /
+    每日计划架构思想，不复制其 Python 代码）
 
 ## 参考原则
 
