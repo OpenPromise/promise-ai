@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.14.32] - 2026-08-20
+
+### 修复全权限模式失效根因
+
+- **根因**：会话路由使用 app.ts 内部自建的 ConversationService（未传
+  autoApproveAll），导致 L2/L3 仍弹确认——即使 /health 显示
+  autoApproveAll=true
+- **修复**：app.ts 主会话补 `autoApproveAll: config.autoApproveAll`；
+  实测 terminal.run（L3）直接执行、零权限请求
+- **部署提速**：Dockerfile 重排——dsh 全局安装移到源码复制之前，代码改动
+  不再触发 dsh 重装（此前每次部署都慢在 dsh 下载）
+- **可观测**：启动日志打印 config 关键开关；/health 暴露
+  autoApproveAll / voiceEnabled / voiceTtsEnabled
+
 ## [0.14.31] - 2026-08-20
 
 ### 全权限模式（AUTO_APPROVE_ALL）
