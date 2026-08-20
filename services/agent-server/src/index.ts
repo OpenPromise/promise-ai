@@ -41,6 +41,7 @@ import { createProfileTools } from './services/profile-tools.js';
 import { ProfileIngestor } from './services/profile-ingestor.js';
 import { createTimelineTools } from './services/timeline-tools.js';
 import { createAvatarTools } from './services/avatar-tools.js';
+import { AvatarEventBus } from './services/avatar-events.js';
 import { HookService } from './services/hook-service.js';
 
 const config = loadConfig();
@@ -339,7 +340,11 @@ for (const tool of createProfileTools({ store: profileStore, llm, avatarStore })
 for (const tool of createTimelineTools({ store: timelineStore })) {
   toolRegistry.register(tool);
 }
-for (const tool of createAvatarTools({ store: avatarStore })) {
+const avatarEventBus = new AvatarEventBus();
+for (const tool of createAvatarTools({
+  store: avatarStore,
+  onChange: (genome) => avatarEventBus.publish(genome),
+})) {
   toolRegistry.register(tool);
 }
 // AI 自身审美种子：persona 主题（夜猫子/独立）初始化为最小化/科技倾向，
@@ -435,6 +440,7 @@ const app = buildApp({
   processStartedAt,
   hostBootedRecently,
   avatarStore,
+  avatarEvents: avatarEventBus,
   publicDir: fileURLToPath(new URL('../../../public', import.meta.url)),
   createVoice,
   createTTS,

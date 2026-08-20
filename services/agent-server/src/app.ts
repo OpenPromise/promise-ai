@@ -23,6 +23,7 @@ import { registerDesktopRoutes } from './routes/desktop.js';
 import { registerEventRoutes } from './routes/events.js';
 import { registerHookRoutes } from './routes/hooks.js';
 import { registerAvatarRoutes } from './routes/avatar.js';
+import type { AvatarEventBus } from './services/avatar-events.js';
 import { ApprovalRegistry } from './services/approval.js';
 import { ConversationService } from './services/conversation.js';
 import type { ReminderDueEvent } from './services/reminder-service.js';
@@ -64,6 +65,8 @@ export interface AppDeps {
   hookSecret?: string;
   /** 可成长 Avatar 存储（可选，配置后注册 /avatar 与 API）。 */
   avatarStore?: AvatarStore;
+  /** Avatar 状态变更事件总线。 */
+  avatarEvents?: AvatarEventBus;
   /** public/ 静态资源目录（avatar 页面/模型）。 */
   publicDir?: string;
   /** 进程启动时间戳：用于重启完成通知（开机自启闭环）。 */
@@ -117,7 +120,11 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     registerHookRoutes(app, { hooks: deps.hooks, secret: deps.hookSecret });
   }
   if (deps.avatarStore && deps.publicDir) {
-    registerAvatarRoutes(app, { store: deps.avatarStore, publicDir: deps.publicDir });
+    registerAvatarRoutes(app, {
+      store: deps.avatarStore,
+      publicDir: deps.publicDir,
+      avatarEvents: deps.avatarEvents,
+    });
   }
   registerSessionRoutes(app, {
     store: deps.store,

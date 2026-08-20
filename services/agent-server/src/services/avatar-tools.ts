@@ -1,4 +1,5 @@
 import type { AvatarStore } from '@personal-ai/memory';
+import type { AvatarEvolutionEvent, AvatarGenome } from '@personal-ai/memory';
 import {
   applyAvatarDelta,
   computeEvolutionScore,
@@ -19,11 +20,14 @@ export interface AvatarToolOptions {
   store: AvatarStore;
   /** 进化触发阈值，默认 0.5（可配置）。 */
   evolveThreshold?: number;
+  /** 每次应用后回调（广播给所有端）。 */
+  onChange?: (genome: AvatarGenome) => void;
 }
 
 export function createAvatarTools(options: AvatarToolOptions): Tool[] {
   const { store } = options;
   const threshold = options.evolveThreshold ?? DEFAULT_EVOLVE_THRESHOLD;
+  const onChange = options.onChange;
 
   return [
     {
@@ -149,6 +153,82 @@ export function createAvatarTools(options: AvatarToolOptions): Tool[] {
             threshold,
             event: applied.event,
             genome: applied.genome,
+          },
+        };
+      },
+    },
+    {
+      name: 'avatar.auto_evolve',
+      description:
+        '自动评估所有偏好证据（L1，纯程序逻辑，无需 LLM）：对 EvolutionScore ≥ 阈值' +
+        '的偏好自动小步应用（±0.08，渐变原则），写成长史并广播到所有端。' +
+        '同一参数两个方向都达阈值时视为冲突跳过（留待继续积累）。' +
+        '适合定时任务（每日回顾）里调用，实现"自动成长"。',
+      inputSchema: { type: 'object', properties: {}, required: [] },
+      permissionLevel: 1,
+      async execute(): Promise<ToolResult> {
+        const preferences = await store.listPreferences();
+        // 按参数聚合：每个参数选得分最高且达标的方向应用一次
+        const best: Map<
+          string,
+          { direction: 1 | -1; score: number; preferenceId: string; reason: string }
+        > = new Map();
+        const conflict = new Set<string>();
+        for (const pref of preferences) {
+          const score = computeEvolutionScore(pref);
+          if (score < threshold) continue;
+          const existing = best.get(pref.parameter);
+          if (existing && existing.direction !== pref.direction) {
+            conflict.add(pref.parameter);
+            continue;
+          }
+          if (!existing || score > existing.score) {
+            best.set(pref.parameter, {
+              direction: pref.direction,
+              score,
+              preferenceId: pref.id,
+              reason:
+                `${pref.source === 'ai' ? 'AI 自身审美' : '用户偏好'}长期稳定` +
+                `（EvolutionScore ${score.toFixed(2)}，证据 ${pref.evidenceCount} 次）`,
+            });
+          }
+        }
+
+        const applied: AvatarEvolutionEvent[] = [];
+        const skipped: Array<{ parameter: string; reason: string }> = [];
+        let genome = await store.getGenome();
+        for (const [parameter, entry] of best) {
+          if (conflict.has(parameter)) {
+            skipped.push({ parameter, reason: '两个方向证据都达标，方向冲突，暂不演化' });
+            continue;
+          }
+          const result = applyAvatarDelta(
+            genome,
+            parameter,
+            entry.direction * 0.08,
+            entry.reason,
+            entry.score,
+            [entry.preferenceId],
+          );
+          if (!result) {
+            skipped.push({ parameter, reason: '未知参数' });
+            continue;
+          }
+          genome = result.genome;
+          await store.saveGenome(genome);
+          await store.addEvolutionEvent(result.event);
+          applied.push(result.event);
+          onChange?.(genome);
+        }
+        return {
+          ok: true,
+          data: {
+            evaluated: preferences.length,
+            threshold,
+            applied: applied.length,
+            events: applied,
+            skipped,
+            genome,
           },
         };
       },

@@ -67,4 +67,67 @@ describe('avatar.* 工具', () => {
     expect(genome.evolution.generation).toBeGreaterThan(0);
     expect((result.data as { applied: boolean }).applied).toBe(true);
   });
+
+  it('auto_evolve 对达标偏好自动应用并写成长史', async () => {
+    const store = new InMemoryAvatarStore();
+    const tools = createAvatarTools({ store, evolveThreshold: 0 });
+    const byName = new Map(tools.map((tool) => [tool.name, tool]));
+    await store.addPreferenceEvidence({
+      parameter: 'cuteStyle',
+      direction: 1,
+      source: 'user',
+      confidence: 0.9,
+      consistency: 1,
+    });
+    const result = await byName.get('avatar.auto_evolve')!.execute({}, { sessionId: 's1' });
+    expect(result.ok).toBe(true);
+    const data = result.data as { applied: number; genome: { evolution: { generation: number } } };
+    expect(data.applied).toBe(1);
+    expect(data.genome.evolution.generation).toBe(1);
+    const genome = await store.getGenome();
+    expect(genome.appearance.cuteStyle).toBeGreaterThan(0.5);
+  });
+
+  it('auto_evolve 证据不足时不应用', async () => {
+    const store = new InMemoryAvatarStore();
+    const tools = createAvatarTools({ store });
+    const byName = new Map(tools.map((tool) => [tool.name, tool]));
+    await store.addPreferenceEvidence({
+      parameter: 'minimalStyle',
+      direction: 1,
+      source: 'user',
+      confidence: 0.3,
+      consistency: 1,
+    });
+    const result = await byName.get('avatar.auto_evolve')!.execute({}, { sessionId: 's1' });
+    const data = result.data as { applied: number };
+    expect(data.applied).toBe(0);
+  });
+
+  it('auto_evolve 同参数两方向都达标时冲突跳过', async () => {
+    const store = new InMemoryAvatarStore();
+    const tools = createAvatarTools({ store, evolveThreshold: 0 });
+    const byName = new Map(tools.map((tool) => [tool.name, tool]));
+    await store.addPreferenceEvidence({
+      parameter: 'hairColor',
+      direction: 1,
+      source: 'user',
+      confidence: 0.9,
+      consistency: 1,
+    });
+    await store.addPreferenceEvidence({
+      parameter: 'hairColor',
+      direction: -1,
+      source: 'user',
+      confidence: 0.9,
+      consistency: 1,
+    });
+    const result = await byName.get('avatar.auto_evolve')!.execute({}, { sessionId: 's1' });
+    const data = result.data as {
+      applied: number;
+      skipped: Array<{ parameter: string }>;
+    };
+    expect(data.applied).toBe(0);
+    expect(data.skipped.some((s) => s.parameter === 'hairColor')).toBe(true);
+  });
 });

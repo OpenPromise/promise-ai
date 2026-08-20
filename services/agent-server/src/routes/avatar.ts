@@ -7,11 +7,14 @@ import {
   APPEARANCE_PARAMS,
   PERSONALITY_PARAMS,
 } from '@personal-ai/memory';
+import type { AvatarEventBus } from '../services/avatar-events.js';
 
 export interface AvatarRouteDeps {
   store: AvatarStore;
   /** public/ 静态资源目录（avatar 页面/模型）。 */
   publicDir: string;
+  /** 状态变更事件总线（调整/进化后广播到所有端）。 */
+  avatarEvents?: AvatarEventBus;
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -34,17 +37,7 @@ const CONTENT_TYPES: Record<string, string> = {
  */
 export function registerAvatarRoutes(app: FastifyInstance, deps: AvatarRouteDeps): void {
   const { store } = deps;
-  const subscribers = new Set<(genome: AvatarGenome) => void>();
-
-  const broadcast = (genome: AvatarGenome): void => {
-    for (const listener of subscribers) {
-      try {
-        listener(genome);
-      } catch {
-        // 单个订阅者出错不影响其他
-      }
-    }
-  };
+  const bus = deps.avatarEvents;
 
   app.get('/api/avatar/state', async () => {
     const genome = await store.getGenome();
@@ -107,7 +100,7 @@ export function registerAvatarRoutes(app: FastifyInstance, deps: AvatarRouteDeps
       }
       await store.saveGenome(applied.genome);
       await store.addEvolutionEvent(applied.event);
-      broadcast(applied.genome);
+      bus?.publish(applied.genome);
       return {
         ok: true,
         data: {
@@ -135,10 +128,10 @@ export function registerAvatarRoutes(app: FastifyInstance, deps: AvatarRouteDeps
     const listener = (genome: AvatarGenome): void => {
       reply.raw.write(`event: avatar.update\ndata: ${JSON.stringify(genome)}\n\n`);
     };
-    subscribers.add(listener);
+    const unsubscribe = bus?.subscribe(listener);
     request.raw.on('close', () => {
       clearInterval(heartbeat);
-      subscribers.delete(listener);
+      unsubscribe?.();
     });
   });
 
