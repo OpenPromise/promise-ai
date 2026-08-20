@@ -113,6 +113,22 @@ export interface ServerShellToolOptions {
   defaultCwd?: string;
 }
 
+/**
+ * 全局串行队列：同一时刻只执行一条 server.shell 命令。
+ * 防止聊天会话与定时任务并发跑 npm install / docker build 等重命令互相干扰
+ * （OpenClaw command-queue 思路的最简形态）。
+ */
+let shellQueue: Promise<unknown> = Promise.resolve();
+
+function withShellLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = shellQueue.then(fn, fn);
+  shellQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
 export function createServerShellTool(
   options: ServerShellToolOptions = {},
 ): Tool {
@@ -165,11 +181,13 @@ export function createServerShellTool(
       const timeoutMs = Math.min(Math.max(1, Math.floor(timeoutSeconds)), 300) * 1000;
       const controller = new AbortController();
       try {
-        const result = await runner(command.trim(), {
-          cwd: resolvedCwd,
-          timeoutMs,
-          signal: controller.signal,
-        });
+        const result = await withShellLock(() =>
+          runner(command.trim(), {
+            cwd: resolvedCwd,
+            timeoutMs,
+            signal: controller.signal,
+          }),
+        );
         const secrets = collectSecrets();
         return {
           ok: true,

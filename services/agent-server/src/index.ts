@@ -29,6 +29,7 @@ import { recoverInterruptedSessions } from './services/restart-recovery.js';
 import { createWeixinTools } from './services/weixin-tools.js';
 import { createCloudTools } from './services/cloud-tools.js';
 import { createServerShellTool } from './services/server-shell.js';
+import { createSystemStatusTool } from './services/system-status.js';
 
 const config = loadConfig();
 const processStartedAt = Date.now();
@@ -284,6 +285,8 @@ for (const tool of tools) {
 toolRegistry.register(createCodingTool());
 // server.shell：容器内终端（L3）——"云服务器即她的世界"的自主操作入口。
 toolRegistry.register(createServerShellTool());
+// system.status：服务器健康巡检（L0 只读）——定时任务自主监控用。
+toolRegistry.register(createSystemStatusTool());
 // 自我开发：self.info / self.check / system.restart（守护进程/容器负责重启拉起）。
 for (const tool of createSelfTools({ memoryBackend, memory, personaDir })) {
   toolRegistry.register(tool);
