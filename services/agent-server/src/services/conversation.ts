@@ -267,11 +267,23 @@ function toLLMTools(registry: ToolRegistry): LLMTool[] {
   return registry.list().map((tool) => ({
     type: 'function' as const,
     function: {
-      name: tool.name,
+      // DeepSeek/OpenRouter 等 OpenAI 兼容 API 要求工具名只含 [a-zA-Z0-9_-]，
+      // 我们的工具名是 cloud.instance_status 这类带点号；发往 LLM 前统一
+      // 转下划线，收到 tool_calls 后再还原（见 #runChatInner）。
+      name: sanitizeToolName(tool.name),
       description: tool.description,
       parameters: tool.inputSchema,
     },
   }));
+}
+
+/**
+ * OpenAI 兼容 API（DeepSeek 官方、OpenRouter、部分 DashScope 端点）对
+ * tools[].function.name 强制校验 ^[a-zA-Z0-9_-]+$，点号会被 400 拒绝。
+ * 把点号等非法字符统一替换为下划线。
+ */
+function sanitizeToolName(name: string): string {
+  return name.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
 export class ConversationService {
@@ -315,6 +327,16 @@ export class ConversationService {
     session = await this.#compactIfNeeded(session, input.signal);
     const messages = buildMessages(session, input.userMessage, this.#autoApproveAll);
     const tools = toLLMTools(this.#tools);
+    // LLM 返回的是下划线化后的工具名，这里建反查表还原成注册表里的真名。
+    const toolNameByWire = new Map(
+      this.#tools
+        .list()
+        .map((tool) => [sanitizeToolName(tool.name), tool.name] as const),
+    );
+    const restoreToolName = (wireName: string): string => {
+      if (this.#tools.has(wireName)) return wireName;
+      return toolNameByWire.get(wireName) ?? wireName;
+    };
     const [persistentContext, relevantMemories] = await Promise.all([
       collectPersistentContext(this.#memory),
       this.#memory.search(input.userMessage, MEMORY_LIMIT),
@@ -377,7 +399,10 @@ export class ConversationService {
             usage = chunk.usage;
           }
           if (chunk.toolCalls && chunk.toolCalls.length > 0) {
-            toolCalls = chunk.toolCalls;
+            toolCalls = chunk.toolCalls.map((call) => ({
+              ...call,
+              name: restoreToolName(call.name),
+            }));
           }
         }
       } catch (error) {
@@ -609,7 +634,7 @@ function toLLMToolCalls(calls: ToolCallInfo[]): LLMToolCallWire[] {
     id: call.id,
     type: 'function' as const,
     function: {
-      name: call.name,
+      name: sanitizeToolName(call.name),
       arguments: call.arguments,
     },
   }));

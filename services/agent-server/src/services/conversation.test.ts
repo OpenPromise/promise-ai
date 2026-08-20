@@ -6,6 +6,89 @@ import { ApprovalRegistry } from './approval.js';
 import { ConversationService, pruneToolResult, repairToolResultPairing } from './conversation.js';
 
 describe('ConversationService', () => {
+  it('LLM 工具名下划线化传输，tool_calls 返回时还原为真实名执行', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    const tools = new ToolRegistry();
+    tools.register({
+      name: 'cloud.instance_status',
+      description: '查询云服务器状态',
+      inputSchema: { type: 'object', properties: {}, required: [] },
+      permissionLevel: 0,
+      async execute() {
+        return { ok: true, data: { state: 'RUNNING', ip: '122.152.209.182' } };
+      },
+    });
+
+    const wireNamesSeen: string[] = [];
+    const assistantToolCallsSeen: string[] = [];
+    let callSeq = 0;
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'deepseek-test',
+      configured: true,
+      async *chat(input: ChatInput): AsyncIterable<ChatChunk> {
+        callSeq += 1;
+        wireNamesSeen.push(...(input.tools ?? []).map((t) => t.function.name));
+        const assistant = input.messages.find((m) => m.role === 'assistant');
+        if (assistant?.tool_calls) {
+          assistantToolCallsSeen.push(...assistant.tool_calls.map((c) => c.function.name));
+        }
+        if (callSeq === 1) {
+          yield {
+            delta: '',
+            finishReason: 'tool_calls',
+            toolCalls: [{ id: 'call_1', name: 'cloud_instance_status', arguments: '{}' }],
+          };
+          return;
+        }
+        yield { delta: '服务器运行中，IP 122.152.209.182。' };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+
+    const service = new ConversationService({
+      store,
+      llm,
+      tools,
+      approvals: new ApprovalRegistry(),
+      memory: new InMemoryMemoryStore(),
+      autoApproveAll: true,
+    });
+
+    let finalText = '';
+    for await (const envelope of service.runChat({
+      sessionId: session.id,
+      userMessage: '看看服务器状态',
+    })) {
+      if (envelope.type === 'chat.done') {
+        finalText = (envelope.payload as { text?: string }).text ?? '';
+      }
+    }
+
+    // 发给 LLM 的工具名必须符合 ^[a-zA-Z0-9_-]+$（无点号）
+    expect(wireNamesSeen.length).toBeGreaterThan(0);
+    for (const name of wireNamesSeen) {
+      expect(name).toMatch(/^[a-zA-Z0-9_-]+$/);
+    }
+    expect(wireNamesSeen).toContain('cloud_instance_status');
+    // 历史回放时 assistant.tool_calls 同样下划线化
+    expect(assistantToolCallsSeen).toContain('cloud_instance_status');
+    // 真实名工具被实际执行
+    const refreshed = await store.getSession(session.id);
+    expect(
+      refreshed.messages.some(
+        (m) => m.role === 'tool' && m.content.includes('"state":"RUNNING"'),
+      ),
+    ).toBe(true);
+    // 会话历史里保存的是真实工具名（带点号），供下次回放还原
+    const storedCall = refreshed.messages.find((m) => m.role === 'assistant' && m.toolCalls);
+    expect(storedCall?.toolCalls?.[0]?.name).toBe('cloud.instance_status');
+    expect(finalText).toContain('服务器运行中');
+  });
+
   it('auto-approves all tools when autoApproveAll is enabled', async () => {
     const store = new InMemorySessionStore();
     const session = await store.createSession({ systemPrompt: '你是助理。' });

@@ -1234,10 +1234,11 @@ describe('agent-server', () => {
     expect(secondTurn?.messages.at(-1)?.role).toBe('tool');
     expect(secondTurn?.messages.at(-1)?.tool_call_id).toBe('call_1');
     expect(secondTurn?.messages.at(-1)?.content).toContain('2026年8月19日 10:00');
-    // The assistant tool-call message is passed back verbatim, as required by the API.
+    // 工具名回传时按 OpenAI 兼容 API 规则下划线化（time.get -> time_get），
+    // 执行时再在会话服务里还原为真实名。
     const assistantToolMsg = secondTurn?.messages.find((m) => m.role === 'assistant');
     expect(assistantToolMsg?.tool_calls).toEqual([
-      { id: 'call_1', type: 'function', function: { name: 'time.get', arguments: '{}' } },
+      { id: 'call_1', type: 'function', function: { name: 'time_get', arguments: '{}' } },
     ]);
 
     // Conversation history records every stage.
