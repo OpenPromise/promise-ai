@@ -29,6 +29,7 @@ import { ConversationService } from './services/conversation.js';
 import { TaskService, validateCronSchedule } from './services/task-service.js';
 import { ReminderService } from './services/reminder-service.js';
 import { createCodingTool } from './services/coding-tool.js';
+import { createEngineerTool } from './services/engineer-tools.js';
 import { createSelfTools } from './services/self-tools.js';
 import { recoverInterruptedSessions } from './services/restart-recovery.js';
 import { createWeixinTools } from './services/weixin-tools.js';
@@ -324,6 +325,8 @@ for (const tool of tools) {
 }
 // coding.run 是服务端能力（服务器上驱动 dsh 开源编码代理），不属于桌面客户端。
 toolRegistry.register(createCodingTool());
+// engineer.delegate：把开发任务派给"小黑"（专属工程师子代理），复用 dsh 底盘注入工程师人格。
+toolRegistry.register(createEngineerTool());
 // server.shell：容器内终端（L3）——"云服务器即她的世界"的自主操作入口。
 toolRegistry.register(createServerShellTool());
 // system.status：服务器健康巡检（L0 只读）——定时任务自主监控用。

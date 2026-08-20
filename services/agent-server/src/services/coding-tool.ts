@@ -90,7 +90,7 @@ function runChild(
   });
 }
 
-async function runDshHeadless(
+export async function runDshHeadless(
   task: string,
   options: {
     cwd: string;
