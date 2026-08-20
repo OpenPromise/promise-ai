@@ -53,6 +53,7 @@ function makeStubClient(overrides: Partial<LighthouseClientLike> = {}): Lighthou
     })),
     CreateFirewallRules: vi.fn(async () => ({})),
     DeleteFirewallRules: vi.fn(async () => ({})),
+    RebootInstances: vi.fn(async () => ({})),
     ...overrides,
   };
 }
@@ -75,6 +76,7 @@ describe('cloud.* 工具权限分级（AGENTS.md 新增工具准则）', () => {
     expect(byName.get('cloud.firewall_list')).toBe(0);
     expect(byName.get('cloud.firewall_open')).toBe(1);
     expect(byName.get('cloud.firewall_close')).toBe(2);
+    expect(byName.get('cloud.server_reboot')).toBe(3);
   });
 });
 
@@ -278,5 +280,39 @@ describe('cloud.firewall_close', () => {
       InstanceId: INSTANCE_ID,
       FirewallRules: [{ Protocol: 'TCP', Port: '443', Action: 'ACCEPT', Ipv6CidrBlock: '::/0' }],
     });
+  });
+});
+
+describe('cloud.server_reboot', () => {
+  it('必须显式 confirm=true 才执行', async () => {
+    const client = makeStubClient();
+    const tool = makeTools(client)[4]!;
+    const denied = await tool.execute({}, { sessionId: 's1' });
+    expect(denied.ok).toBe(false);
+    expect(denied.error).toContain('confirm=true');
+    expect(client.RebootInstances).not.toHaveBeenCalled();
+  });
+
+  it('confirm=true 时提交重启指令', async () => {
+    const client = makeStubClient();
+    const tool = makeTools(client)[4]!;
+    const result = await tool.execute({ confirm: true }, { sessionId: 's1' });
+    expect(result.ok).toBe(true);
+    expect(client.RebootInstances).toHaveBeenCalledWith({
+      InstanceIds: [INSTANCE_ID],
+    });
+    expect((result.data as { note: string }).note).toContain('重启后所有服务自动恢复');
+  });
+
+  it('SDK 异常映射为可读错误', async () => {
+    const client = makeStubClient({
+      RebootInstances: vi.fn(async () => {
+        throw new Error('Instance not found');
+      }),
+    });
+    const tool = makeTools(client)[4]!;
+    const result = await tool.execute({ confirm: true }, { sessionId: 's1' });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('Instance not found');
   });
 });

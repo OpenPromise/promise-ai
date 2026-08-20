@@ -28,9 +28,9 @@ import { createSelfTools } from './services/self-tools.js';
 import { recoverInterruptedSessions } from './services/restart-recovery.js';
 import { createWeixinTools } from './services/weixin-tools.js';
 import { createCloudTools } from './services/cloud-tools.js';
-import { createRoutedLLMProvider } from './services/llm-router.js';
 
 const config = loadConfig();
+const processStartedAt = Date.now();
 console.log(
   `[config] autoApproveAll=${config.autoApproveAll} provider=${config.llmProvider} voice=${config.voiceEnabled} tts=${config.voiceTtsEnabled}`,
 );
@@ -180,21 +180,11 @@ const primaryLlm =
         model: config.openrouter.model,
       })
     : config.llmProvider === 'deepseek'
-      ? // flash/pro 双速路由：日常走 flash（快、省），复杂任务切 pro（强）。
-        // 语音级联仍用单独构造的 voiceLlm（保持低延迟）。
-        createRoutedLLMProvider({
-          fast: new OpenRouterProvider({
-            apiKey: config.deepseek.apiKey,
-            baseUrl: config.deepseek.baseUrl,
-            model: config.deepseek.model,
-          }),
-          smart: new OpenRouterProvider({
-            apiKey: config.deepseek.apiKey,
-            baseUrl: config.deepseek.baseUrl,
-            model: config.deepseek.proModel,
-          }),
-          onRoute: (_input, model) =>
-            console.log(`[llm-router] ${model === 'smart' ? 'pro' : 'flash'} 处理本次请求`),
+      ? // 统一使用 deepseek-v4-flash（快、省），不做 pro 路由。
+        new OpenRouterProvider({
+          apiKey: config.deepseek.apiKey,
+          baseUrl: config.deepseek.baseUrl,
+          model: config.deepseek.model,
         })
       : new OpenRouterProvider({
           apiKey: config.dashscope.apiKey,
@@ -289,7 +279,7 @@ const { tools, stores } = createBuiltinTools({
 for (const tool of tools) {
   toolRegistry.register(tool);
 }
-// coding.run 是服务端能力（服务器上驱动 dsh/Claude Code），不属于桌面客户端。
+// coding.run 是服务端能力（服务器上驱动 dsh 开源编码代理），不属于桌面客户端。
 toolRegistry.register(createCodingTool());
 // 自我开发：self.info / self.check / system.restart（守护进程/容器负责重启拉起）。
 for (const tool of createSelfTools({ memoryBackend, memory, personaDir })) {
@@ -333,6 +323,7 @@ const app = buildApp({
   sessionBackend,
   subscribeTaskEvents: (listener) => taskService.onRun(listener),
   subscribeReminderEvents: (listener) => reminderService.onDue(listener),
+  processStartedAt,
   createVoice,
   createTTS,
   createQwen,

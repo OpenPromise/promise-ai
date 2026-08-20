@@ -14,6 +14,8 @@ import type { Tool, ToolResult } from '@personal-ai/tools';
  *   微信通道可用；描述中明确标注影响面。
  * - cloud.firewall_close：L2，删除防火墙规则（永久移除放行，误删可能
  *   导致 SSH/服务不可达），微信通道自动拒绝，避免远程误操作锁死实例。
+ * - cloud.server_reboot：L3，重启整台云服务器（系统级，中断所有服务），
+ *   必须显式 confirm=true；重启后 systemd + Docker 自动拉起服务并通知。
  */
 
 /** 与 tencentcloud-sdk-nodejs-lighthouse 客户端方法形状对齐的接口（测试可注入桩）。 */
@@ -28,6 +30,7 @@ export interface LighthouseClientLike {
     InstanceId: string;
     FirewallRules: unknown[];
   }): Promise<unknown>;
+  RebootInstances(params: { InstanceIds: string[] }): Promise<unknown>;
 }
 
 export interface CloudToolOptions {
@@ -304,6 +307,47 @@ export function createCloudTools(options: CloudToolOptions): Tool[] {
           };
         } catch (error) {
           return { ok: false, error: `关闭端口失败：${toErrorMessage(error)}` };
+        }
+      },
+    },
+    {
+      name: 'cloud.server_reboot',
+      description:
+        '重启腾讯云轻量应用服务器（系统级 L3：中断所有服务约 1-3 分钟，当前会话会断开）。'
+        + '重启后 systemd + Docker 会自动拉起全部项目服务，恢复后会自动通知。'
+        + '高风险操作：必须显式传 confirm=true 才会执行。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          confirm: {
+            type: 'boolean',
+            description: '确认重启，必须为 true 才执行',
+          },
+        },
+        required: ['confirm'],
+      },
+      permissionLevel: 3,
+      timeoutMs: 30_000,
+      async execute(input: unknown): Promise<ToolResult> {
+        try {
+          const { confirm = false } = (input ?? {}) as { confirm?: boolean };
+          if (confirm !== true) {
+            return {
+              ok: false,
+              error: '重启云服务器是系统级操作，需要显式传 confirm=true 确认',
+            };
+          }
+          await client.RebootInstances({ InstanceIds: [instanceId] });
+          return {
+            ok: true,
+            data: {
+              instanceId,
+              note:
+                '已提交重启指令：服务器约 1-3 分钟内重启，重启后所有服务自动恢复并通知',
+            },
+          };
+        } catch (error) {
+          return { ok: false, error: `重启云服务器失败：${toErrorMessage(error)}` };
         }
       },
     },

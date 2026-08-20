@@ -9,8 +9,7 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive \
     NODE_MAJOR=24 \
     NODE_ENV=production \
-    DSH_HOME=/root/.dsh \
-    CODING_AGENT=dsh
+    DSH_HOME=/root/.dsh
 
 # 安装 Node 24（NodeSource 官方源）+ curl（健康检查用）
 RUN apt-get update \

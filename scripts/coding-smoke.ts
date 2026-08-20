@@ -16,7 +16,7 @@ const response = await fetch(`${base}/api/sessions/${session.id}/chat`, {
   headers,
   body: JSON.stringify({
     message:
-      '用 coding.run 工具，让本机 Claude Code 继续刚才在 E:\\Promise_ai 的对话，只回答一个问题：这个项目的前端界面是用什么技术做的？',
+      '用 coding.run 工具（dsh 后端），在 E:\\Promise_ai 目录只回答一个问题：这个项目的前端界面是用什么技术做的？',
   }),
 });
 if (!response.ok || !response.body) {

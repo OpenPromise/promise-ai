@@ -1,0 +1,15 @@
+[Unit]
+Description=Promise AI 服务栈（Docker Compose 开机自启）
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/ubuntu/promise-ai
+ExecStart=/usr/bin/docker compose -f infrastructure/docker-compose.yml --profile server up -d
+ExecStop=/usr/bin/docker compose -f infrastructure/docker-compose.yml --profile server stop
+
+[Install]
+WantedBy=multi-user.target

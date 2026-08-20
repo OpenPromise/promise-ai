@@ -300,11 +300,11 @@ npm run desktop:agent
 | `ELEVENLABS_MODEL`    | 语音模型，如 `eleven_v3`（默认 `eleven_multilingual_v2`） |
 | `ELEVENLABS_LANGUAGE` | 语音/转写语言代码，中文用 `zh`                            |
 
-### coding.run 后端（dsh / Claude Code）
+### coding.run 后端（dsh 开源底盘）
 
-`coding.run` 默认走 **dsh**（DeepSeek Harness：headless 一次性会话，Agent/工具/模型
-适配器全部插件化，可扩展性强；模型用 DeepSeek 官方 `deepseek-v4-flash`），可用
-`CODING_AGENT=claude` 切回 Claude Code（同一目录自动 `--resume` 续接会话）。
+`coding.run` 统一走 **dsh**（DeepSeek Harness：headless 一次性会话，Agent/工具/模型
+适配器全部插件化，可扩展性强；模型用 DeepSeek 官方 `deepseek-v4-flash`），
+作为专属编码底盘持续打磨。
 
 dsh 一次性机器配置：
 

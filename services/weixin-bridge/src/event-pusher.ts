@@ -28,6 +28,9 @@ export interface EventPusherOptions {
 }
 
 export function formatEvent(event: string, data: unknown): string | undefined {
+  if (event === 'system.boot') {
+    return '✅ 云服务器重启完成，所有服务已自动恢复。';
+  }
   if (event === 'reminder.due') {
     const reminder = data as ReminderEvent;
     return `⏰ 提醒：${reminder.text ?? '时间到了'}`;

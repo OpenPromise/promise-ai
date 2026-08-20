@@ -16,6 +16,12 @@ describe('formatEvent', () => {
     );
   });
 
+  it('formats system.boot（云服务器重启完成通知）', () => {
+    expect(formatEvent('system.boot', { text: '云服务器重启完成' })).toBe(
+      '✅ 云服务器重启完成，所有服务已自动恢复。',
+    );
+  });
+
   it('ignores unknown events', () => {
     expect(formatEvent('something.else', {})).toBeUndefined();
   });

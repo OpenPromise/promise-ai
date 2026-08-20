@@ -129,7 +129,7 @@ export function createSelfTools(
             version: readVersion(),
             node: process.version,
             platform: process.platform,
-            codingAgent: process.env.CODING_AGENT ?? 'dsh',
+            codingAgent: 'dsh',
             memoryBackend,
           },
         };

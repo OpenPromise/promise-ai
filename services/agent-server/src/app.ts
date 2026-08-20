@@ -41,6 +41,8 @@ export interface AppDeps {
   subscribeTaskEvents?: (listener: (event: TaskRunEvent) => void) => () => void;
   /** 提醒到期事件订阅（桌面端通知闭环）。 */
   subscribeReminderEvents?: (listener: (event: ReminderDueEvent) => void) => () => void;
+  /** 进程启动时间戳：用于重启完成通知（开机自启闭环）。 */
+  processStartedAt?: number;
 }
 
 /** 空 TTS：语音输出禁用时使用（ASR 仍工作，回复以文字形式发送）。 */
@@ -76,6 +78,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     registerEventRoutes(app, {
       subscribeTaskEvents: deps.subscribeTaskEvents ?? (() => () => {}),
       subscribeReminderEvents: deps.subscribeReminderEvents ?? (() => () => {}),
+      processStartedAt: deps.processStartedAt,
     });
   }
   registerSessionRoutes(app, {
