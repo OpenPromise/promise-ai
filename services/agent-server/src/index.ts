@@ -29,6 +29,9 @@ import { recoverInterruptedSessions } from './services/restart-recovery.js';
 import { createWeixinTools } from './services/weixin-tools.js';
 
 const config = loadConfig();
+console.log(
+  `[config] autoApproveAll=${config.autoApproveAll} provider=${config.llmProvider} voice=${config.voiceEnabled} tts=${config.voiceTtsEnabled}`,
+);
 
 /** Enumerates fixed drive roots (C:\, D:\ …) so file tools work anywhere on disk. */
 function listFixedDriveRoots(): string[] {

@@ -91,6 +91,9 @@ export async function* runToolCallWithApproval(
   if (!tool) {
     return { ok: false, error: `Tool not found: ${call.name}` };
   }
+  console.log(
+    `[perm] tool=${call.name} level=${tool.permissionLevel} autoApprove=${autoApproveAll} headless=${headless}`,
+  );
 
   let args: unknown;
   try {
