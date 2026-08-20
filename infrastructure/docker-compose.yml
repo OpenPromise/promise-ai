@@ -44,6 +44,12 @@ services:
       - app_node_modules:/app/node_modules
       # 显式路径（sudo 下 ~ 会解析成 /root）
       - /home/ubuntu/.ssh:/root/.ssh:ro
+      # 云服务器即她的世界：持久工作区 + Docker 客户端/套接字，
+      # 让她能 clone 项目、开发并自己启动/映射服务端口
+      - /home/ubuntu/projects:/projects
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/bin/docker:ro
+      - /usr/libexec/docker/cli-plugins:/usr/libexec/docker/cli-plugins:ro
     depends_on:
       postgres:
         condition: service_healthy
