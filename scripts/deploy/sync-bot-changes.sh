@@ -41,6 +41,9 @@ else
   sudo docker exec assistant-app tar -C /app --exclude=node_modules -cf - . | tar -C "$REPO" -xf -
 fi
 
+# 容器（root）写入的文件属主是 root，统一交还 ubuntu 才能提交
+sudo chown -R ubuntu:ubuntu "$REPO" || true
+
 if ! git diff --quiet; then
   git add -A
   # 剔除"git 历史中已删除、容器里却残留"的陈旧文件，防止旧镜像文件被复活
