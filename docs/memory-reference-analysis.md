@@ -94,3 +94,12 @@
    全链路可测（mock LLM）
 2. 再补 P1 质量门 prompt 与 `profile.compact` 整理工具
 3. 可选 P2 审计字段
+
+## 落地进度
+
+- ✅ P0 对话后自动抽取（2026-08-20）：`ProfileIngestor` 在 chat.done 后
+  异步用 flash 抽取 + 与现有画像对比做 ADD/UPDATE/DELETE/NONE 决策写回；
+  节流 10 分钟、失败静默、不阻塞回复。实测：聊"我叫小明，喜欢打篮球，
+  最讨厌加班"→ 自动新增 爱好/反感 并 UPDATE name 小明
+- ⏸ P1 `profile.compact` 画像整理：等画像积累到一定量级再做
+- ⏸ P2 审计字段：视需要再加
