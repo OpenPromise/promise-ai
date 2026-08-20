@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="小黑工程师 · XiaoHei Engineering Sub-Agent 专属欢迎界面" />
+  <title>小黑工程师 · XiaoHei</title>
+  <style>
+    :root {
+      --bg: #05080c;
+      --bg-deep: #02040a;
+      --panel: rgba(10, 20, 30, 0.72);
+      --line: rgba(0, 255, 170, 0.22);
+      --cyan: #22d3ee;
+      --green: #34d399;
+      --muted: #7d8b9b;
+      --text: #d7e3ea;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      min-height: 100vh;
+      background:
+        radial-gradient(1200px 600px at 80% -10%, rgba(34, 211, 238, 0.10), transparent 60%),
+        radial-gradient(1000px 500px at 10% 110%, rgba(52, 211, 153, 0.08), transparent 60%),
+        linear-gradient(180deg, var(--bg) 0%, var(--bg-deep) 100%);
+      color: var(--text);
+      font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Source Han Sans SC",
+        system-ui, -apple-system, "Segoe UI", sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 48px 20px;
+    }
+
+    /* 顶部青色氛围线 */
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0 0 auto 0;
+      height: 3px;
+      background: linear-gradient(90deg, transparent, var(--cyan), var(--green), transparent);
+      opacity: 0.85;
+      z-index: 1;
+    }
+
+    .card {
+      width: min(880px, 100%);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 40px 44px;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5), inset 0 0 40px rgba(34, 211, 238, 0.03);
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 30px;
+      padding-bottom: 24px;
+      border-bottom: 1px dashed var(--line);
+    }
+
+    h1 {
+      font-size: clamp(30px, 6vw, 46px);
+      letter-spacing: 0.06em;
+      background: linear-gradient(120deg, var(--cyan) 20%, var(--green) 90%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      font-weight: 700;
+    }
+
+    .subtitle {
+      margin-top: 10px;
+      font-family: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+      font-size: clamp(13px, 2.4vw, 15px);
+      color: var(--muted);
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+
+    section {
+      margin-top: 26px;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--cyan);
+      margin-bottom: 12px;
+      letter-spacing: 0.08em;
+    }
+
+    .section-title::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      background: var(--green);
+      transform: rotate(45deg);
+      box-shadow: 0 0 10px var(--green);
+    }
+
+    p.intro {
+      line-height: 1.9;
+      color: var(--text);
+      font-size: 15px;
+      padding-left: 18px;
+      border-left: 2px solid var(--line);
+    }
+
+    ol.rules {
+      list-style: none;
+      counter-reset: rule;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 10px;
+    }
+
+    ol.rules li {
+      counter-increment: rule;
+      position: relative;
+      padding: 12px 14px 12px 40px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 8px;
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    ol.rules li::before {
+      content: counter(rule, decimal-leading-zero);
+      position: absolute;
+      left: 12px;
+      top: 12px;
+      font-family: "JetBrains Mono", Consolas, monospace;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--green);
+    }
+
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+    }
+
+    .meta-item {
+      padding: 12px 14px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 8px;
+    }
+
+    .meta-item .label {
+      font-size: 12px;
+      color: var(--muted);
+      letter-spacing: 0.1em;
+      margin-bottom: 6px;
+    }
+
+    .meta-item .value {
+      font-family: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+      font-size: 14px;
+      color: var(--green);
+      word-break: break-all;
+    }
+
+    footer {
+      margin-top: 28px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--muted);
+      letter-spacing: 0.12em;
+    }
+
+    footer .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    footer .status::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; box-shadow: 0 0 6px var(--green); }
+      50% { opacity: 0.4; box-shadow: 0 0 0 var(--green); }
+    }
+
+    @media (max-width: 560px) {
+      .card {
+        padding: 28px 20px;
+      }
+      h1 {
+        letter-spacing: 0.02em;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <header>
+      <h1>小黑工程师</h1>
+      <div class="subtitle">XiaoHei · Engineering Sub-Agent</div>
+    </header>
+
+    <section>
+      <div class="section-title">自我介绍</div>
+      <p class="intro">
+        你好，我是<strong>小黑</strong>——你的专属工程师：专业、严肃、可靠，
+        只对工程质量负责，不闲聊、不卖萌，确认目标后即动手交付。
+      </p>
+    </section>
+
+    <section>
+      <div class="section-title">工作准则</div>
+      <ol class="rules">
+        <li>先确认目标（goal）</li>
+        <li>阅读相关代码与测试</li>
+        <li>小步实现，可回滚</li>
+        <li>跑 typecheck + test</li>
+        <li>输出结构化汇报</li>
+      </ol>
+    </section>
+
+    <section>
+      <div class="section-title">工位信息</div>
+      <div class="meta">
+        <div class="meta-item">
+          <div class="label">专属工位路径</div>
+          <div class="value">/app/xiaohei</div>
+        </div>
+        <div class="meta-item">
+          <div class="label">入职日期</div>
+          <div class="value">2026-08-20</div>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <span class="status">ONLINE · 随时待命</span>
+    </footer>
+  </main>
+</body>
+</html>

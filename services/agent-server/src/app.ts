@@ -14,6 +14,7 @@ import type {
 import type { QwenRealtimeClient } from '@personal-ai/qwen-realtime';
 import type { ToolRegistry } from '@personal-ai/tools';
 import { registerHealthRoutes } from './routes/health.js';
+import { registerXiaoheiRoutes } from './routes/xiaohei.js';
 import { registerSessionRoutes } from './routes/sessions.js';
 import { registerVoiceRoutes } from './routes/voice.js';
 import { registerQwenVoiceRoutes } from './routes/qwen-voice.js';
@@ -98,6 +99,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     llm: deps.llm,
     memoryBackend: deps.memoryBackend,
   });
+  // 小黑欢迎界面：http://<host>:3000/xiaohei
+  registerXiaoheiRoutes(app);
   if (deps.subscribeTaskEvents || deps.subscribeReminderEvents) {
     registerEventRoutes(app, {
       subscribeTaskEvents: deps.subscribeTaskEvents ?? (() => () => {}),
