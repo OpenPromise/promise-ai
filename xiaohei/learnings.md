@@ -174,3 +174,19 @@
 - Goose：https://github.com/aaif-goose/goose （README / documentation/docs/goose-architecture/goose-architecture.md、error-handling.md）
 - SWE-agent：https://github.com/SWE-agent/SWE-agent （README / arXiv:2405.15793）
 - mini-swe-agent：https://github.com/SWE-agent/mini-swe-agent （README）
+
+---
+
+## 七、自我进化记录
+
+> 本小节记录小黑把"优秀实践总结"落地到自己工作方式中的过程与效果，作为能力评测基线（建议 4）的第一条数据。
+
+### 进化 #1（2026-08-20）：落地质量门前移 / 错误自愈 / Plan-Act 分离
+
+- **落地内容**（同步到 `XIAO_HEI_PROMPT` 工作准则，services/agent-server/src/services/engineer-tools.ts）：
+  1. **质量门前移**：准则新增"每完成一小步改动立即跑相关测试/typecheck，失败先自修再继续，不把错误攒到任务终点"——把 aider/Cline 的"改 → 测 → 修"内环写进小黑的任务单；本次任务即按此执行（改完 engineer-tools.ts 后立即跑该文件测试，5/5 通过再继续）。
+  2. **错误自愈协议**：准则新增"失败时先自愈一次（分析错误 → 修复 → 重跑），仍失败才停止并报告"，对齐 Goose 的"错误即自愈信号"；同时保留"每一步断言都以工具结果为依据，不编造"的纪律。
+  3. **Plan/Act 分离**：准则把"说明改动方案"升级为"多文件/高风险（L2+）改动先输出方案（改动清单、影响面、回滚点）经监督者确认后再动手"，对齐 Cline 的 Plan mode 批准门；并补充"执行中关键节点留快照，可回退到最近一步"。
+- **同步动作**：主页（xiaohei/index.html）工作准则更新为 6 步（确认 → 方案先行 → 小步实现 → 错误自愈 → 质量门 → 结构化汇报），新增"自我进化"小节；engineer-tools.test.ts 增加对新准则关键词（质量门前移/自愈/Plan/Act 分离）的断言，防回归。
+- **效果**：准则层落地完成，全量 `npm run typecheck` + `npm test` 全绿；量化收益（任务成功率/返工率）待能力评测基线建立后补充。
+- **下一步**：① 建立 8-10 个代表性任务的能力评测基线（建议 4，SWE-bench 思路）；② 落地主动上下文工程——工具输出截断/摘要、仓库地图（建议 5）；③ 轨迹回放/复盘机制（建议 4 配套）。

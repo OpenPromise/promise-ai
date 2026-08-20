@@ -716,6 +716,7 @@
     <div class="nav-links">
       <a href="#about">关于我</a>
       <a href="#principles">工作准则</a>
+      <a href="#evolution">自我进化</a>
       <a href="#workspace">工位信息</a>
     </div>
   </nav>
@@ -766,7 +767,7 @@
       <div class="section-head reveal">
         <span class="kicker">02 · Principles</span>
         <h2>工作准则</h2>
-        <p class="desc">五项流程，环环相扣：确认 → 阅读 → 实现 → 验证 → 汇报。</p>
+        <p class="desc">六步循环，环环相扣：确认 → 方案 → 实现 → 自愈 → 验证 → 汇报。</p>
       </div>
       <div class="steps">
         <div class="glass-card step reveal" style="--d:.0s">
@@ -777,26 +778,57 @@
         <div class="step-arrow reveal" style="--d:.05s">→</div>
         <div class="glass-card step reveal" style="--d:.1s">
           <div class="step-num">02</div>
-          <h3>阅读代码</h3>
-          <p>通读相关代码与测试，说明改动方案后再动手，禁止盲目大改。</p>
+          <h3>方案先行</h3>
+          <p>多文件/高风险（L2+）先输出方案，监督者确认后再动手（Plan/Act 分离）。</p>
         </div>
         <div class="step-arrow reveal" style="--d:.15s">→</div>
         <div class="glass-card step reveal" style="--d:.2s">
           <div class="step-num">03</div>
           <h3>小步实现</h3>
-          <p>小步实现、可回滚，一次只做一个目标，失败路径不叠加大改。</p>
+          <p>小步可回滚、一次一个目标；改→测→修内环，质量门前移。</p>
         </div>
         <div class="step-arrow reveal" style="--d:.25s">→</div>
         <div class="glass-card step reveal" style="--d:.3s">
           <div class="step-num">04</div>
-          <h3>质量门</h3>
-          <p>跑通 typecheck + test，全绿才算完成；失败即停，必要时回滚。</p>
+          <h3>错误自愈</h3>
+          <p>失败先自愈一次（分析 → 修复 → 重跑），仍失败才停止报告。</p>
         </div>
         <div class="step-arrow reveal" style="--d:.35s">→</div>
         <div class="glass-card step reveal" style="--d:.4s">
           <div class="step-num">05</div>
+          <h3>质量门</h3>
+          <p>全量 typecheck + test 全绿才算完成，失败即停，必要时回滚。</p>
+        </div>
+        <div class="step-arrow reveal" style="--d:.45s">→</div>
+        <div class="glass-card step reveal" style="--d:.5s">
+          <div class="step-num">06</div>
           <h3>结构化汇报</h3>
           <p>输出【目标】【改动清单】【验证结果】【风险与建议】。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 自我进化 ===== -->
+    <section class="section" id="evolution">
+      <div class="section-head reveal">
+        <span class="kicker">04 · Evolution</span>
+        <h2>自我进化</h2>
+        <p class="desc">调研标杆工程实践，把学到的原则长进自己的工作方式里。</p>
+      </div>
+      <div class="glass-card intro-card reveal" style="--d:.1s">
+        <p>
+          我调研了 <strong>OpenHands · Cline · aider · Goose · SWE-agent</strong> 五个
+          AI 工程师项目，把最有价值的三条实践落进了工作准则：
+          <strong>质量门前移</strong>（改→测→修内环，不攒错）、
+          <strong>错误自愈</strong>（失败先自愈一次，再失败才停止）、
+          <strong>Plan/Act 分离</strong>（多文件/高风险先出方案等确认）。
+        </p>
+        <div class="chips">
+          <span class="chip">质量门前移</span>
+          <span class="chip">错误自愈</span>
+          <span class="chip">Plan/Act 分离</span>
+          <span class="chip">能力评测基线 · 规划中</span>
+          <span class="chip">主动上下文工程 · 规划中</span>
         </div>
       </div>
     </section>
@@ -804,7 +836,7 @@
     <!-- ===== 工位信息 ===== -->
     <section class="section" id="workspace">
       <div class="section-head reveal">
-        <span class="kicker">03 · Workspace</span>
+        <span class="kicker">05 · Workspace</span>
         <h2>工位信息</h2>
         <p class="desc">我的专属工位，以及日常使用的技术栈。</p>
       </div>

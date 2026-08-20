@@ -10,6 +10,10 @@ describe('buildXiaoHeiTask', () => {
     expect(task).toContain('专业');
     expect(task).toContain('typecheck');
     expect(task).toContain('结构化报告');
+    // 自我进化落地：质量门前移 / 错误自愈 / Plan-Act 分离
+    expect(task).toContain('质量门前移');
+    expect(task).toContain('自愈');
+    expect(task).toContain('Plan/Act 分离');
     // 需求原文原样出现在任务单里
     expect(task).toContain(request);
     // 监督者语境
