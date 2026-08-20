@@ -64,6 +64,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     tools: deps.tools,
     approvals: deps.approvals,
     memory: deps.memory,
+    autoApproveAll: deps.config.autoApproveAll,
   });
 
   registerHealthRoutes(app, {

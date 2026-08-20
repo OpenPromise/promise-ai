@@ -20,22 +20,9 @@ RUN apt-get update \
     && npm install -g npm@11 \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
-
-# 先复制清单与 workspace 目录，充分利用镜像层缓存
-COPY package.json package-lock.json ./
-COPY packages ./packages
-COPY services ./services
-COPY apps ./apps
-COPY persona ./persona
-# coding.run（dsh）读取的仓库规则
-COPY AGENTS.md ./
-
-# 只装生产依赖（跳过 electron / esbuild / vitest 等构建与测试依赖）
-RUN npm ci --omit=dev
-
 # coding.run 后端：dsh（DeepSeek Harness）+ pnpm；构建期引导 headless profile
 # 并固定默认模型 deepseek-v4-flash（密钥由入口脚本从环境变量写入凭证文件）
+# 放在源码复制之前：代码改动不会触发 dsh 重装（下载慢，节省每次部署时间）
 RUN npm install -g pnpm \
     && npm install -g @deepseek-ai/dsh \
     && dsh --profile headless --help >/dev/null 2>&1 \
@@ -46,6 +33,19 @@ RUN npm install -g pnpm \
 RUN git config --global --add safe.directory /app \
     && git config --global user.name "Promise AI Bot" \
     && git config --global user.email "bot@promise-ai.local"
+
+WORKDIR /app
+
+# 先复制清单与 workspace 目录，充分利用镜像层缓存
+COPY package.json package-lock.json ./
+# 只装生产依赖（跳过 electron / esbuild / vitest 等构建与测试依赖）
+RUN npm ci --omit=dev
+COPY packages ./packages
+COPY services ./services
+COPY apps ./apps
+COPY persona ./persona
+# coding.run（dsh）读取的仓库规则
+COPY AGENTS.md ./
 
 COPY infrastructure/docker-entrypoint.sh /app/infrastructure/docker-entrypoint.sh
 RUN chmod +x /app/infrastructure/docker-entrypoint.sh
