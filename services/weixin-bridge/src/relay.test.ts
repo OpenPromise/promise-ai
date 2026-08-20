@@ -206,27 +206,72 @@ describe('takeEarlySegment', () => {
   });
 
   it('首段达最小长度且有句末标点时，切在第一个完整句末（关键节点短消息）', () => {
-    expect(takeEarlySegment('收到，已派给小黑。接下来我会继续。', false)).toEqual({
-      send: '收到，已派给小黑。',
-      keep: '接下来我会继续。',
+    expect(takeEarlySegment('已确认收到任务，马上派给小黑处理。接下来我会继续分析项目。', false)).toEqual({
+      send: '已确认收到任务，马上派给小黑处理。',
+      keep: '接下来我会继续分析项目。',
     });
   });
 
   it('首段过短、或已提前发过首条时，不提前切（避免碎片刷屏）', () => {
     expect(takeEarlySegment('好的。继续', false)).toBeUndefined();
     expect(takeEarlySegment('收到，已派给小黑。', true)).toBeUndefined();
+    // 短首段即使凑够阈值但没有完整句边界，也不提前切
+    expect(takeEarlySegment('正在处理中，还没有完整句子', false)).toBeUndefined();
   });
 
   it('没有任何句末标点时保持缓冲，不提前切', () => {
     expect(takeEarlySegment('没有任何标点的长文本', false)).toBeUndefined();
   });
 
-  it('超过阈值的长文本按最后一个句末标点切分', () => {
+  it('超过阈值的长文本在 400 字符窗口内按最后边界切分', () => {
     const pending = `${'这是很长的一段话，'.repeat(50)}最后一句。`;
     const seg = takeEarlySegment(pending, true);
     expect(seg).toBeDefined();
-    expect(seg!.send).toBe(pending);
-    expect(seg!.keep).toBe('');
+    // 每次只切出窗口内内容，send 以完整边界结尾，剩余继续留在缓冲
+    expect(seg!.send.endsWith('，')).toBe(true);
+    expect(seg!.send.length).toBeLessThanOrEqual(400);
+    expect(seg!.send.length).toBeGreaterThanOrEqual(20);
+    expect(seg!.keep).toContain('最后一句。');
+  });
+
+  it('假句号保护：3.14 / v1.2.3 / Mr. / 域名里的英文点不切断句', () => {
+    // 首段场景：句点不在可切范围内时，只能切在中文句号后
+    const seg = takeEarlySegment('已确认版本 v1.2.3 和 3.14 都没问题。继续。', false);
+    expect(seg?.send).toBe('已确认版本 v1.2.3 和 3.14 都没问题。');
+    expect(seg?.keep).toBe('继续。');
+    // 兜底场景：整段没有中文句号，只有英文点 + 弱边界，切点落在弱边界而非英文点
+    const pending = '数据请看 example.com 与 v1.2.3，'.repeat(40) + '结束';
+    const flushed = takeEarlySegment(pending, true);
+    expect(flushed).toBeDefined();
+    expect(flushed!.send.endsWith('。')).toBe(false);
+    expect(flushed!.send.endsWith('.')).toBe(false);
+    expect(flushed!.send.endsWith('，')).toBe(true);
+  });
+
+  it('省略号（... / …）在兜底切分时是强边界', () => {
+    const pending =
+      '这是很长的一句话'.repeat(42) + '正在下载安装包…' + '继续继续继续继续继续继续'.repeat(5) + '尾部内容';
+    const seg = takeEarlySegment(pending, true);
+    expect(seg).toBeDefined();
+    expect(seg!.send.endsWith('…')).toBe(true);
+    expect(seg!.send.length).toBeLessThanOrEqual(400);
+  });
+
+  it('无强边界的长文本退到弱边界（逗号/分号）切分', () => {
+    const pending = '这里没有句号，只有逗号，'.repeat(35) + '最后一节';
+    const seg = takeEarlySegment(pending, true);
+    expect(seg).toBeDefined();
+    expect(seg!.send.endsWith('，')).toBe(true);
+    expect(seg!.keep.length).toBeGreaterThanOrEqual(20);
+  });
+
+  it('硬切兜底不拆开 emoji（UTF-16 代理对保护）', () => {
+    const pending = 'a'.repeat(399) + '😀' + 'b'.repeat(30);
+    const seg = takeEarlySegment(pending, true);
+    expect(seg).toBeDefined();
+    expect(seg!.send.length).toBeLessThanOrEqual(400);
+    // send 不能以孤立的高代理（emoji 前半）结尾
+    expect(/[\uD800-\uDBFF]$/.test(seg!.send)).toBe(false);
   });
 });
 

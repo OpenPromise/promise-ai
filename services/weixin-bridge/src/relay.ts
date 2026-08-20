@@ -28,11 +28,19 @@ const BACKOFF_DELAY_MS = 30_000;
 /** 提前推送分段策略常量（见 takeEarlySegment）。 */
 const PARAGRAPH_SEPARATOR = '\n\n';
 /** 首段最小长度：低于它不提前发，避免「好的。」这类碎片消息刷屏。 */
-const FIRST_SEGMENT_MIN_CHARS = 6;
+const FIRST_SEGMENT_MIN_CHARS = 15;
 /** 长文本兜底切分时，切点之后的句子至少保留的字数，避免切出碎片。 */
 const SEGMENT_MIN_CHARS = 20;
 /** 无段落边界时，缓冲超过该长度即按句末标点提前切一次。 */
 const FLUSH_THRESHOLD_CHARS = 400;
+/**
+ * 强句边界（切点在这些标点之后）：中文句号/感叹号/问号、中文省略号。
+ * 注意英文句点 `.` 刻意不在其中——数字（3.14 / v1.2.3）、缩写（Mr. / U.S.A.）、
+ * 域名（example.com）里的点不是句子结束（LiveKit 假句号保护思路）。
+ */
+const STRONG_BOUNDARY_CHARS = '。！？!?…';
+/** 弱句边界（长文本无强边界时的兜底）：分号/逗号/顿号/冒号（中英）。 */
+const WEAK_BOUNDARY_CHARS = '；;，,、：:';
 
 /** 长任务工具白名单：这些工具执行时向微信推送"已派出/已完成"进度节点。 */
 const LONG_TASK_TOOLS = ['engineer.delegate', 'coding.run'];
@@ -69,28 +77,89 @@ export function takeEarlySegment(
     const send = pending.slice(0, para).trim();
     if (send) return { send, keep: pending.slice(para + PARAGRAPH_SEPARATOR.length) };
   }
+  // 首段：达最小长度且有强边界时，切在第一个完整句末（关键节点短消息）。
+  // 阈值提高后，「好的。」这类短句不再单发，等 chat.done 一次性发出。
   if (!alreadySentFirst && pending.length >= FIRST_SEGMENT_MIN_CHARS) {
-    const end = findSentenceEnd(pending, FIRST_SEGMENT_MIN_CHARS - 1, false);
+    const end = findFirstStrongBoundary(pending, FIRST_SEGMENT_MIN_CHARS - 1);
     if (end >= 0) {
-      return { send: pending.slice(0, end + 1).trim(), keep: pending.slice(end + 1) };
+      const cut = clampToCharBoundary(pending, end + 1);
+      return { send: pending.slice(0, cut).trim(), keep: pending.slice(cut) };
     }
   }
+  // 长文本兜底：在 400 字符窗口内优先最后一个强边界，其次弱边界
+  // （分号/逗号等），再其次空格，最后才硬切。全程 emoji 保护。
   if (pending.length >= FLUSH_THRESHOLD_CHARS) {
-    const end = findSentenceEnd(pending, SEGMENT_MIN_CHARS - 1, true);
+    const end = findSegmentBoundary(
+      pending,
+      SEGMENT_MIN_CHARS - 1,
+      true,
+      FLUSH_THRESHOLD_CHARS,
+    );
     if (end >= 0) {
-      return { send: pending.slice(0, end + 1).trim(), keep: pending.slice(end + 1) };
+      const cut = clampToCharBoundary(pending, end + 1);
+      return { send: pending.slice(0, cut).trim(), keep: pending.slice(cut) };
+    }
+    // 空格兜底：避免硬切把单词/数字/URL 拆开。
+    const space = pending.lastIndexOf(' ', FLUSH_THRESHOLD_CHARS - 1);
+    if (space >= SEGMENT_MIN_CHARS) {
+      const cut = clampToCharBoundary(pending, space);
+      return { send: pending.slice(0, cut).trim(), keep: pending.slice(cut).trimStart() };
+    }
+    const cut = clampToCharBoundary(pending, FLUSH_THRESHOLD_CHARS);
+    if (cut >= SEGMENT_MIN_CHARS) {
+      return { send: pending.slice(0, cut).trim(), keep: pending.slice(cut).trimStart() };
     }
   }
   return undefined;
 }
 
-/** 查找 >= minIndex 的第一个句末标点下标（includeNewline 时换行也算边界）。 */
-function findSentenceEnd(text: string, minIndex: number, includeNewline: boolean): number {
-  const re = includeNewline ? /[。！？!?；;.!?\n]/ : /[。！？!?；;.!?]/;
+/** 连续三个英文句点（省略号 ...）视作强边界；单个/两个点不是。 */
+function isEllipsisAt(text: string, index: number): boolean {
+  return (
+    text[index] === '.' && index >= 2 && text[index - 1] === '.' && text[index - 2] === '.'
+  );
+}
+
+/** 查找 >= minIndex 的第一个强边界标点下标。 */
+function findFirstStrongBoundary(text: string, minIndex: number): number {
   for (let i = minIndex; i < text.length; i += 1) {
-    if (re.test(text[i]!)) return i;
+    const ch = text[i]!;
+    if (STRONG_BOUNDARY_CHARS.includes(ch) || isEllipsisAt(text, i)) return i;
   }
   return -1;
+}
+
+/**
+ * 从后往前找最后一个边界标点（>= minIndex）。
+ * 优先强边界（。！？!?… 与省略号 ...）；找不到时若 allowWeak 则退回弱边界
+ * （；，、：）。英文句点 `.` 永不作为边界（假句号保护）。
+ * maxIndex 限定搜索窗口（不越过该下标），保证切出的段长度不会失控。
+ */
+function findSegmentBoundary(
+  text: string,
+  minIndex: number,
+  allowWeak: boolean,
+  maxIndex = text.length,
+): number {
+  let weak = -1;
+  const from = Math.min(text.length, maxIndex) - 1;
+  for (let i = from; i >= minIndex; i -= 1) {
+    const ch = text[i]!;
+    if (STRONG_BOUNDARY_CHARS.includes(ch) || isEllipsisAt(text, i)) return i;
+    if (allowWeak && weak < 0 && WEAK_BOUNDARY_CHARS.includes(ch)) weak = i;
+  }
+  return weak;
+}
+
+/**
+ * 把切点回退到合法 UTF-16 码点边界：若 index 落在 surrogate pair 中间
+ * （低代理项开头），往前退一位，避免拆开 emoji 产生乱码（OpenClaw 思路）。
+ */
+function clampToCharBoundary(text: string, index: number): number {
+  if (index <= 0 || index >= text.length) return index;
+  const code = text.charCodeAt(index);
+  if (code >= 0xdc00 && code <= 0xdfff) return index - 1;
+  return index;
 }
 
 interface PendingApproval {
