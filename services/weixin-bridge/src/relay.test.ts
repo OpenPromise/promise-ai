@@ -3,7 +3,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { ILinkClient, WeixinMessage } from './ilink.js';
-import { chatOnce, consumeSse, runWeixinRelay } from './relay.js';
+import { chatOnce, consumeSse, parseApprovalText, runWeixinRelay } from './relay.js';
 import type { AccountState } from './state.js';
 
 function sseResponse(lines: string[]): Response {
@@ -32,8 +32,9 @@ describe('consumeSse', () => {
 });
 
 describe('chatOnce', () => {
-  it('streams tokens and auto-denies permission requests', async () => {
+  it('streams tokens and routes permission requests to WeChat text approval', async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
+    const asks: Array<{ requestId: string; toolName: string }> = [];
     const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
       calls.push({ url: String(url), init });
       if (String(url).endsWith('/chat')) {
@@ -51,15 +52,12 @@ describe('chatOnce', () => {
 
     const reply = await chatOnce('http://agent:3000', 's1', '你好', {
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      onPermissionRequest: (info) => asks.push(info),
     });
     expect(reply.text).toBe('你好，世界');
-    expect(reply.deniedTools).toEqual(['files.delete']);
-    const permissionCall = calls.find((call) => call.url.includes('/permission'));
-    expect(permissionCall).toBeTruthy();
-    expect(JSON.parse(permissionCall!.init.body as string)).toMatchObject({
-      requestId: 'req-1',
-      approved: false,
-    });
+    // 不再自动拒绝：把请求交给微信文字审批（onPermissionRequest 回调）
+    expect(asks).toEqual([{ requestId: 'req-1', toolName: 'files.delete' }]);
+    expect(calls.some((call) => call.url.includes('/permission'))).toBe(false);
   });
 
   it('returns an error note on non-200 chat response', async () => {
@@ -68,6 +66,19 @@ describe('chatOnce', () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
     expect(reply.error).toContain('503');
+  });
+});
+
+describe('parseApprovalText', () => {
+  it('识别允许/拒绝关键词', () => {
+    expect(parseApprovalText('允许')).toBe('allow');
+    expect(parseApprovalText('可以。')).toBe('allow');
+    expect(parseApprovalText('OK')).toBe('allow');
+    expect(parseApprovalText('拒绝')).toBe('deny');
+    expect(parseApprovalText('不要')).toBe('deny');
+    expect(parseApprovalText('no')).toBe('deny');
+    expect(parseApprovalText('帮我看看')).toBeUndefined();
+    expect(parseApprovalText('')).toBeUndefined();
   });
 });
 
@@ -377,6 +388,139 @@ describe('runWeixinRelay', () => {
     expect(chatBody?.message).toContain('[用户发来文件：报告.pdf');
     expect(chatBody?.message).toContain('已保存到文件库');
     expect(sent[0]?.item_list?.[0]?.text_item?.text).toBe('文件已收到');
+
+    controller.abort();
+    await relayPromise;
+  });
+
+  it('微信文字审批：授权请求 → 询问 → 用户回复允许 → 继续执行并回复', async () => {
+    const sent: Array<{ text?: string }> = [];
+    const controller = new AbortController();
+    let polls = 0;
+    let releaseChat: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseChat = resolve;
+    });
+    const permissionCalls: Array<{ approved: boolean }> = [];
+
+    const client = {
+      baseUrl: 'https://ilinkai.weixin.qq.com',
+      async notifyStart() {},
+      async notifyStop() {},
+      async getUpdates(_buf: string, options: { signal?: AbortSignal }) {
+        polls += 1;
+        const msg = (text: string) => ({
+          from_user_id: 'wx_peer',
+          message_type: 1,
+          message_state: 2,
+          context_token: 'ctx',
+          run_id: `r${polls}`,
+          item_list: [{ type: 1, text_item: { text } }],
+        });
+        if (polls === 1) {
+          return { ret: 0, get_updates_buf: 'buf-2', msgs: [msg('执行删除')] };
+        }
+        if (polls === 2) {
+          return { ret: 0, get_updates_buf: 'buf-3', msgs: [msg('允许')] };
+        }
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, 60_000);
+          options.signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            resolve(undefined);
+          });
+        });
+        throw new Error('aborted');
+      },
+      async getConfig() {
+        return { ret: 0, typing_ticket: 'ticket' };
+      },
+      async sendTyping() {},
+      async sendMessage(message: {
+        to_user_id?: string;
+        item_list?: Array<{ text_item?: { text?: string } }>;
+      }) {
+        sent.push({ text: message.item_list?.[0]?.text_item?.text });
+      },
+    } as unknown as ILinkClient;
+
+    const state: AccountState = {
+      token: 'tok',
+      baseUrl: 'https://ilinkai.weixin.qq.com',
+      accountId: 'bot-1',
+      peerSessions: {},
+      savedAt: new Date().toISOString(),
+    };
+
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith('/api/sessions')) {
+        return new Response(JSON.stringify({ id: 'session-abc' }), { status: 201 });
+      }
+      if (u.endsWith('/chat')) {
+        // SSE 在权限请求处阻塞，直到 /permission 被调用才继续
+        const enc = new TextEncoder();
+        const stream = new ReadableStream<Uint8Array>({
+          start(streamController) {
+            streamController.enqueue(
+              enc.encode(
+                `data: ${JSON.stringify({ type: 'chat.token', payload: { delta: '需要确认：' } })}\n\n`,
+              ),
+            );
+            streamController.enqueue(
+              enc.encode(
+                `data: ${JSON.stringify({
+                  type: 'permission.request',
+                  payload: { request: { requestId: 'req-9', toolName: 'files.delete' } },
+                })}\n\n`,
+              ),
+            );
+            void gate.then(() => {
+              streamController.enqueue(
+                enc.encode(
+                  `data: ${JSON.stringify({ type: 'chat.token', payload: { delta: '已执行' } })}\n\n`,
+                ),
+              );
+              streamController.close();
+            });
+          },
+        });
+        return new Response(stream, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      }
+      if (u.includes('/permission')) {
+        const body = JSON.parse(String(init.body)) as { approved: boolean };
+        permissionCalls.push({ approved: body.approved });
+        releaseChat?.();
+      }
+      return new Response('{}', { status: 200 });
+    });
+
+    const relayPromise = runWeixinRelay(
+      {
+        agentUrl: 'http://agent:3000',
+        client,
+        state,
+        persist: vi.fn(async () => {}),
+        log: () => {},
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      },
+      controller.signal,
+    );
+
+    const deadline = Date.now() + 6000;
+    while (
+      (permissionCalls.length === 0 || !sent.some((m) => m.text?.includes('已执行'))) &&
+      Date.now() < deadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(permissionCalls).toEqual([{ approved: true }]);
+    expect(sent.some((m) => m.text?.includes('需要你的授权：files.delete'))).toBe(true);
+    expect(sent.some((m) => m.text?.includes('已执行'))).toBe(true);
 
     controller.abort();
     await relayPromise;

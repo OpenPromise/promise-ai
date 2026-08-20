@@ -27,16 +27,46 @@ const BACKOFF_DELAY_MS = 30_000;
 
 export interface ChatReply {
   text: string;
-  deniedTools: string[];
   error?: string;
 }
 
-/** 与 agent-server 完成一轮对话：POST /chat 消费 SSE，权限请求自动拒绝。 */
+interface PendingApproval {
+  sessionId: string;
+  requestId: string;
+  toolName: string;
+  resolve: () => void;
+  timer: NodeJS.Timeout;
+}
+
+/** 待授权请求（sessionId -> pending）；由用户下一条微信文字答复。 */
+const pendingApprovals = new Map<string, PendingApproval>();
+/** 正在处理中的会话（防止并发开多个聊天）。 */
+const inflightSessions = new Set<string>();
+
+/** 解析微信文字授权答复：允许 / 拒绝 / 未识别。 */
+export function parseApprovalText(text: string): 'allow' | 'deny' | undefined {
+  const t = text.trim().replace(/[。！!？?，,、\s]+$/g, '').toLowerCase();
+  if (/^(允许|同意|可以|好|行|是|继续|执行|确认|yes|ok|approve|allow)$/.test(t)) {
+    return 'allow';
+  }
+  if (/^(拒绝|不要|不行|不可以|取消|否|算了|no|deny|cancel|reject)$/.test(t)) {
+    return 'deny';
+  }
+  return undefined;
+}
+
+/** 与 agent-server 完成一轮对话：POST /chat 消费 SSE；权限请求改为微信文字审批。 */
 export async function chatOnce(
   agentUrl: string,
   sessionId: string,
   userMessage: string,
-  options: { signal?: AbortSignal; fetchImpl?: typeof fetch; log?: (message: string) => void } = {},
+  options: {
+    signal?: AbortSignal;
+    fetchImpl?: typeof fetch;
+    log?: (message: string) => void;
+    /** 权限请求到达时回调（发送微信授权提示）。 */
+    onPermissionRequest?: (info: { requestId: string; toolName: string }) => void;
+  } = {},
 ): Promise<ChatReply> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const response = await fetchImpl(
@@ -50,62 +80,76 @@ export async function chatOnce(
   );
   if (!response.ok) {
     const detail = (await response.text().catch(() => '')).slice(0, 300);
-    return { text: '', deniedTools: [], error: `Agent 服务返回 ${response.status}：${detail}` };
+    return { text: '', error: `Agent 服务返回 ${response.status}：${detail}` };
   }
 
   let text = '';
-  const deniedTools: string[] = [];
   let error: string | undefined;
-  const denied = new Set<string>();
-
-  const deny = (requestId: string, toolName: string): void => {
-    if (denied.has(requestId)) return;
-    denied.add(requestId);
-    deniedTools.push(toolName || '未知操作');
-    void fetchImpl(`${agentUrl.replace(/\/+$/, '')}/api/sessions/${sessionId}/permission`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        requestId,
-        approved: false,
-        reason: '微信通道默认拒绝，请到桌面端授权',
-      }),
-    }).catch(() => {});
-  };
-
-  await consumeSse(response, (line) => {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith('data: ')) return;
-    let envelope: {
-      type?: string;
-      payload?: {
-        delta?: string;
-        error?: string;
-        request?: { requestId?: string; toolName?: string };
+  let lastRequestId: string | undefined;
+  try {
+    await consumeSse(response, (line) => {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data: ')) return;
+      let envelope: {
+        type?: string;
+        payload?: {
+          delta?: string;
+          error?: string;
+          request?: { requestId?: string; toolName?: string };
+        };
       };
-    };
-    try {
-      envelope = JSON.parse(trimmed.slice(6)) as typeof envelope;
-    } catch {
-      return;
-    }
-    switch (envelope.type) {
-      case 'chat.token':
-        text += envelope.payload?.delta ?? '';
-        break;
-      case 'permission.request': {
-        const requestId = envelope.payload?.request?.requestId ?? '';
-        const toolName = envelope.payload?.request?.toolName ?? '';
-        if (requestId) deny(requestId, toolName);
-        break;
+      try {
+        envelope = JSON.parse(trimmed.slice(6)) as typeof envelope;
+      } catch {
+        return;
       }
-      case 'chat.error':
-        error = envelope.payload?.error ?? '未知错误';
-        break;
+      switch (envelope.type) {
+        case 'chat.token':
+          text += envelope.payload?.delta ?? '';
+          break;
+        case 'permission.request': {
+          const requestId = envelope.payload?.request?.requestId ?? '';
+          const toolName = envelope.payload?.request?.toolName ?? '';
+          if (!requestId) break;
+          lastRequestId = requestId;
+          // 登记待授权：用户下一条微信文字答复后由 handleInboundMessage 触发。
+          const timer = setTimeout(() => {
+            if (pendingApprovals.get(sessionId)?.requestId === requestId) {
+              pendingApprovals.delete(sessionId);
+            }
+          }, 70_000);
+          timer.unref?.();
+          pendingApprovals.set(sessionId, {
+            sessionId,
+            requestId,
+            toolName: toolName || '未知操作',
+            resolve: () => {
+              if (pendingApprovals.get(sessionId)?.requestId === requestId) {
+                pendingApprovals.delete(sessionId);
+              }
+              clearTimeout(timer);
+            },
+            timer,
+          });
+          options.onPermissionRequest?.({ requestId, toolName: toolName || '未知操作' });
+          break;
+        }
+        case 'chat.error':
+          error = envelope.payload?.error ?? '未知错误';
+          break;
+      }
+    });
+  } finally {
+    if (lastRequestId) {
+      const pending = pendingApprovals.get(sessionId);
+      if (pending?.requestId === lastRequestId) {
+        clearTimeout(pending.timer);
+        pendingApprovals.delete(sessionId);
+      }
     }
-  });
+  }
 
-  return { text, deniedTools, error };
+  return { text, error };
 }
 
 /** 逐行消费 SSE 响应（跨 chunk 处理半行）。 */
@@ -229,6 +273,68 @@ async function handleInboundMessage(msg: WeixinMessage, options: RelayOptions): 
     return;
   }
 
+  // 权限审批：存在待授权请求时，本条文字视为允许/拒绝答复。
+  const pending = pendingApprovals.get(sessionId);
+  if (pending) {
+    const decision = parseApprovalText(text);
+    if (decision === undefined) {
+      await fetchImpl(`${agentUrl.replace(/\/+$/, '')}/api/sessions/${sessionId}/permission`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          requestId: pending.requestId,
+          approved: false,
+          reason: '未识别为允许，已按拒绝处理',
+        }),
+      }).catch(() => {});
+      pending.resolve();
+      await client.sendMessage(
+        buildReplyMessage({
+          to: peer,
+          text: '没有识别到「允许」或「拒绝」，该操作已取消；需要的话重新发起即可。',
+          contextToken: msg.context_token,
+          runId: msg.run_id,
+        }),
+      );
+      return;
+    }
+    const approved = decision === 'allow';
+    await fetchImpl(`${agentUrl.replace(/\/+$/, '')}/api/sessions/${sessionId}/permission`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        requestId: pending.requestId,
+        approved,
+        reason: approved ? '用户微信文字允许' : '用户微信文字拒绝',
+      }),
+    }).catch(() => {});
+    pending.resolve();
+    if (!approved) {
+      await client.sendMessage(
+        buildReplyMessage({
+          to: peer,
+          text: '已拒绝该操作。',
+          contextToken: msg.context_token,
+          runId: msg.run_id,
+        }),
+      );
+    }
+    return;
+  }
+
+  // 同一会话上一轮还没结束（含正在等授权），避免并发开聊天。
+  if (inflightSessions.has(sessionId)) {
+    await client.sendMessage(
+      buildReplyMessage({
+        to: peer,
+        text: '⏳ 上一条还在处理中，请稍候再发。',
+        contextToken: msg.context_token,
+        runId: msg.run_id,
+      }),
+    );
+    return;
+  }
+
   // 输入中提示（尽力而为）
   try {
     const cfg = await client.getConfig(peer, msg.context_token);
@@ -237,30 +343,47 @@ async function handleInboundMessage(msg: WeixinMessage, options: RelayOptions): 
     // typing 失败不影响主流程
   }
 
-  const reply = await chatOnce(agentUrl, sessionId, userMessage, {
-    fetchImpl,
-    log,
-  });
-  const replyParts: string[] = [];
-  if (reply.text) replyParts.push(markdownToPlain(reply.text));
-  if (reply.deniedTools.length > 0) {
-    replyParts.push(
-      `⚠️ 已拒绝需要确认的操作：${[...new Set(reply.deniedTools)].join('、')}（可在桌面端授权后重试）`,
-    );
-  }
-  if (reply.error) replyParts.push(`❌ ${reply.error}`);
-  if (replyParts.length === 0) return;
-
-  for (const chunk of splitLongText(replyParts.join('\n\n'))) {
-    await client.sendMessage(
-      buildReplyMessage({
-        to: peer,
-        text: chunk,
-        contextToken: msg.context_token,
-        runId: msg.run_id,
-      }),
-    );
-  }
+  // 后台消费聊天流：权限请求到达时发授权提示，等待用户下一条微信文字；
+  // 不阻塞长轮询循环（否则用户回复无法被收到）。
+  inflightSessions.add(sessionId);
+  void (async () => {
+    try {
+      const reply = await chatOnce(agentUrl, sessionId, userMessage, {
+        fetchImpl,
+        log,
+        onPermissionRequest: (info) => {
+          void client
+            .sendMessage(
+              buildReplyMessage({
+                to: peer,
+                text: `⚠️ 需要你的授权：${info.toolName}\n回复「允许」继续，或「拒绝」取消。`,
+                contextToken: msg.context_token,
+                runId: msg.run_id,
+              }),
+            )
+            .catch(() => {});
+        },
+      });
+      const replyParts: string[] = [];
+      if (reply.text) replyParts.push(markdownToPlain(reply.text));
+      if (reply.error) replyParts.push(`❌ ${reply.error}`);
+      if (replyParts.length === 0) return;
+      for (const chunk of splitLongText(replyParts.join('\n\n'))) {
+        await client.sendMessage(
+          buildReplyMessage({
+            to: peer,
+            text: chunk,
+            contextToken: msg.context_token,
+            runId: msg.run_id,
+          }),
+        );
+      }
+    } catch (error) {
+      log?.(`[weixin] 对话失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      inflightSessions.delete(sessionId);
+    }
+  })();
 }
 
 /**
