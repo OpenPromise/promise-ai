@@ -255,4 +255,28 @@ describe('cloud.firewall_close', () => {
     expect((result.data as { alreadyClosed: boolean }).alreadyClosed).toBe(true);
     expect(client.DeleteFirewallRules).not.toHaveBeenCalled();
   });
+
+  it('IPv6 规则（查询结果 CidrBlock 为空串）删除载荷省略空字段', async () => {
+    const client = makeStubClient({
+      DescribeFirewallRules: vi.fn(async () => ({
+        FirewallRuleSet: [
+          {
+            Protocol: 'TCP',
+            Port: '443',
+            CidrBlock: '',
+            Ipv6CidrBlock: '::/0',
+            Action: 'ACCEPT',
+            FirewallRuleDescription: '',
+          },
+        ],
+      })),
+    });
+    const tool = makeTools(client)[3]!;
+    const result = await tool.execute({ port: 443 }, { sessionId: 's1' });
+    expect(result.ok).toBe(true);
+    expect(client.DeleteFirewallRules).toHaveBeenCalledWith({
+      InstanceId: INSTANCE_ID,
+      FirewallRules: [{ Protocol: 'TCP', Port: '443', Action: 'ACCEPT', Ipv6CidrBlock: '::/0' }],
+    });
+  });
 });

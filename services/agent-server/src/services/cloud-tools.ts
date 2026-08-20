@@ -278,14 +278,21 @@ export function createCloudTools(options: CloudToolOptions): Tool[] {
           }
           await client.DeleteFirewallRules({
             InstanceId: instanceId,
-            FirewallRules: matching.map((rule) => ({
-              Protocol: rule.Protocol,
-              Port: rule.Port,
-              CidrBlock: rule.CidrBlock,
-              Ipv6CidrBlock: rule.Ipv6CidrBlock,
-              Action: rule.Action,
-              FirewallRuleDescription: rule.FirewallRuleDescription,
-            })),
+            FirewallRules: matching.map((rule) => {
+              // 腾讯云 API 拒绝空串 CidrBlock/Ipv6CidrBlock：
+              // IPv6 规则在查询结果里 CidrBlock 为空串，必须省略而非传空。
+              const payload: Record<string, unknown> = {
+                Protocol: rule.Protocol,
+                Port: rule.Port,
+                Action: rule.Action,
+              };
+              if (rule.CidrBlock) payload.CidrBlock = rule.CidrBlock;
+              if (rule.Ipv6CidrBlock) payload.Ipv6CidrBlock = rule.Ipv6CidrBlock;
+              if (rule.FirewallRuleDescription) {
+                payload.FirewallRuleDescription = rule.FirewallRuleDescription;
+              }
+              return payload;
+            }),
           });
           return {
             ok: true,
