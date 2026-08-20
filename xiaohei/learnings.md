@@ -245,3 +245,20 @@
 - 官方文档：docs.x.ai/build/overview；用户指南（仓库内 `crates/codegen/xai-grok-pager/docs/user-guide/`）：
   19-plan-mode.md / 16-subagents.md / 22-permissions-and-safety.md / 13-memory.md / 18-sandbox.md / 08-skills.md / 10-hooks.md / 20-background-tasks.md / 14-headless-mode.md / 12-project-rules.md
 - 关键源码：`crates/codegen/xai-grok-workspace/src/session/checkpoint.rs`（turn-boundary 回滚）
+
+---
+
+## 九、微信文件库与文件发送（任务沉淀 #3，2026-08-20）
+
+> 场景：改写文件库文档并发送给微信用户。沉淀可复用的路径/调用方式，避免下次重新摸索。
+
+- **文件库位置**：`/app/weixin-files`（宿主，gitignored 用户数据目录）= weixin-bridge 容器 `assistant-weixin` 的 `/data/weixin-files`（bind mount，由 `WEIXIN_FILES_DIR` 指定）。宿主直接写文件即入文件库，无需经过 bridge。
+- **bridge 访问方式**：weixin-bridge 跑在 Docker 容器内（`infrastructure-weixin-bridge` 镜像，容器名 `assistant-weixin`，端口 3100）；宿主沙箱网络无法直连 `127.0.0.1:3100`（Connection refused），**需用 `docker exec assistant-weixin curl http://127.0.0.1:3100/...` 在容器内调用**。
+- **文件库 API**（services/weixin-bridge/src/files.ts + index.ts）：
+  - `GET /api/weixin/files` —— 列出文件（name/size/modifiedAt）；
+  - `POST /api/weixin/send-file` `{fileName}` —— 同步发送给绑定微信对端，返回 `{ok,sent,size}`；
+  - `POST /api/weixin/send-file-async` `{fileName}` —— 异步 job 发送，返回 jobId，进度/完成由微信消息实时推送（agent-server 的 `weixin.send_file` 工具走此接口）；
+  - `POST /api/weixin/delete-file` `{fileName}` —— 永久删除（匹配规则：精确/前缀/包含）。
+  - 发送前提：bridge 已登录且 `state.json` 有 `account.peerSessions`（本次已有绑定对端，未指定 sessionId 时自动落到第一个绑定对端）。
+- **文件名匹配**：`resolveFileByName` 精确 > 前缀 > 包含（大小写不敏感），中文文件名直接传原名即可。
+- **入库即 gitignore**：`weixin-files/` 在 `.gitignore` 内，文件库内容不入 git；如需版本化备份，把文档副本放到仓库内目录（如 `xiaohei/`）单独提交。
