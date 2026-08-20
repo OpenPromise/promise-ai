@@ -34,7 +34,8 @@ describe('github.* 全流程工具', () => {
 
   it('github.create_issue 无 token 时明确报错', async () => {
     const fetchImpl = vi.fn();
-    const tools = createGithubTools({ fetchImpl });
+    // 空串显式表示无 token，避免泄漏环境变量 GITHUB_TOKEN
+    const tools = createGithubTools({ fetchImpl, token: '' });
     const tool = tools.find((t) => t.name === 'github.create_issue')!;
     const result = await tool.execute(
       { repo: 'OpenPromise/promise-ai', title: '测试' },
@@ -47,7 +48,10 @@ describe('github.* 全流程工具', () => {
 
   it('github.create_issue 有 token 时真实创建（L1）', async () => {
     const fetchImpl = vi.fn(async (_url: unknown, _init?: RequestInit) =>
-      jsonResponse({ number: 99, title: '测试', html_url: 'https://github.com/x/y/issues/99' }, 201),
+      jsonResponse(
+        { number: 99, title: '测试', html_url: 'https://github.com/x/y/issues/99' },
+        201,
+      ),
     );
     const tools = createGithubTools({ fetchImpl, token: 'ghp_test' });
     const tool = tools.find((t) => t.name === 'github.create_issue')!;
