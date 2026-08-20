@@ -222,6 +222,7 @@ export class ProfileIngestor {
     if (!userMessage.trim()) return;
     if (!this.canRun()) return;
     try {
+      console.log(`[profile] ingest start: ${userMessage.trim().slice(0, 60)}`);
       const userId = resolveProfileUserId();
       const profile = await this.#store.getProfile(userId);
       const result = await this.#llm.generate({
@@ -230,6 +231,7 @@ export class ProfileIngestor {
       // 无论是否抽到内容都记下时间，避免"无事实可抽"时每条消息都调 LLM。
       this.#lastRunAt = Date.now();
       const facts = parseExtractionResponse(result.text);
+      console.log(`[profile] extraction facts: ${facts.length}`);
       if (facts.length === 0) return;
       const { applied } = await applyExtractedFacts(this.#store, userId, facts);
       if (applied > 0) {
@@ -237,10 +239,12 @@ export class ProfileIngestor {
       }
       // Avatar 进化证据：偏好类事实映射到外观参数，喂给 avatar_preferences（user 源）。
       if (this.#avatarStore) {
+        let avatarHits = 0;
         for (const fact of facts) {
           if (fact.event === 'DELETE' || fact.event === 'NONE') continue;
           const hits = mapPreferenceToAvatar(`${fact.key} ${fact.value}`);
           for (const hit of hits) {
+            avatarHits += 1;
             await this.#avatarStore.addPreferenceEvidence({
               parameter: hit.parameter,
               direction: hit.direction,
@@ -249,6 +253,9 @@ export class ProfileIngestor {
               consistency: 1,
             });
           }
+        }
+        if (avatarHits > 0) {
+          console.log(`[profile] avatar 偏好证据 +${avatarHits}`);
         }
       }
       // Letta memory pressure：画像过多时自动整理（带冷却，失败静默）。
