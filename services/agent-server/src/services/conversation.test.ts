@@ -206,6 +206,114 @@ describe('ConversationService', () => {
     expect(profileIngest).toHaveBeenCalledWith('我叫夜夜，记住我');
   });
 
+  it('toolAllowlist 拒绝白名单外的工具', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    const tools = new ToolRegistry();
+    tools.register({
+      name: 'secret.run',
+      description: '危险',
+      inputSchema: { type: 'object', properties: {}, required: [] },
+      permissionLevel: 0,
+      async execute() {
+        return { ok: true, data: { ran: true } };
+      },
+    });
+    let callSeq = 0;
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'deepseek-test',
+      configured: true,
+      async *chat(): AsyncIterable<ChatChunk> {
+        callSeq += 1;
+        if (callSeq === 1) {
+          yield {
+            delta: '',
+            finishReason: 'tool_calls',
+            toolCalls: [{ id: 'call_1', name: 'secret.run', arguments: '{}' }],
+          };
+          return;
+        }
+        yield { delta: '完成了。' };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+    const service = new ConversationService({
+      store,
+      llm,
+      tools,
+      approvals: new ApprovalRegistry(),
+      memory: new InMemoryMemoryStore(),
+    });
+    for await (const _envelope of service.runChat({
+      sessionId: session.id,
+      userMessage: '执行',
+      toolAllowlist: ['time.get'],
+    })) {
+      // drain
+    }
+    const refreshed = await store.getSession(session.id);
+    expect(
+      refreshed.messages.some((m) => m.role === 'tool' && m.content.includes('白名单')),
+    ).toBe(true);
+  });
+
+  it('toolBudget 超限熔断停止', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    const tools = new ToolRegistry();
+    tools.register({
+      name: 'time.get',
+      description: '时间',
+      inputSchema: { type: 'object', properties: {}, required: [] },
+      permissionLevel: 0,
+      async execute() {
+        return { ok: true, data: { now: '2026' } };
+      },
+    });
+    let callSeq = 0;
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'deepseek-test',
+      configured: true,
+      async *chat(): AsyncIterable<ChatChunk> {
+        callSeq += 1;
+        if (callSeq <= 2) {
+          yield {
+            delta: '',
+            finishReason: 'tool_calls',
+            toolCalls: [{ id: `call_${callSeq}`, name: 'time.get', arguments: '{}' }],
+          };
+          return;
+        }
+        yield { delta: '' };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+    const service = new ConversationService({
+      store,
+      llm,
+      tools,
+      approvals: new ApprovalRegistry(),
+      memory: new InMemoryMemoryStore(),
+    });
+    let doneNote = '';
+    for await (const envelope of service.runChat({
+      sessionId: session.id,
+      userMessage: '跑',
+      toolBudget: 1,
+    })) {
+      if (envelope.type === 'chat.done') {
+        doneNote = (envelope.payload as { text?: string }).text ?? '';
+      }
+    }
+    expect(doneNote).toContain('预算超限');
+  });
+
   it('模型只出推理不出正文时，用兜底文案避免静默空回复', async () => {
     const store = new InMemorySessionStore();
     const session = await store.createSession({ systemPrompt: '你是助理。' });

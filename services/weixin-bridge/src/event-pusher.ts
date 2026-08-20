@@ -40,6 +40,14 @@ export function formatEvent(event: string, data: unknown): string | undefined {
     const name = task.taskName || task.action || '定时任务';
     const ok = task.status !== 'error';
     const detail = (task.output || task.error || '').toString().slice(0, 300);
+    // OpenClaw heartbeat 不打扰协议：任务输出 HEARTBEAT_OK 表示"无事发生"，
+    // 静默跳过，不推送给用户（避免定时巡检每轮都刷屏）。
+    if (
+      ok &&
+      (task.output ?? '').toString().trim().toUpperCase().includes('HEARTBEAT_OK')
+    ) {
+      return undefined;
+    }
     return `${ok ? '✅' : '❌'} 定时任务${ok ? '完成' : '失败'}：${name}${detail ? `\n${detail}` : ''}`;
   }
   return undefined;

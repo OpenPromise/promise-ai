@@ -29,6 +29,10 @@ export interface RunChatInput {
   signal?: AbortSignal;
   /** Unattended execution (scheduled tasks): L2/L3 tools are denied without prompting. */
   headless?: boolean;
+  /** 允许使用的工具白名单（定时任务加固，OpenClaw tools-allow 思路）。 */
+  toolAllowlist?: string[];
+  /** 本次请求工具调用预算上限；超限即熔断（自主任务成本控制）。 */
+  toolBudget?: number;
 }
 
 export interface ConversationServiceDeps {
@@ -371,6 +375,8 @@ export class ConversationService {
     let memoryInjected = false;
     let lastToolFingerprint: string | null = null;
     let toolRepeatCount = 0;
+    let toolCallsUsed = 0;
+    let toolBudgetExceeded = false;
     let stopToolLoop = false;
 
     await this.#store.addMessage(input.sessionId, {
@@ -499,6 +505,7 @@ export class ConversationService {
       });
 
       for (const call of toolCalls) {
+        toolCallsUsed += 1;
         const fingerprint = approvalFingerprint(call.name, parseToolCallArgs(call.arguments));
         if (fingerprint === lastToolFingerprint) {
           toolRepeatCount += 1;
@@ -513,7 +520,21 @@ export class ConversationService {
         };
         let result: ToolResult | undefined;
         let toolStartedAt: number | undefined;
-        if (toolRepeatCount >= TOOL_REPEAT_LIMIT) {
+        if (input.toolBudget !== undefined && toolCallsUsed > input.toolBudget) {
+          toolBudgetExceeded = true;
+          stopToolLoop = true;
+          result = {
+            ok: false,
+            error: `工具预算超限（已执行 ${toolCallsUsed - 1}/${input.toolBudget} 次），已熔断停止`,
+          };
+        } else if (input.toolAllowlist && !input.toolAllowlist.includes(call.name)) {
+          // 定时任务工具白名单（OpenClaw tools-allow）：不在名单内直接拒绝，
+          // 模型看到错误后可改用允许的工具。
+          result = {
+            ok: false,
+            error: `工具 ${call.name} 不在该任务允许的工具白名单内（允许：${input.toolAllowlist.join(', ')}）`,
+          };
+        } else if (toolRepeatCount >= TOOL_REPEAT_LIMIT) {
           // 连续相同调用达到阈值：不再执行，直接返回错误结果并结束循环。
           stopToolLoop = true;
           result = {
@@ -581,7 +602,9 @@ export class ConversationService {
       }
 
       if (stopToolLoop) {
-        const note = `检测到工具循环（连续 ${TOOL_REPEAT_LIMIT} 次相同调用），已自动停止以避免无限执行`;
+        const note = toolBudgetExceeded
+          ? `工具预算超限（已执行 ${toolCallsUsed} 次工具调用），已自动熔断停止`
+          : `检测到工具循环（连续 ${TOOL_REPEAT_LIMIT} 次相同调用），已自动停止以避免无限执行`;
         await this.#store.addMessage(input.sessionId, {
           role: 'assistant',
           content: note,

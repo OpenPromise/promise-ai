@@ -16,6 +16,8 @@ export interface Task {
   createdAt: string;
   updatedAt: string;
   lastRunAt?: string;
+  /** 允许使用的工具白名单；缺省 = 全部工具可用。 */
+  tools?: string[];
 }
 
 export type TaskRunStatus = 'success' | 'error' | 'denied';
@@ -35,6 +37,7 @@ export interface CreateTaskInput {
   schedule: string;
   action: string;
   sessionId: string;
+  tools?: string[];
 }
 
 export interface TaskStore {
@@ -44,7 +47,10 @@ export interface TaskStore {
   updateTask(
     id: string,
     patch: Partial<
-      Pick<Task, 'name' | 'schedule' | 'action' | 'enabled' | 'lastRunAt' | 'sessionId'>
+      Pick<
+        Task,
+        'name' | 'schedule' | 'action' | 'enabled' | 'lastRunAt' | 'sessionId' | 'tools'
+      >
     >,
   ): Promise<Task | undefined>;
   deleteTask(id: string): Promise<boolean>;
@@ -68,6 +74,7 @@ export class InMemoryTaskStore implements TaskStore {
       enabled: true,
       createdAt: now,
       updatedAt: now,
+      ...(input.tools ? { tools: input.tools } : {}),
     };
     this.#tasks.set(task.id, task);
     return { ...task };
@@ -85,7 +92,10 @@ export class InMemoryTaskStore implements TaskStore {
   async updateTask(
     id: string,
     patch: Partial<
-      Pick<Task, 'name' | 'schedule' | 'action' | 'enabled' | 'lastRunAt' | 'sessionId'>
+      Pick<
+        Task,
+        'name' | 'schedule' | 'action' | 'enabled' | 'lastRunAt' | 'sessionId' | 'tools'
+      >
     >,
   ): Promise<Task | undefined> {
     const task = this.#tasks.get(id);
@@ -126,6 +136,7 @@ interface TaskRow {
   created_at: string;
   updated_at: string;
   last_run_at: string | null;
+  tools: unknown;
 }
 
 interface TaskRunRow {
@@ -149,6 +160,7 @@ function toTask(row: TaskRow): Task {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ...(row.last_run_at ? { lastRunAt: row.last_run_at } : {}),
+    ...(Array.isArray(row.tools) ? { tools: row.tools as string[] } : {}),
   };
 }
 
@@ -185,6 +197,7 @@ export class PostgresTaskStore implements TaskStore {
         last_run_at timestamptz
       )
     `);
+    await this.#pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS tools jsonb');
     await this.#pool.query(`
       CREATE TABLE IF NOT EXISTS task_runs (
         id uuid PRIMARY KEY,
@@ -204,8 +217,8 @@ export class PostgresTaskStore implements TaskStore {
   async createTask(input: CreateTaskInput): Promise<Task> {
     const id = randomUUID();
     await this.#pool.query(
-      `INSERT INTO tasks (id, name, schedule, action, session_id) VALUES ($1, $2, $3, $4, $5)`,
-      [id, input.name, input.schedule, input.action, input.sessionId],
+      `INSERT INTO tasks (id, name, schedule, action, session_id, tools) VALUES ($1, $2, $3, $4, $5, $6)`,
+      [id, input.name, input.schedule, input.action, input.sessionId, input.tools ?? null],
     );
     const task = await this.getTask(id);
     if (!task) throw new Error('failed to read back inserted task');
@@ -214,7 +227,7 @@ export class PostgresTaskStore implements TaskStore {
 
   async listTasks(): Promise<Task[]> {
     const result = await this.#pool.query<TaskRow>(
-      `SELECT id, name, schedule, action, session_id, enabled, created_at, updated_at, last_run_at
+      `SELECT id, name, schedule, action, session_id, enabled, created_at, updated_at, last_run_at, tools
        FROM tasks ORDER BY created_at ASC`,
     );
     return result.rows.map(toTask);
@@ -222,7 +235,7 @@ export class PostgresTaskStore implements TaskStore {
 
   async getTask(id: string): Promise<Task | undefined> {
     const result = await this.#pool.query<TaskRow>(
-      `SELECT id, name, schedule, action, session_id, enabled, created_at, updated_at, last_run_at
+      `SELECT id, name, schedule, action, session_id, enabled, created_at, updated_at, last_run_at, tools
        FROM tasks WHERE id = $1`,
       [id],
     );
@@ -242,7 +255,7 @@ export class PostgresTaskStore implements TaskStore {
     await this.#pool.query(
       `UPDATE tasks
        SET name = $2, schedule = $3, action = $4, enabled = $5, last_run_at = $6,
-           session_id = $7, updated_at = now()
+           session_id = $7, tools = $8, updated_at = now()
        WHERE id = $1`,
       [
         id,
@@ -252,6 +265,7 @@ export class PostgresTaskStore implements TaskStore {
         next.enabled,
         next.lastRunAt ?? null,
         next.sessionId,
+        next.tools ?? null,
       ],
     );
     return this.getTask(id);

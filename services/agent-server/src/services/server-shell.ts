@@ -265,13 +265,24 @@ export function createServerShellTool(
           ),
         );
         const secrets = collectSecrets();
+        const rawStdout = result.stdout;
+        const rawStderr = result.stderr;
+        const redactedStdout = redactOutput(rawStdout, secrets);
+        const redactedStderr = redactOutput(rawStderr, secrets);
+        // 密钥访问审计（OpenClaw secrets/audit 思路）：输出中出现敏感值时留痕，
+        // 便于追溯"谁在什么时候让 agent 接触了密钥"。
+        if (redactedStdout !== rawStdout || redactedStderr !== rawStderr) {
+          console.warn(
+            `[audit] server.shell 输出包含敏感密钥，已脱敏（命令：${command.trim().slice(0, 120)}）`,
+          );
+        }
         return {
           ok: true,
           data: {
             exitCode: result.exitCode,
             timedOut: result.timedOut,
-            stdout: redactOutput(result.stdout, secrets).slice(0, 20_000),
-            stderr: redactOutput(result.stderr, secrets).slice(0, 10_000),
+            stdout: redactedStdout.slice(0, 20_000),
+            stderr: redactedStderr.slice(0, 10_000),
             note: result.timedOut
               ? `命令超过 ${Math.round(timeoutMs / 1000)} 秒被终止（已清理进程树）`
               : undefined,

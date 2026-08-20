@@ -29,6 +29,8 @@ export interface TaskRunEvent {
 }
 
 export const TICK_INTERVAL_MS = 30_000;
+/** 无人值守任务的工具调用预算（防跑飞，OpenClaw tool_budget_exceeded 思路）。 */
+export const TASK_TOOL_BUDGET = 10;
 
 /**
  * A task is due when the next occurrence after its creation (or last run) has
@@ -145,6 +147,8 @@ export class TaskService {
         sessionId: task.sessionId,
         userMessage: task.action,
         headless: true,
+        toolAllowlist: task.tools,
+        toolBudget: TASK_TOOL_BUDGET,
       })) {
         if (envelope.type === 'chat.token') {
           output += (envelope.payload as { delta?: string }).delta ?? '';

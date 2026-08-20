@@ -16,6 +16,19 @@ describe('formatEvent', () => {
     );
   });
 
+  it('HEARTBEAT_OK 静默跳过（不打扰协议）', () => {
+    expect(
+      formatEvent('task.run', { taskName: '服务器巡检', status: 'success', output: 'HEARTBEAT_OK' }),
+    ).toBeUndefined();
+    expect(
+      formatEvent('task.run', {
+        taskName: '服务器巡检',
+        status: 'success',
+        output: '磁盘使用率 95%，需要处理',
+      }),
+    ).toContain('磁盘使用率');
+  });
+
   it('formats system.boot（云服务器重启完成通知）', () => {
     expect(formatEvent('system.boot', { text: '云服务器重启完成' })).toBe(
       '✅ 云服务器重启完成，所有服务已自动恢复。',

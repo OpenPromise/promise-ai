@@ -105,3 +105,18 @@
 4. **web.fetch 内容提取器**：让 bot 能读懂网页正文
 5. **工具预算熔断**：自主任务成本/次数上限
 6. **密钥访问审计**：安全可追溯
+
+## 落地进度
+
+- ✅ ① Heartbeat 不打扰协议（2026-08-20）：事件推送器识别任务输出
+  `HEARTBEAT_OK` 静默跳过（OpenClaw heartbeat 思路）；人设引导巡检任务
+  正常只回 HEARTBEAT_OK，异常才报告
+- ✅ ② 定时任务加固：task.create 支持 `tools` 白名单（OpenClaw
+  tools-allow），白名单外工具直接拒绝并回传错误；TaskService 对无人值守
+  任务设工具预算 10 次（tool_budget_exceeded 熔断）
+- ✅ ③ GitHub 全流程自研：`github.issues`（L0）、`github.create_issue`
+  （L1）、`github.comment`（L1），需要 GITHUB_TOKEN（未配置时明确报错）
+- ✅ ④ `web.fetch` 内容提取器（L0）：去脚本/样式/标签、截断、只允许
+  http/https、限制页面大小（SSRF/滥用防护）
+- ✅ ⑤ 工具预算熔断：RunChatInput.toolBudget + 超限熔断通知
+- ✅ ⑥ 密钥访问审计：server.shell 输出含敏感密钥时留审计日志（已脱敏）
