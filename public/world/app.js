@@ -205,19 +205,19 @@ function updateAvatar(dt) {
   if (!vrm) return;
   const t = avatar.clock.elapsedTime;
 
-  // 眨眼：2~5.5 秒一次，闭眼 0.15 秒
+  // 眨眼：1.5~4 秒一次，闭眼 0.16 秒
   avatar.blinkTimer -= dt;
   if (avatar.blinkTimer <= 0) {
     avatar.blinkPhase = avatar.blinkPhase === 'idle' ? 'closing' : 'idle';
-    avatar.blinkTimer = avatar.blinkPhase === 'closing' ? 0.15 : 2 + Math.random() * 3.5;
+    avatar.blinkTimer = avatar.blinkPhase === 'closing' ? 0.16 : 1.5 + Math.random() * 2.5;
   }
   setExpression('blink', avatar.blinkPhase === 'closing' ? 1 : 0);
 
-  // 小动作调度：空闲时随机触发，平滑进出
+  // 小动作调度：平均 3 秒一次，平滑进出
   if (!avatar.gesture && avatar.gestureTime <= 0) {
-    if (Math.random() < dt / 8) {
+    if (Math.random() < dt / 3) {
       avatar.gesture = IDLE_GESTURES[Math.floor(Math.random() * IDLE_GESTURES.length)];
-      avatar.gestureTime = GESTURE_DURATION;
+      avatar.gestureTime = GESTURE_DURATION + Math.random() * 0.6;
     }
   } else if (avatar.gesture) {
     avatar.gestureTime -= dt;
@@ -232,22 +232,30 @@ function updateAvatar(dt) {
     gestureY = avatar.gesture.headY * ease;
   }
 
-  // 呼吸：胸腔起伏，幅度更明显
-  avatar.breathPhase += dt * 1.3;
-  const breath = Math.sin(avatar.breathPhase) * 0.025;
+  // 呼吸：胸腔起伏
+  avatar.breathPhase += dt * 1.5;
+  const breath = Math.sin(avatar.breathPhase) * 0.035;
   const chest = vrm.humanoid?.getNormalizedBoneNode?.('chest');
   if (chest) chest.rotation.x = breath * 0.6;
   // 身体轻摆（自然站立感）
   const hips = vrm.humanoid?.getNormalizedBoneNode?.('hips');
-  if (hips) hips.rotation.z = Math.sin(t * 0.5) * 0.02;
-  // 头部：扫视 + 小动作 + 活动姿态
+  if (hips) {
+    hips.rotation.z = Math.sin(t * 0.7) * 0.025;
+    hips.rotation.x = Math.sin(t * 0.4) * 0.015;
+  }
+  // 手臂自然微摆（站着时手不会完全静止）
+  const leftArm = vrm.humanoid?.getNormalizedBoneNode?.('leftUpperArm');
+  const rightArm = vrm.humanoid?.getNormalizedBoneNode?.('rightUpperArm');
+  if (leftArm) leftArm.rotation.z = Math.sin(t * 0.9 + 1) * 0.05;
+  if (rightArm) rightArm.rotation.z = -Math.sin(t * 0.9 + 2.3) * 0.05;
+  // 头部：持续扫视 + 小动作 + 活动姿态
   const head = vrm.humanoid?.getNormalizedBoneNode?.('head');
   if (head) {
-    const lookY = Math.sin(t * 0.45) * 0.14; // 左右张望
-    const lookX = Math.sin(t * 0.32) * 0.04; // 微微点头
+    const lookY = Math.sin(t * 0.8) * 0.22; // 左右张望 ±12°
+    const lookX = Math.sin(t * 0.55) * 0.07; // 微微点头
     head.rotation.y = lookY + gestureY;
     head.rotation.x = lookX + gestureX + (avatar.pose?.headX ?? 0);
-    head.rotation.z = Math.sin(t * 0.2) * 0.03;
+    head.rotation.z = Math.sin(t * 0.35) * 0.03;
   }
   vrm.update(dt);
 }
@@ -364,6 +372,9 @@ function animate() {
     0.55,
     0.48 + Math.sin(avatar.clock.elapsedTime * 0.3) * 0.14,
   );
+  // 相机呼吸感：目标点微微起伏，让画面持续有"活着"的感觉
+  const t = avatar.clock.elapsedTime;
+  controls.target.set(0, 1.0 + Math.sin(t * 0.35) * 0.04, 0);
   controls.update();
   renderer.render(scene, camera);
 }
