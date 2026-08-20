@@ -164,8 +164,23 @@ Avatar = **用户偏好 + AI 人格 + AI 自己的偏好**，不是用户喜欢�
 - 稳定变化自动小步应用 + 广播到所有端
 
 ### Phase 5：AI 设计新资产（最后才做）
-- Image/3D 生成只产出"可替换资产"（新发型/服装/配饰 preset），
-  不重新生成 Avatar；生成后入库，Avatar 可在 preset 间参数化切换
+
+**已实现（2026-08）**：可替换资产 preset 系统——AI 设计新发型/服装/
+配饰/风格，Avatar 在 preset 间参数化切换，不重新生成底模。
+
+- `avatar_assets` 表：type（hair/clothing/accessory/style）、名称、
+  说明、外观参数覆盖（0~1）、程序生成的 SVG 预览（data URL）、来源、
+  状态（active/archived）、使用次数
+- `avatar_active_assets` 表：每类资产当前穿着的一件（type → asset_id）
+- 有效外观 = 数字基因 + 资产覆盖（固定顺序 hair→clothing→accessory→
+  style，同参数后者胜出）；资产不改数字基因，随时可换回
+- 工具：`avatar.assets`（L0 查看衣橱）/ `avatar.design_asset`（L1 设计
+  并入库，程序校验参数）/ `avatar.apply_asset`（L1 穿上）/
+  `avatar.clear_asset`（L1 脱下恢复基因外观）
+- 页面 `/avatar` 右侧新增「衣橱」面板：预览图 + 试穿/默认按钮，
+  换装结果通过 SSE 广播到所有打开的页面
+- 未来可选：接入真实 3D 资产生成时，只替换 preview 与网格层，
+  参数化结构与工具无需改动
 
 ## 9. 复用清单
 

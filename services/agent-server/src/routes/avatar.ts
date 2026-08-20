@@ -1,10 +1,11 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
-import type { AvatarGenome, AvatarStore } from '@personal-ai/memory';
+import type { AvatarAssetType, AvatarSnapshot, AvatarStore } from '@personal-ai/memory';
 import {
   applyAvatarDelta,
   APPEARANCE_PARAMS,
+  ASSET_TYPES,
   PERSONALITY_PARAMS,
 } from '@personal-ai/memory';
 import type { AvatarEventBus } from '../services/avatar-events.js';
@@ -29,10 +30,13 @@ const CONTENT_TYPES: Record<string, string> = {
 /**
  * 可成长 Avatar 服务端（多端统一）：
  * - /avatar：3D 网页（任意设备浏览器打开）
- * - GET /api/avatar/state：基因组
+ * - GET /api/avatar/state：状态快照（基因组 + 当前穿着资产）
  * - POST /api/avatar/adjust：小步调整外观参数（Phase 2 测试按钮/后续进化应用）
  * - GET /api/avatar/history：成长史
  * - GET /api/avatar/preferences：候选偏好
+ * - GET /api/avatar/assets：衣橱（资产列表 + 当前穿着）
+ * - POST /api/avatar/assets/apply：穿上资产
+ * - POST /api/avatar/assets/clear：脱掉某类资产
  * - GET /api/avatar/events：SSE 广播（所有打开的页面同步）
  */
 export function registerAvatarRoutes(app: FastifyInstance, deps: AvatarRouteDeps): void {
@@ -40,8 +44,8 @@ export function registerAvatarRoutes(app: FastifyInstance, deps: AvatarRouteDeps
   const bus = deps.avatarEvents;
 
   app.get('/api/avatar/state', async () => {
-    const genome = await store.getGenome();
-    return { ok: true, data: genome };
+    const snapshot = await store.getSnapshot();
+    return { ok: true, data: snapshot };
   });
 
   app.get('/api/avatar/history', async (request) => {
@@ -100,7 +104,7 @@ export function registerAvatarRoutes(app: FastifyInstance, deps: AvatarRouteDeps
       }
       await store.saveGenome(applied.genome);
       await store.addEvolutionEvent(applied.event);
-      bus?.publish(applied.genome);
+      bus?.publish(await store.getSnapshot());
       return {
         ok: true,
         data: {
@@ -109,6 +113,62 @@ export function registerAvatarRoutes(app: FastifyInstance, deps: AvatarRouteDeps
           genome: applied.genome,
         },
       };
+    },
+  );
+
+  app.get('/api/avatar/assets', async () => {
+    const [assets, activeAssets] = await Promise.all([
+      store.listAssets({ status: 'active' }),
+      store.getActiveAssets(),
+    ]);
+    return { ok: true, data: { count: assets.length, assets, activeAssets } };
+  });
+
+  app.post(
+    '/api/avatar/assets/apply',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          properties: { assetId: { type: 'string' } },
+          required: ['assetId'],
+          additionalProperties: false,
+        },
+      },
+    },
+    async (request) => {
+      const { assetId } = request.body as { assetId: string };
+      const asset = await store.getAsset(assetId);
+      if (!asset) return { ok: false, error: `资产不存在：${assetId}` };
+      if (asset.status !== 'active') {
+        return { ok: false, error: `资产「${asset.name}」已归档，无法使用` };
+      }
+      await store.setActiveAsset(asset.type, asset.id);
+      await store.recordAssetUse(asset.id);
+      const snapshot = await store.getSnapshot();
+      bus?.publish(snapshot);
+      return { ok: true, data: { applied: true, asset, snapshot } };
+    },
+  );
+
+  app.post(
+    '/api/avatar/assets/clear',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          properties: { type: { type: 'string', enum: [...ASSET_TYPES] } },
+          required: ['type'],
+          additionalProperties: false,
+        },
+      },
+    },
+    async (request) => {
+      const { type } = request.body as { type: AvatarAssetType };
+      await store.setActiveAsset(type, null);
+      const snapshot = await store.getSnapshot();
+      bus?.publish(snapshot);
+      return { ok: true, data: { cleared: true, type, snapshot } };
     },
   );
 
@@ -125,8 +185,8 @@ export function registerAvatarRoutes(app: FastifyInstance, deps: AvatarRouteDeps
       reply.raw.write(': keep-alive\n\n');
     }, 15_000);
     heartbeat.unref?.();
-    const listener = (genome: AvatarGenome): void => {
-      reply.raw.write(`event: avatar.update\ndata: ${JSON.stringify(genome)}\n\n`);
+    const listener = (snapshot: AvatarSnapshot): void => {
+      reply.raw.write(`event: avatar.update\ndata: ${JSON.stringify(snapshot)}\n\n`);
     };
     const unsubscribe = bus?.subscribe(listener);
     request.raw.on('close', () => {

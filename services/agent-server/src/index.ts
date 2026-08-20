@@ -343,7 +343,7 @@ for (const tool of createTimelineTools({ store: timelineStore })) {
 const avatarEventBus = new AvatarEventBus();
 for (const tool of createAvatarTools({
   store: avatarStore,
-  onChange: (genome) => avatarEventBus.publish(genome),
+  onChange: (snapshot) => avatarEventBus.publish(snapshot),
 })) {
   toolRegistry.register(tool);
 }

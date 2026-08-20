@@ -73,6 +73,33 @@ export interface AvatarEvolutionEvent {
   createdAt: string;
 }
 
+/** 可替换资产类型：发型/发色、服装、配饰、整体风格。 */
+export const ASSET_TYPES = ['hair', 'clothing', 'accessory', 'style'] as const;
+export type AvatarAssetType = (typeof ASSET_TYPES)[number];
+
+/** AI 设计的可替换资产 preset：参数化覆盖外观，Avatar 可在 preset 间切换。 */
+export interface AvatarAsset {
+  id: string;
+  type: AvatarAssetType;
+  name: string;
+  description: string;
+  /** 外观参数覆盖（键 ∈ APPEARANCE_PARAMS，值 0~1）。 */
+  params: Partial<AvatarAppearance>;
+  /** 程序生成的 SVG 预览（data URL）。 */
+  preview: string;
+  source: 'ai' | 'user' | 'seed';
+  status: 'active' | 'archived';
+  usageCount: number;
+  lastUsedAt: string | null;
+  createdAt: string;
+}
+
+/** 对外快照：固定数字基因 + 当前穿着的资产（Avatar 状态单一入口）。 */
+export interface AvatarSnapshot {
+  genome: AvatarGenome;
+  activeAssets: AvatarAsset[];
+}
+
 export function defaultAvatarGenome(): AvatarGenome {
   return {
     identity: {
@@ -175,6 +202,125 @@ export function mapPreferenceToAvatar(text: string): AvatarPreferenceHit[] {
   return hits;
 }
 
+/** 校验资产参数：键必须是外观参数、值必须是 0~1 数字，至少一个。 */
+export function validateAssetParams(
+  params: unknown,
+): { ok: true; params: Partial<AvatarAppearance> } | { ok: false; error: string } {
+  if (!params || typeof params !== 'object' || Array.isArray(params)) {
+    return { ok: false, error: 'params 必须是对象' };
+  }
+  const result: Partial<AvatarAppearance> = {};
+  for (const [key, value] of Object.entries(params as Record<string, unknown>)) {
+    if (!APPEARANCE_PARAMS.includes(key as keyof AvatarAppearance)) {
+      return { ok: false, error: `未知外观参数：${key}（允许：${APPEARANCE_PARAMS.join('/')}）` };
+    }
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+      return { ok: false, error: `参数 ${key} 必须是 0~1 的数字` };
+    }
+    result[key as keyof AvatarAppearance] = value;
+  }
+  if (Object.keys(result).length === 0) {
+    return { ok: false, error: 'params 至少需要一个外观参数' };
+  }
+  return { ok: true, params: result };
+}
+
+function hsl(hue: number, sat: number, light: number): string {
+  return `hsl(${Math.round(hue)},${Math.round(sat * 100)}%,${Math.round(light * 100)}%)`;
+}
+
+/**
+ * 程序生成资产 SVG 预览（data URL）：按类型画出发色/服装/配饰/风格色卡，
+ * 让衣橱在没有真实 3D 贴图的情况下也有可视化。
+ */
+export function generateAssetPreview(type: AvatarAssetType, params: Partial<AvatarAppearance>): string {
+  const a = { ...defaultAvatarGenome().appearance, ...params };
+  const hairHue = 195 + a.hairColor * 135;
+  const clothHue = 220 + a.clothingColor * 100;
+  const cyber = a.cyberStyle;
+  const cute = a.cuteStyle;
+  const minimal = a.minimalStyle;
+  let content = '';
+
+  if (type === 'hair') {
+    const length = a.hairLength; // 0 短 → 1 长
+    const top = 26 + length * 8;
+    const ry = 46 + length * 20;
+    content =
+      `<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">` +
+      `<stop offset="0" stop-color="${hsl(hairHue, 0.72, 0.58)}"/>` +
+      `<stop offset="1" stop-color="${hsl(hairHue, 0.7, 0.22)}"/>` +
+      `</linearGradient></defs>` +
+      `<rect width="120" height="120" rx="14" fill="#10141e"/>` +
+      `<ellipse cx="60" cy="${top}" rx="44" ry="${ry}" fill="url(#g)"/>` +
+      `<ellipse cx="60" cy="46" rx="30" ry="26" fill="#f2d9c4"/>`;
+  } else if (type === 'clothing') {
+    const style = a.clothingStyle;
+    content =
+      `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">` +
+      `<stop offset="0" stop-color="${hsl(clothHue, 0.72, 0.52)}"/>` +
+      `<stop offset="1" stop-color="${hsl(clothHue, 0.75, 0.3)}"/>` +
+      `</linearGradient></defs>` +
+      `<rect width="120" height="120" rx="14" fill="#10141e"/>` +
+      `<path d="M40 28 L80 28 L88 62 L72 92 L60 74 L48 92 L32 62 Z" fill="url(#g)"/>` +
+      `<circle cx="48" cy="34" r="2.5" fill="#fff" opacity="0.8"/>` +
+      `<circle cx="72" cy="34" r="2.5" fill="#fff" opacity="0.8"/>` +
+      `<text x="60" y="108" font-size="9" fill="#9aa3b5" text-anchor="middle">style ${style.toFixed(2)}</text>`;
+  } else if (type === 'accessory') {
+    const level = Math.max(0.2, a.accessoryLevel);
+    const dots: string[] = [];
+    for (let i = 0; i < Math.round(2 + level * 7); i++) {
+      const x = 20 + ((i * 37 + 11) % 80);
+      const y = 20 + ((i * 53 + 17) % 80);
+      dots.push(`<circle cx="${x}" cy="${y}" r="${2 + level * 1.5}" fill="${hsl(hairHue, 0.8, 0.7)}" opacity="0.9"/>`);
+    }
+    content =
+      `<rect width="120" height="120" rx="14" fill="#10141e"/>` +
+      `<path d="M60 30 l5 12 h-10 z" fill="#d7c48a"/>` +
+      `<circle cx="60" cy="50" r="16" fill="none" stroke="#d7c48a" stroke-width="3"/>` +
+      dots.join('') +
+      `<text x="60" y="108" font-size="9" fill="#9aa3b5" text-anchor="middle">level ${level.toFixed(2)}</text>`;
+  } else {
+    // style：赛博(蓝) / 可爱(粉) / 极简(白灰) 混合
+    const c1 = hsl(220 + cyber * 40, 0.65 + cute * 0.2, 0.45);
+    const c2 = hsl(330 - cute * 60, 0.65, 0.55);
+    const c3 = hsl(210, 0.08 + minimal * 0.05, 0.9 - minimal * 0.25);
+    content =
+      `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">` +
+      `<stop offset="0" stop-color="${c1}"/>` +
+      `<stop offset="0.55" stop-color="${c2}"/>` +
+      `<stop offset="1" stop-color="${c3}"/>` +
+      `</linearGradient></defs>` +
+      `<rect width="120" height="120" rx="14" fill="url(#g)"/>` +
+      `<text x="60" y="62" font-size="11" fill="#fff" text-anchor="middle" opacity="0.85">cyber ${cyber.toFixed(2)}</text>` +
+      `<text x="60" y="80" font-size="9" fill="#fff" text-anchor="middle" opacity="0.65">cute ${cute.toFixed(2)} · minimal ${minimal.toFixed(2)}</text>`;
+  }
+
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120">${content}</svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+/**
+ * 有效外观 = 数字基因 + 当前穿着资产覆盖（同参数后者胜出）。
+ * 资产顺序固定：hair → clothing → accessory → style。
+ */
+export function applyAssetOverrides(
+  genome: AvatarGenome,
+  assets: AvatarAsset[],
+): AvatarGenome {
+  const appearance = { ...genome.appearance };
+  const sorted = [...assets].sort(
+    (a, b) => ASSET_TYPES.indexOf(a.type) - ASSET_TYPES.indexOf(b.type),
+  );
+  for (const asset of sorted) {
+    for (const [key, value] of Object.entries(asset.params)) {
+      (appearance as unknown as Record<string, number>)[key] = value;
+    }
+  }
+  return { ...genome, appearance };
+}
+
 /**
  * 对 appearance/personality 参数应用小步增量（钳制步长与 0~1 范围）。
  * 返回新 genome 与旧值；参数非法返回 null。
@@ -236,12 +382,29 @@ export interface AvatarStore {
   ): Promise<AvatarPreference[]>;
   listEvolutionEvents(limit?: number): Promise<AvatarEvolutionEvent[]>;
   addEvolutionEvent(event: Omit<AvatarEvolutionEvent, 'id' | 'createdAt'>): Promise<void>;
+  /** 状态快照：固定基因 + 当前穿着资产（Avatar 状态单一入口）。 */
+  getSnapshot(): Promise<AvatarSnapshot>;
+  listAssets(options?: { status?: 'active' | 'archived'; type?: AvatarAssetType }): Promise<AvatarAsset[]>;
+  getAsset(id: string): Promise<AvatarAsset | null>;
+  createAsset(input: {
+    type: AvatarAssetType;
+    name: string;
+    description?: string;
+    params: Partial<AvatarAppearance>;
+    source?: 'ai' | 'user' | 'seed';
+  }): Promise<AvatarAsset>;
+  setAssetStatus(id: string, status: 'active' | 'archived'): Promise<AvatarAsset | null>;
+  getActiveAssets(): Promise<AvatarAsset[]>;
+  setActiveAsset(type: AvatarAssetType, assetId: string | null): Promise<AvatarAsset[]>;
+  recordAssetUse(id: string): Promise<void>;
 }
 
 export class InMemoryAvatarStore implements AvatarStore {
   #genome = defaultAvatarGenome();
   readonly #preferences = new Map<string, AvatarPreference>();
   readonly #events: AvatarEvolutionEvent[] = [];
+  readonly #assets = new Map<string, AvatarAsset>();
+  readonly #activeAssets = new Map<AvatarAssetType, string>();
 
   async getGenome(): Promise<AvatarGenome> {
     return structuredClone(this.#genome);
@@ -297,6 +460,98 @@ export class InMemoryAvatarStore implements AvatarStore {
       createdAt: new Date().toISOString(),
     });
   }
+
+  async getSnapshot(): Promise<AvatarSnapshot> {
+    return {
+      genome: await this.getGenome(),
+      activeAssets: await this.getActiveAssets(),
+    };
+  }
+
+  async listAssets(options: { status?: 'active' | 'archived'; type?: AvatarAssetType } = {}): Promise<AvatarAsset[]> {
+    return [...this.#assets.values()]
+      .filter((asset) => (options.status ? asset.status === options.status : true))
+      .filter((asset) => (options.type ? asset.type === options.type : true))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
+  async getAsset(id: string): Promise<AvatarAsset | null> {
+    return this.#assets.get(id) ?? null;
+  }
+
+  async createAsset(input: {
+    type: AvatarAssetType;
+    name: string;
+    description?: string;
+    params: Partial<AvatarAppearance>;
+    source?: 'ai' | 'user' | 'seed';
+  }): Promise<AvatarAsset> {
+    const now = new Date().toISOString();
+    const asset: AvatarAsset = {
+      id: randomUUID(),
+      type: input.type,
+      name: input.name.trim(),
+      description: input.description?.trim() ?? '',
+      params: input.params,
+      preview: generateAssetPreview(input.type, input.params),
+      source: input.source ?? 'ai',
+      status: 'active',
+      usageCount: 0,
+      lastUsedAt: null,
+      createdAt: now,
+    };
+    this.#assets.set(asset.id, asset);
+    return structuredClone(asset);
+  }
+
+  async setAssetStatus(id: string, status: 'active' | 'archived'): Promise<AvatarAsset | null> {
+    const asset = this.#assets.get(id);
+    if (!asset) return null;
+    const next = { ...asset, status };
+    this.#assets.set(id, next);
+    if (status === 'archived') {
+      for (const [type, assetId] of this.#activeAssets) {
+        if (assetId === id) this.#activeAssets.delete(type);
+      }
+    }
+    return structuredClone(next);
+  }
+
+  async getActiveAssets(): Promise<AvatarAsset[]> {
+    const result: AvatarAsset[] = [];
+    for (const type of ASSET_TYPES) {
+      const assetId = this.#activeAssets.get(type);
+      const asset = assetId ? this.#assets.get(assetId) : undefined;
+      if (asset && asset.status === 'active') result.push(structuredClone(asset));
+    }
+    return result;
+  }
+
+  async setActiveAsset(type: AvatarAssetType, assetId: string | null): Promise<AvatarAsset[]> {
+    if (assetId === null) {
+      this.#activeAssets.delete(type);
+    } else {
+      const asset = this.#assets.get(assetId);
+      if (!asset || asset.status !== 'active') {
+        throw new Error(`资产不存在或已归档：${assetId}`);
+      }
+      if (asset.type !== type) {
+        throw new Error(`资产类型不匹配：期望 ${type}，实际 ${asset.type}`);
+      }
+      this.#activeAssets.set(type, assetId);
+    }
+    return this.getActiveAssets();
+  }
+
+  async recordAssetUse(id: string): Promise<void> {
+    const asset = this.#assets.get(id);
+    if (!asset) return;
+    this.#assets.set(id, {
+      ...asset,
+      usageCount: asset.usageCount + 1,
+      lastUsedAt: new Date().toISOString(),
+    });
+  }
 }
 
 export interface PostgresAvatarStoreOptions {
@@ -341,6 +596,28 @@ export class PostgresAvatarStore implements AvatarStore {
         confidence double precision NOT NULL,
         evidence_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
         created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await this.#pool.query(`
+      CREATE TABLE IF NOT EXISTS avatar_assets (
+        id text PRIMARY KEY,
+        type text NOT NULL,
+        name text NOT NULL,
+        description text NOT NULL DEFAULT '',
+        params jsonb NOT NULL,
+        preview text NOT NULL DEFAULT '',
+        source text NOT NULL DEFAULT 'ai',
+        status text NOT NULL DEFAULT 'active',
+        usage_count integer NOT NULL DEFAULT 0,
+        last_used_at timestamptz,
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await this.#pool.query(`
+      CREATE TABLE IF NOT EXISTS avatar_active_assets (
+        type text PRIMARY KEY,
+        asset_id text NOT NULL REFERENCES avatar_assets(id),
+        applied_at timestamptz NOT NULL DEFAULT now()
       )
     `);
   }
@@ -476,7 +753,152 @@ export class PostgresAvatarStore implements AvatarStore {
     );
   }
 
+  async getSnapshot(): Promise<AvatarSnapshot> {
+    return {
+      genome: await this.getGenome(),
+      activeAssets: await this.getActiveAssets(),
+    };
+  }
+
+  async listAssets(options: { status?: 'active' | 'archived'; type?: AvatarAssetType } = {}): Promise<AvatarAsset[]> {
+    const conditions: string[] = [];
+    const values: unknown[] = [];
+    if (options.status) {
+      values.push(options.status);
+      conditions.push(`status = $${values.length}`);
+    }
+    if (options.type) {
+      values.push(options.type);
+      conditions.push(`type = $${values.length}`);
+    }
+    const where = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
+    const result = await this.#pool.query<AssetRow>(
+      `SELECT id, type, name, description, params, preview, source, status, usage_count, last_used_at, created_at
+       FROM avatar_assets${where} ORDER BY created_at ASC`,
+      values,
+    );
+    return result.rows.map(mapAssetRow);
+  }
+
+  async getAsset(id: string): Promise<AvatarAsset | null> {
+    const result = await this.#pool.query<AssetRow>(
+      `SELECT id, type, name, description, params, preview, source, status, usage_count, last_used_at, created_at
+       FROM avatar_assets WHERE id = $1`,
+      [id],
+    );
+    return result.rows[0] ? mapAssetRow(result.rows[0]) : null;
+  }
+
+  async createAsset(input: {
+    type: AvatarAssetType;
+    name: string;
+    description?: string;
+    params: Partial<AvatarAppearance>;
+    source?: 'ai' | 'user' | 'seed';
+  }): Promise<AvatarAsset> {
+    const id = randomUUID();
+    const preview = generateAssetPreview(input.type, input.params);
+    await this.#pool.query(
+      `INSERT INTO avatar_assets (id, type, name, description, params, preview, source, status, usage_count)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, 'active', 0)`,
+      [
+        id,
+        input.type,
+        input.name.trim(),
+        input.description?.trim() ?? '',
+        JSON.stringify(input.params),
+        preview,
+        input.source ?? 'ai',
+      ],
+    );
+    const asset = await this.getAsset(id);
+    if (!asset) throw new Error('创建资产失败');
+    return asset;
+  }
+
+  async setAssetStatus(id: string, status: 'active' | 'archived'): Promise<AvatarAsset | null> {
+    await this.#pool.query(
+      `UPDATE avatar_assets SET status = $2 WHERE id = $1`,
+      [id, status],
+    );
+    if (status === 'archived') {
+      await this.#pool.query(
+        `DELETE FROM avatar_active_assets WHERE asset_id = $1`,
+        [id],
+      );
+    }
+    return this.getAsset(id);
+  }
+
+  async getActiveAssets(): Promise<AvatarAsset[]> {
+    const result = await this.#pool.query<AssetRow>(
+      `SELECT a.id, a.type, a.name, a.description, a.params, a.preview, a.source, a.status, a.usage_count, a.last_used_at, a.created_at
+       FROM avatar_active_assets aa
+       JOIN avatar_assets a ON a.id = aa.asset_id
+       WHERE a.status = 'active'
+       ORDER BY array_position(ARRAY['hair','clothing','accessory','style'], a.type)`,
+    );
+    return result.rows.map(mapAssetRow);
+  }
+
+  async setActiveAsset(type: AvatarAssetType, assetId: string | null): Promise<AvatarAsset[]> {
+    if (assetId === null) {
+      await this.#pool.query(`DELETE FROM avatar_active_assets WHERE type = $1`, [type]);
+    } else {
+      const asset = await this.getAsset(assetId);
+      if (!asset || asset.status !== 'active') {
+        throw new Error(`资产不存在或已归档：${assetId}`);
+      }
+      if (asset.type !== type) {
+        throw new Error(`资产类型不匹配：期望 ${type}，实际 ${asset.type}`);
+      }
+      await this.#pool.query(
+        `INSERT INTO avatar_active_assets (type, asset_id, applied_at) VALUES ($1, $2, now())
+         ON CONFLICT (type) DO UPDATE SET asset_id = $2, applied_at = now()`,
+        [type, assetId],
+      );
+    }
+    return this.getActiveAssets();
+  }
+
+  async recordAssetUse(id: string): Promise<void> {
+    await this.#pool.query(
+      `UPDATE avatar_assets SET usage_count = usage_count + 1, last_used_at = now() WHERE id = $1`,
+      [id],
+    );
+  }
+
   async close(): Promise<void> {
     await this.#pool.end();
   }
+}
+
+interface AssetRow {
+  id: string;
+  type: string;
+  name: string;
+  description: string;
+  params: unknown;
+  preview: string;
+  source: string;
+  status: string;
+  usage_count: number;
+  last_used_at: string | null;
+  created_at: string;
+}
+
+function mapAssetRow(row: AssetRow): AvatarAsset {
+  return {
+    id: row.id,
+    type: row.type as AvatarAssetType,
+    name: row.name,
+    description: row.description,
+    params: (row.params ?? {}) as Partial<AvatarAppearance>,
+    preview: row.preview,
+    source: row.source as AvatarAsset['source'],
+    status: row.status as AvatarAsset['status'],
+    usageCount: row.usage_count,
+    lastUsedAt: row.last_used_at ? new Date(row.last_used_at).toISOString() : null,
+    createdAt: new Date(row.created_at).toISOString(),
+  };
 }

@@ -1,10 +1,13 @@
 import type { AvatarStore } from '@personal-ai/memory';
 import type { AvatarEvolutionEvent, AvatarGenome } from '@personal-ai/memory';
 import {
+  ASSET_TYPES,
   applyAvatarDelta,
   computeEvolutionScore,
   DEFAULT_EVOLVE_THRESHOLD,
+  validateAssetParams,
 } from '@personal-ai/memory';
+import type { AvatarAssetType, AvatarSnapshot } from '@personal-ai/memory';
 import type { Tool, ToolResult } from '@personal-ai/tools';
 
 /**
@@ -13,6 +16,11 @@ import type { Tool, ToolResult } from '@personal-ai/tools';
  * - avatar.history（L0）：成长史
  * - avatar.preferences（L0）：用户/AI 偏好（含置信度）
  * - avatar.propose_evolution（L1）：AI 只能提案，程序验证评分/阈值/渐变后应用
+ * - avatar.auto_evolve（L1）：自动评估偏好并小步应用
+ * - avatar.assets（L0）：衣橱（可替换资产列表 + 当前穿着）
+ * - avatar.design_asset（L1）：AI 设计新资产 preset（程序校验参数）
+ * - avatar.apply_asset（L1）：切换/穿上某个资产
+ * - avatar.clear_asset（L1）：脱掉某类资产，恢复数字基因外观
  * 禁止 change_mesh / regenerate 类工具——LLM 永远不能直接改 3D。
  */
 
@@ -21,7 +29,7 @@ export interface AvatarToolOptions {
   /** 进化触发阈值，默认 0.5（可配置）。 */
   evolveThreshold?: number;
   /** 每次应用后回调（广播给所有端）。 */
-  onChange?: (genome: AvatarGenome) => void;
+  onChange?: (snapshot: AvatarSnapshot) => void;
 }
 
 export function createAvatarTools(options: AvatarToolOptions): Tool[] {
@@ -145,6 +153,7 @@ export function createAvatarTools(options: AvatarToolOptions): Tool[] {
         }
         await store.saveGenome(applied.genome);
         await store.addEvolutionEvent(applied.event);
+        onChange?.(await store.getSnapshot());
         return {
           ok: true,
           data: {
@@ -218,7 +227,7 @@ export function createAvatarTools(options: AvatarToolOptions): Tool[] {
           await store.saveGenome(genome);
           await store.addEvolutionEvent(result.event);
           applied.push(result.event);
-          onChange?.(genome);
+          onChange?.(await store.getSnapshot());
         }
         return {
           ok: true,
@@ -230,6 +239,152 @@ export function createAvatarTools(options: AvatarToolOptions): Tool[] {
             skipped,
             genome,
           },
+        };
+      },
+    },
+    {
+      name: 'avatar.assets',
+      description:
+        '查看 Avatar 衣橱（只读 L0）：所有可替换资产 preset（发型/服装/配饰/风格，' +
+        'AI 设计的可换造型）+ 当前正在穿着的资产。切换用 avatar.apply_asset / avatar.clear_asset。',
+      inputSchema: { type: 'object', properties: {}, required: [] },
+      permissionLevel: 0,
+      async execute(): Promise<ToolResult> {
+        const [assets, activeAssets] = await Promise.all([
+          store.listAssets({ status: 'active' }),
+          store.getActiveAssets(),
+        ]);
+        return { ok: true, data: { count: assets.length, assets, activeAssets } };
+      },
+    },
+    {
+      name: 'avatar.design_asset',
+      description:
+        '设计一件新资产（L1，可逆外观 preset，不修改数字基因）：' +
+        'AI 给出名称/类型/外观参数覆盖（键必须是外观参数 hairColor/hairLength/hairStyle/eyeColor/' +
+        'eyeSize/clothingStyle/clothingColor/cyberStyle/cuteStyle/minimalStyle/accessoryLevel，值 0~1），' +
+        '程序校验后入库并自动生成预览图，资产默认 active。' +
+        '设计完用 avatar.apply_asset 穿上；也可以重复设计多件组成衣橱。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', maxLength: 60, description: '资产名称，如「海盐蓝渐变发」' },
+          type: {
+            type: 'string',
+            enum: [...ASSET_TYPES],
+            description: '资产类型：hair=发型/发色、clothing=服装、accessory=配饰、style=整体风格',
+          },
+          description: { type: 'string', maxLength: 300, description: '设计说明（可选）' },
+          params: {
+            type: 'object',
+            description:
+              '外观参数覆盖，如 {"hairColor":0.85,"hairLength":0.7}；键必须是外观参数，值 0~1',
+          },
+          source: {
+            type: 'string',
+            enum: ['ai', 'user', 'seed'],
+            description: '设计来源，默认 ai',
+          },
+        },
+        required: ['name', 'type', 'params'],
+      },
+      permissionLevel: 1,
+      async execute(input: unknown): Promise<ToolResult> {
+        const { name, type, description, params, source } = (input ?? {}) as {
+          name?: string;
+          type?: AvatarAssetType;
+          description?: string;
+          params?: unknown;
+          source?: 'ai' | 'user' | 'seed';
+        };
+        const assetName = name?.trim();
+        if (!assetName) return { ok: false, error: '缺少 name（资产名称）' };
+        if (!type || !ASSET_TYPES.includes(type)) {
+          return { ok: false, error: `type 必须是 ${ASSET_TYPES.join('/')} 之一` };
+        }
+        const validated = validateAssetParams(params);
+        if (!validated.ok) return { ok: false, error: validated.error };
+        const asset = await store.createAsset({
+          type,
+          name: assetName,
+          description,
+          params: validated.params,
+          source,
+        });
+        onChange?.(await store.getSnapshot());
+        return {
+          ok: true,
+          data: {
+            created: true,
+            asset,
+            hint: '已入库，用 avatar.apply_asset 穿上（assetId 见上）。',
+          },
+        };
+      },
+    },
+    {
+      name: 'avatar.apply_asset',
+      description:
+        '切换/穿上一件已设计的资产（L1，可逆）：该类型只保留这一件，恢复用 avatar.clear_asset。' +
+        '资产是参数化外观覆盖（发型/服装/配饰/风格），不改数字基因，可随时换回。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          assetId: { type: 'string', description: '资产 id（avatar.assets 里查看）' },
+        },
+        required: ['assetId'],
+      },
+      permissionLevel: 1,
+      async execute(input: unknown): Promise<ToolResult> {
+        const { assetId } = (input ?? {}) as { assetId?: string };
+        if (!assetId?.trim()) return { ok: false, error: '缺少 assetId' };
+        const asset = await store.getAsset(assetId.trim());
+        if (!asset) return { ok: false, error: `资产不存在：${assetId}` };
+        if (asset.status !== 'active') {
+          return { ok: false, error: `资产「${asset.name}」已归档，无法使用` };
+        }
+        await store.setActiveAsset(asset.type, asset.id);
+        await store.recordAssetUse(asset.id);
+        const snapshot = await store.getSnapshot();
+        onChange?.(snapshot);
+        return {
+          ok: true,
+          data: {
+            applied: true,
+            asset: { id: asset.id, name: asset.name, type: asset.type },
+            activeAssets: snapshot.activeAssets,
+          },
+        };
+      },
+    },
+    {
+      name: 'avatar.clear_asset',
+      description:
+        '脱掉某类资产，恢复该类型为数字基因默认外观（L1，可逆）。' +
+        'type：hair/clothing/accessory/style。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          type: {
+            type: 'string',
+            enum: [...ASSET_TYPES],
+            description: '要清除的资产类型',
+          },
+        },
+        required: ['type'],
+      },
+      permissionLevel: 1,
+      async execute(input: unknown): Promise<ToolResult> {
+        const { type } = (input ?? {}) as { type?: AvatarAssetType };
+        if (!type || !ASSET_TYPES.includes(type)) {
+          return { ok: false, error: `type 必须是 ${ASSET_TYPES.join('/')} 之一` };
+        }
+        await store.setActiveAsset(type, null);
+        const snapshot = await store.getSnapshot();
+        onChange?.(snapshot);
+        return {
+          ok: true,
+          data: { cleared: true, type, activeAssets: snapshot.activeAssets },
         };
       },
     },

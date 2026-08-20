@@ -32,9 +32,28 @@
     #history ul { list-style: none; }
     #history li { padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 12px; color: #c7cdda; }
     #history li .t { color: #7f8a9d; font-size: 11px; }
+    #wardrobe { right: 14px; top: 50%; transform: translateY(-50%); max-height: 46vh; overflow: auto; max-width: 284px; }
+    #wardrobe h2 { font-size: 12px; margin-bottom: 6px; color: #9aa3b5; }
+    #wardrobe .group { margin-bottom: 8px; }
+    #wardrobe .group-title { font-size: 11px; color: #7f8a9d; margin: 8px 0 4px; }
+    #wardrobe .item {
+      display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.07); background: rgba(255,255,255,0.04); margin-bottom: 4px;
+    }
+    #wardrobe .item.active { border-color: rgba(120,170,255,0.55); background: rgba(120,170,255,0.12); }
+    #wardrobe .item img { width: 34px; height: 34px; border-radius: 8px; flex: none; }
+    #wardrobe .item .info { flex: 1; min-width: 0; }
+    #wardrobe .item .name { font-size: 12px; color: #e7e9f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #wardrobe .item .meta { font-size: 10px; color: #7f8a9d; }
+    #wardrobe .item button {
+      border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.07); color: #e7e9f0;
+      border-radius: 999px; padding: 3px 9px; font-size: 11px; cursor: pointer; flex: none;
+    }
+    #wardrobe .item button:hover { background: rgba(255,255,255,0.16); }
+    #wardrobe .empty { font-size: 12px; color: #6f7a8d; padding: 6px 0; }
     .hint { position: fixed; bottom: 74px; left: 50%; transform: translateX(-50%); font-size: 12px; color: #6f7a8d; z-index: 10; text-align: center; }
     @media (max-width: 640px) {
-      #history { display: none; }
+      #history, #wardrobe { display: none; }
       #top { max-width: 55vw; }
     }
   </style>
@@ -72,6 +91,10 @@
   <div class="panel" id="history">
     <h2>成长史</h2>
     <ul id="history-list"><li>加载中…</li></ul>
+  </div>
+  <div class="panel" id="wardrobe">
+    <h2>衣橱</h2>
+    <div id="wardrobe-list"><div class="empty">加载中…</div></div>
   </div>
   <script type="module" src="/avatar/app.js"></script>
 </body>

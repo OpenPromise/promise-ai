@@ -5,6 +5,9 @@ import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 
 const GENOME_META = document.getElementById('genome-meta');
 const HISTORY_LIST = document.getElementById('history-list');
+const WARDROBE_LIST = document.getElementById('wardrobe-list');
+const ASSET_ORDER = ['hair', 'clothing', 'accessory', 'style'];
+const ASSET_LABELS = { hair: '发型', clothing: '服装', accessory: '配饰', style: '风格' };
 
 // ---------- 场景 ----------
 const scene = new THREE.Scene();
@@ -117,10 +120,24 @@ function materialName(name) {
   return (name ?? '').toLowerCase();
 }
 
-function applyAppearance(genome) {
+/** 有效外观 = 数字基因 + 当前穿着资产覆盖（顺序 hair→clothing→accessory→style，后者胜出）。 */
+function effectiveAppearance(genome, activeAssets = []) {
+  const a = { ...genome.appearance };
+  const sorted = [...activeAssets].sort(
+    (x, y) => ASSET_ORDER.indexOf(x.type) - ASSET_ORDER.indexOf(y.type),
+  );
+  for (const asset of sorted) {
+    for (const [key, value] of Object.entries(asset.params ?? {})) a[key] = value;
+  }
+  return a;
+}
+
+function applyAppearance(snapshot) {
   const vrm = avatar.vrm;
   if (!vrm) return;
-  const a = genome.appearance;
+  const genome = snapshot?.genome ?? snapshot;
+  const activeAssets = snapshot?.activeAssets ?? [];
+  const a = effectiveAppearance(genome, activeAssets);
   const hairHue = 195 + a.hairColor * 135;       // 0=青蓝 → 1=粉
   const clothHue = 220 + a.clothingColor * 100;  // 0=蓝紫 → 1=青
   const sat = Math.max(0.15, 1 - a.minimalStyle * 0.55);
@@ -181,10 +198,80 @@ async function loadState() {
   try {
     const res = await fetch('/api/avatar/state');
     const json = await res.json();
-    if (json?.ok && json.data) applyAppearance(json.data);
+    if (json?.ok && json.data) {
+      applyAppearance(json.data);
+      loadWardrobe();
+    }
   } catch (error) {
     GENOME_META.textContent = `状态获取失败：${String(error)}`;
   }
+}
+
+async function loadWardrobe() {
+  try {
+    const [assetsRes, stateRes] = await Promise.all([
+      fetch('/api/avatar/assets'),
+      fetch('/api/avatar/state'),
+    ]);
+    const [assetsJson, stateJson] = await Promise.all([assetsRes.json(), stateRes.json()]);
+    const assets = assetsJson?.data?.assets ?? [];
+    const activeAssets = stateJson?.data?.activeAssets ?? [];
+    renderWardrobe(assets, activeAssets);
+  } catch {
+    WARDROBE_LIST.innerHTML = '<div class="empty">衣橱加载失败</div>';
+  }
+}
+
+function renderWardrobe(assets, activeAssets) {
+  const activeByType = new Map(activeAssets.map((asset) => [asset.type, asset.id]));
+  const groups = ASSET_ORDER.map((type) => ({
+    type,
+    items: assets.filter((asset) => asset.type === type),
+  })).filter((group) => group.items.length > 0);
+  if (groups.length === 0) {
+    WARDROBE_LIST.innerHTML = '<div class="empty">衣橱还是空的，让 AI 设计第一件吧</div>';
+    return;
+  }
+  WARDROBE_LIST.innerHTML = groups
+    .map(
+      (group) => `
+        <div class="group">
+          <div class="group-title">${ASSET_LABELS[group.type] ?? group.type}</div>
+          ${group.items
+            .map((asset) => {
+              const isActive = activeByType.get(asset.type) === asset.id;
+              return `
+                <div class="item${isActive ? ' active' : ''}" data-asset-id="${asset.id}" data-type="${asset.type}">
+                  <img src="${asset.preview || ''}" alt="${asset.name}" />
+                  <div class="info">
+                    <div class="name">${asset.name}</div>
+                    <div class="meta">${isActive ? '穿着中 · ' : ''}使用 ${asset.usageCount ?? 0} 次</div>
+                  </div>
+                  <button>${isActive ? '默认' : '试穿'}</button>
+                </div>`;
+            })
+            .join('')}
+        </div>`,
+    )
+    .join('');
+  WARDROBE_LIST.querySelectorAll('.item').forEach((item) => {
+    item.querySelector('button').addEventListener('click', async () => {
+      const assetId = item.dataset.assetId;
+      const isActive = item.classList.contains('active');
+      try {
+        await fetch(isActive ? '/api/avatar/assets/clear' : '/api/avatar/assets/apply', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(
+            isActive ? { type: item.dataset.type } : { assetId },
+          ),
+        });
+        loadState();
+      } catch {
+        // 忽略
+      }
+    });
+  });
 }
 
 async function loadHistory() {
@@ -210,6 +297,7 @@ events.addEventListener('avatar.update', (event) => {
   try {
     applyAppearance(JSON.parse(event.data));
     loadHistory();
+    loadWardrobe();
   } catch {
     // 忽略坏事件
   }

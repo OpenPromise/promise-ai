@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyAvatarDelta,
+  applyAssetOverrides,
   computeEvolutionScore,
   defaultAvatarGenome,
+  generateAssetPreview,
   InMemoryAvatarStore,
   mapPreferenceToAvatar,
   MAX_EVOLUTION_DELTA,
+  validateAssetParams,
 } from './avatar.js';
 
 describe('applyAvatarDelta（渐变原则）', () => {
@@ -77,6 +80,66 @@ describe('InMemoryAvatarStore', () => {
     const events = await store.listEvolutionEvents();
     expect(events[0]?.parameter).toBe('cuteStyle');
     expect(events[1]?.parameter).toBe('hairColor');
+  });
+
+  it('资产参数校验：拒绝未知键/越界值/空参数', () => {
+    expect(validateAssetParams({ hairColor: 0.8 }).ok).toBe(true);
+    expect(validateAssetParams({ not_a_param: 0.5 }).ok).toBe(false);
+    expect(validateAssetParams({ hairColor: 1.5 }).ok).toBe(false);
+    expect(validateAssetParams({ hairColor: 'blue' }).ok).toBe(false);
+    expect(validateAssetParams({}).ok).toBe(false);
+    expect(validateAssetParams(null).ok).toBe(false);
+  });
+
+  it('资产预览生成 SVG data URL', () => {
+    const preview = generateAssetPreview('hair', { hairColor: 0.85, hairLength: 0.7 });
+    expect(preview.startsWith('data:image/svg+xml;utf8,')).toBe(true);
+    expect(preview).toContain('%3Csvg');
+  });
+
+  it('有效外观 = 基因 + 资产覆盖（顺序后胜出）', async () => {
+    const store = new InMemoryAvatarStore();
+    const hair = await store.createAsset({
+      type: 'hair',
+      name: '海盐蓝渐变发',
+      params: { hairColor: 0.85, hairLength: 0.7 },
+    });
+    const style = await store.createAsset({
+      type: 'style',
+      name: '赛博极简',
+      params: { cyberStyle: 0.8, minimalStyle: 0.7 },
+    });
+    await store.setActiveAsset('hair', hair.id);
+    await store.setActiveAsset('style', style.id);
+    const snapshot = await store.getSnapshot();
+    const effective = applyAssetOverrides(snapshot.genome, snapshot.activeAssets);
+    expect(effective.appearance.hairColor).toBeCloseTo(0.85, 5);
+    expect(effective.appearance.cyberStyle).toBeCloseTo(0.8, 5);
+    expect(effective.appearance.eyeColor).toBe(0.5); // 未覆盖保持基因值
+  });
+
+  it('资产 create/apply/clear/archive 全流程', async () => {
+    const store = new InMemoryAvatarStore();
+    const asset = await store.createAsset({
+      type: 'clothing',
+      name: '雾紫风衣',
+      params: { clothingColor: 0.2 },
+    });
+    expect(asset.status).toBe('active');
+    expect(asset.preview).toContain('data:image/svg+xml');
+
+    await store.setActiveAsset('clothing', asset.id);
+    await store.recordAssetUse(asset.id);
+    let active = await store.getActiveAssets();
+    expect(active.map((a) => a.id)).toEqual([asset.id]);
+
+    await store.setActiveAsset('clothing', null);
+    active = await store.getActiveAssets();
+    expect(active).toHaveLength(0);
+
+    await store.setAssetStatus(asset.id, 'archived');
+    expect(await store.getAsset(asset.id)).toMatchObject({ status: 'archived' });
+    await expect(store.setActiveAsset('clothing', asset.id)).rejects.toThrow('已归档');
   });
 });
 
