@@ -29,7 +29,11 @@ import { ConversationService } from './services/conversation.js';
 import { TaskService, validateCronSchedule } from './services/task-service.js';
 import { ReminderService } from './services/reminder-service.js';
 import { createCodingTool } from './services/coding-tool.js';
-import { createEngineerTool } from './services/engineer-tools.js';
+import {
+  createEngineerStatusTool,
+  createEngineerTool,
+} from './services/engineer-tools.js';
+import { EngineerTaskRunner } from './services/engineer-task-runner.js';
 import { createSelfTools } from './services/self-tools.js';
 import { recoverInterruptedSessions } from './services/restart-recovery.js';
 import { createWeixinTools } from './services/weixin-tools.js';
@@ -325,8 +329,15 @@ for (const tool of tools) {
 }
 // coding.run 是服务端能力（服务器上驱动 dsh 开源编码代理），不属于桌面客户端。
 toolRegistry.register(createCodingTool());
-// engineer.delegate：把开发任务派给"小黑"（专属工程师子代理），复用 dsh 底盘注入工程师人格。
-toolRegistry.register(createEngineerTool());
+// engineer.*：把开发任务派给"小黑"（专属工程师子代理）异步执行——工具立即返回
+// taskId，dsh 在后台独立运行，进度/完成通过事件推送，不阻塞小夜对话。
+const engineerTaskRunner = new EngineerTaskRunner({
+  timeline: timelineStore,
+  persistDir: process.env.ENGINEER_TASK_DIR ?? './data/engineer-tasks',
+});
+await engineerTaskRunner.loadPersisted();
+toolRegistry.register(createEngineerTool(engineerTaskRunner));
+toolRegistry.register(createEngineerStatusTool(engineerTaskRunner));
 // server.shell：容器内终端（L3）——"云服务器即她的世界"的自主操作入口。
 toolRegistry.register(createServerShellTool());
 // system.status：服务器健康巡检（L0 只读）——定时任务自主监控用。
@@ -402,6 +413,7 @@ const app = buildApp({
   subscribeTaskEvents: (listener) => taskService.onRun(listener),
   subscribeReminderEvents: (listener) => reminderService.onDue(listener),
   subscribeHookEvents: (listener) => hookService.onRun(listener),
+  subscribeEngineerEvents: (listener) => engineerTaskRunner.onEvent(listener),
   hooks: hookService,
   hookSecret: process.env.HOOK_SECRET,
   processStartedAt,

@@ -51,10 +51,28 @@ interface ChildOutput {
   exitCode: number;
 }
 
+/** 流式输出回调：dsh 每产出一段 stdout/stderr 就调用一次（后台任务进度用）。 */
+export type DshOutputCallback = (chunk: string, stream: 'stdout' | 'stderr') => void;
+
+export interface RunDshOptions {
+  cwd: string;
+  timeoutMs: number;
+  permissionMode: 'workspace-write' | 'danger-full-access';
+  /** 可选：逐段实时接收子进程输出，不等待进程结束。 */
+  onData?: DshOutputCallback;
+}
+
+export interface DshRunResult {
+  stdout: string;
+  stderr: string;
+  killed: boolean;
+  exitCode: number;
+}
+
 function runChild(
   executable: string,
   args: string[],
-  options: { cwd: string; timeoutMs: number; env?: NodeJS.ProcessEnv },
+  options: { cwd: string; timeoutMs: number; env?: NodeJS.ProcessEnv; onData?: DshOutputCallback },
 ): Promise<ChildOutput> {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, {
@@ -66,10 +84,14 @@ function runChild(
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString('utf8');
+      const text = chunk.toString('utf8');
+      stdout += text;
+      options.onData?.(text, 'stdout');
     });
     child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString('utf8');
+      const text = chunk.toString('utf8');
+      stderr += text;
+      options.onData?.(text, 'stderr');
     });
     child.on('error', (error) => reject(error));
     const timer = setTimeout(() => {
@@ -92,12 +114,8 @@ function runChild(
 
 export async function runDshHeadless(
   task: string,
-  options: {
-    cwd: string;
-    timeoutMs: number;
-    permissionMode: 'workspace-write' | 'danger-full-access';
-  },
-): Promise<ChildOutput> {
+  options: RunDshOptions,
+): Promise<DshRunResult> {
   const dshBin = resolveDshBin();
   if (!dshBin) {
     return {
@@ -111,6 +129,7 @@ export async function runDshHeadless(
     cwd: options.cwd,
     timeoutMs: options.timeoutMs,
     env: { ...process.env, DSH_PERMISSION_MODE: options.permissionMode },
+    onData: options.onData,
   });
 }
 

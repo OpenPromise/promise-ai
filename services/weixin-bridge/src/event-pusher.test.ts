@@ -35,6 +35,36 @@ describe('formatEvent', () => {
     );
   });
 
+  it('formats engineer.task.progress（小黑后台进度）', () => {
+    expect(
+      formatEvent('engineer.task.progress', {
+        type: 'progress',
+        taskId: '12345678-aaaa',
+        status: 'running',
+        text: '正在跑测试',
+      }),
+    ).toBe('🔧 小黑任务进行中（#12345678）：正在跑测试');
+  });
+
+  it('formats engineer.task.done success and failure', () => {
+    expect(
+      formatEvent('engineer.task.done', {
+        type: 'done',
+        taskId: '12345678-aaaa',
+        status: 'success',
+        result: '【验证结果】typecheck 通过',
+      }),
+    ).toBe('✅ 小黑任务完成（#12345678）\n【验证结果】typecheck 通过');
+    expect(
+      formatEvent('engineer.task.done', {
+        type: 'done',
+        taskId: '12345678-aaaa',
+        status: 'failed',
+        error: '编译失败',
+      }),
+    ).toBe('❌ 小黑任务失败（#12345678）\n编译失败');
+  });
+
   it('ignores unknown events', () => {
     expect(formatEvent('something.else', {})).toBeUndefined();
   });

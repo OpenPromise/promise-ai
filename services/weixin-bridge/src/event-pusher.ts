@@ -26,6 +26,15 @@ interface HookEvent {
   status?: string;
 }
 
+interface EngineerTaskEvent {
+  type?: 'started' | 'progress' | 'done';
+  taskId?: string;
+  status?: string;
+  text?: string;
+  result?: string;
+  error?: string;
+}
+
 export interface EventPusherOptions {
   agentUrl: string;
   client: ILinkClient;
@@ -69,6 +78,21 @@ export function formatEvent(event: string, data: unknown): string | undefined {
       return undefined;
     }
     return `🔔 外部事件（${hook.hookName ?? 'unknown'}）：${hook.summary ?? ''}${output ? `\n${output}` : ''}`;
+  }
+  if (event === 'engineer.task.progress') {
+    const task = data as EngineerTaskEvent;
+    const id = (task.taskId ?? '').slice(0, 8);
+    const text = task.text ?? '正在执行';
+    return `🔧 小黑任务进行中${id ? `（#${id}）` : ''}：${text.slice(0, 120)}`;
+  }
+  if (event === 'engineer.task.done') {
+    const task = data as EngineerTaskEvent;
+    const id = (task.taskId ?? '').slice(0, 8);
+    const ok = task.status === 'success';
+    const detail = (task.result || task.error || '').toString().trim().slice(0, 400);
+    return `${ok ? '✅' : '❌'} 小黑任务${ok ? '完成' : '失败'}${id ? `（#${id}）` : ''}${
+      detail ? `\n${detail}` : ''
+    }`;
   }
   return undefined;
 }

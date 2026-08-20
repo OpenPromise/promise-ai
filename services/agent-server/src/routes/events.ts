@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ReminderDueEvent } from '../services/reminder-service.js';
 import type { TaskRunEvent } from '../services/task-service.js';
 import type { HookRunEvent } from '../services/hook-service.js';
+import type { EngineerTaskEvent } from '../services/engineer-task-runner.js';
 
 export interface EventRouteDeps {
   subscribeTaskEvents: (listener: (event: TaskRunEvent) => void) => () => void;
@@ -15,6 +16,8 @@ export interface EventRouteDeps {
   hostBootedRecently?: boolean;
   /** 外部事件（webhook）处理结果订阅。 */
   subscribeHookEvents?: (listener: (event: HookRunEvent) => void) => () => void;
+  /** 小黑后台任务事件订阅（进度/完成）。 */
+  subscribeEngineerEvents?: (listener: (event: EngineerTaskEvent) => void) => () => void;
 }
 
 /** 进程启动后该时间窗口内，任何事件订阅者都会收到一次 system.boot。 */
@@ -74,12 +77,17 @@ export function registerEventRoutes(app: FastifyInstance, deps: EventRouteDeps):
     const unsubscribeHooks = deps.subscribeHookEvents?.((event) => {
       reply.raw.write(`event: hook.run\ndata: ${JSON.stringify(event)}\n\n`);
     });
+    const unsubscribeEngineer = deps.subscribeEngineerEvents?.((event) => {
+      const sseEvent = event.type === 'done' ? 'engineer.task.done' : 'engineer.task.progress';
+      reply.raw.write(`event: ${sseEvent}\ndata: ${JSON.stringify(event)}\n\n`);
+    });
 
     request.raw.on('close', () => {
       clearInterval(heartbeat);
       unsubscribe();
       unsubscribeReminders();
       unsubscribeHooks?.();
+      unsubscribeEngineer?.();
     });
   });
 }

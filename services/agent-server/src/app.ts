@@ -27,6 +27,7 @@ import { ConversationService } from './services/conversation.js';
 import type { ReminderDueEvent } from './services/reminder-service.js';
 import type { TaskRunEvent } from './services/task-service.js';
 import type { HookRunEvent, HookService } from './services/hook-service.js';
+import type { EngineerTaskEvent } from './services/engineer-task-runner.js';
 
 export interface AppDeps {
   config: AppConfig;
@@ -57,6 +58,8 @@ export interface AppDeps {
   subscribeReminderEvents?: (listener: (event: ReminderDueEvent) => void) => () => void;
   /** 外部事件（webhook）处理结果订阅。 */
   subscribeHookEvents?: (listener: (event: HookRunEvent) => void) => () => void;
+  /** 小黑后台任务事件订阅（进度/完成 → 微信主动推送）。 */
+  subscribeEngineerEvents?: (listener: (event: EngineerTaskEvent) => void) => () => void;
   /** 事件驱动监听服务（webhook 入口）。 */
   hooks?: HookService;
   /** webhook 共享密钥（可选）。 */
@@ -101,11 +104,12 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   });
   // 小黑欢迎界面：http://<host>:3000/xiaohei
   registerXiaoheiRoutes(app);
-  if (deps.subscribeTaskEvents || deps.subscribeReminderEvents) {
+  if (deps.subscribeTaskEvents || deps.subscribeReminderEvents || deps.subscribeEngineerEvents) {
     registerEventRoutes(app, {
       subscribeTaskEvents: deps.subscribeTaskEvents ?? (() => () => {}),
       subscribeReminderEvents: deps.subscribeReminderEvents ?? (() => () => {}),
       subscribeHookEvents: deps.subscribeHookEvents,
+      subscribeEngineerEvents: deps.subscribeEngineerEvents,
       processStartedAt: deps.processStartedAt,
       hostBootedRecently: deps.hostBootedRecently,
     });

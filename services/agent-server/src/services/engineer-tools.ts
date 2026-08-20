@@ -1,35 +1,13 @@
 import path from 'node:path';
 import { access } from 'node:fs/promises';
 import type { PermissionLevel, Tool, ToolResult } from '@personal-ai/tools';
-import { runDshHeadless } from './coding-tool.js';
+import {
+  buildXiaoHeiTask,
+  EngineerTaskRunner,
+  XIAO_HEI_PROMPT,
+} from './engineer-task-runner.js';
 
-/** 小黑工程师人格与工作准则（注入每次派单任务） */
-export const XIAO_HEI_PROMPT = `你是"小黑"，用户团队的专属工程师。你办事专业、严肃、可靠，不闲聊、不卖萌，只对工程质量负责。
-
-工作准则：
-1. 先理解需求，用一句话向"监督者"确认本次目标（goal）；然后阅读相关代码与测试。改动涉及多文件或高风险（L2+）时，先输出方案（改动清单、影响面、回滚点、需复用的现有实现、验证方式）经监督者确认后再动手（Plan/Act 分离）；方案确认前不修改任何文件（规划期只读硬约束）。
-2. 动手前记录 git 基线（git rev-parse HEAD）作为回滚快照；执行中在关键节点留快照，可回退到最近一步而非只能回起点。
-3. 小步实现、可回滚；一次只做一个目标，禁止在失败路径上叠加大改。质量门前移：每完成一小步改动立即跑相关测试/typecheck，失败先自修再继续，不把错误攒到任务终点。
-4. 错误自愈协议：失败时先自愈一次（分析错误 → 修复 → 重跑），仍失败才停止并报告；每一步断言都以工具结果为依据，不编造。
-5. 完成后必须运行 npm run typecheck 和 npm test，全部通过才算完成；质量门失败时停止修改、说明原因，必要时回滚到基线。
-6. 输出结构化报告（严格按此格式）：
-   【目标】一句话说明本次任务目标
-   【改动清单】每个文件：路径 + 改了什么（新增/修改/删除）
-   【验证结果】typecheck 结果、测试结果（通过数/失败数）
-   【风险与建议】遗留风险、下一步建议
-7. 不修改密钥、凭证、数据库连接串等敏感配置；不执行破坏性命令。破坏性/永久操作（删除、覆盖、批量变更）即使任务明确要求，也须在方案中显式标注"永久/不可恢复"并预留回滚点；错误自愈不得绕过安全边界（安全约束优先于自愈）。
-8. 任务完成后把可复用的经验（踩坑、模式、结论）沉淀到 xiaohei/learnings.md 长期记忆，形成跨任务记忆闭环；已有沉淀不重复记录。`;
-
-/** 把用户需求包装成给小黑的标准任务单 */
-export function buildXiaoHeiTask(userRequest: string): string {
-  return `${XIAO_HEI_PROMPT}
-
-## 本次任务（来自监督者）
-
-${userRequest.trim()}
-
-请按上述工作准则执行，完成后输出结构化报告。`;
-}
+export { XIAO_HEI_PROMPT, buildXiaoHeiTask };
 
 interface EngineerInput {
   task?: string;
@@ -37,13 +15,21 @@ interface EngineerInput {
   timeoutMinutes?: number;
 }
 
-export function createEngineerTool(): Tool {
+/**
+ * engineer.delegate（异步版）：把开发/修改代码的任务派给"小黑"执行。
+ * 工具立即创建后台任务并返回 taskId，dsh 在后台独立运行；小夜派完单
+ * 就能继续陪用户聊天，不再被 15 分钟的子进程同步阻塞。进度与完成
+ * 通过事件（SSE → 微信）主动推送；可用 engineer.status 查询状态/结果。
+ */
+export function createEngineerTool(runner: EngineerTaskRunner): Tool {
   return {
     name: 'engineer.delegate',
     description:
       '把开发/修改代码的任务派给"小黑"（专属工程师子代理）执行。' +
       '小黑是专业严肃的工程师：先调研、小步实现、自动跑 typecheck+test、输出结构化报告。' +
       '由私人助理（小夜）作为监督者调用；用户 CEO 把需求下达给助理后，由助理整理成任务派单。' +
+      '这是异步任务：调用后立即返回 taskId（任务在后台运行，可继续与用户聊天），' +
+      '进度与完成会自动通知，也可用 engineer.status 查询。' +
       'directory 用 /app 等持久目录；耗时较长（30 秒到数分钟）。' +
       '轻量问题（查文件、看状态）不要用此工具，用 filesystem/terminal 等轻量工具。',
     inputSchema: {
@@ -64,7 +50,7 @@ export function createEngineerTool(): Tool {
       required: ['task'],
     },
     permissionLevel: 1 as PermissionLevel,
-    timeoutMs: 60 * 60 * 1000,
+    timeoutMs: 30_000,
     async execute(input: unknown): Promise<ToolResult> {
       const { task, directory = '/app', timeoutMinutes = 15 } = (input ?? {}) as EngineerInput;
       if (!task?.trim()) {
@@ -76,26 +62,80 @@ export function createEngineerTool(): Tool {
       } catch {
         return { ok: false, error: `目录不存在：${resolvedDir}` };
       }
-      const taskText = buildXiaoHeiTask(task.trim());
-      if (taskText.length > 20_000) {
+      if (task.trim().length > 20_000) {
         return { ok: false, error: '任务文本超过 20000 字符，请拆分任务后重试' };
       }
-      const timeoutMs = Math.min(Math.max(1, Math.floor(timeoutMinutes)), 60) * 60 * 1000;
-      const { stdout, stderr, killed, exitCode } = await runDshHeadless(taskText, {
-        cwd: resolvedDir,
-        timeoutMs,
-        permissionMode: 'workspace-write',
+      const record = await runner.delegate(task.trim(), {
+        directory: resolvedDir,
+        timeoutMinutes,
       });
-      if (killed && exitCode === 124) {
-        return { ok: false, error: `小黑执行超过 ${Math.round(timeoutMs / 60_000)} 分钟被终止` };
-      }
-      if (killed || exitCode !== 0) {
+      return {
+        ok: true,
+        data: {
+          taskId: record.id,
+          status: record.status,
+          note: `已派出给小黑，任务 ${record.id.slice(0, 8)} 正在后台运行；完成会自动通知，也可以用 engineer.status 查询。`,
+        },
+      };
+    },
+  };
+}
+
+/**
+ * engineer.status（L0 只读）：按 taskId 查询小黑任务状态/进度/结果；
+ * 不传 taskId 时列出最近的任务。
+ */
+export function createEngineerStatusTool(runner: EngineerTaskRunner): Tool {
+  return {
+    name: 'engineer.status',
+    description:
+      '查询小黑后台任务的状态（只读 L0）：按 taskId 返回该任务的进度、' +
+      '最终结果或失败原因；不传 taskId 时列出最近 10 个任务。' +
+      '用户问"小黑任务怎么样了/完成了吗"时使用。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        taskId: {
+          type: 'string',
+          description: '任务 ID（engineer.delegate 返回的 taskId），省略则列出最近任务',
+        },
+      },
+      required: [],
+    },
+    permissionLevel: 0,
+    async execute(input: unknown): Promise<ToolResult> {
+      const { taskId } = (input ?? {}) as { taskId?: string };
+      if (taskId?.trim()) {
+        const record = runner.get(taskId.trim());
+        if (!record) {
+          return { ok: false, error: `找不到任务 ${taskId.trim().slice(0, 8)}，可能已过期或从未存在` };
+        }
         return {
-          ok: false,
-          error: `小黑执行失败（exit ${exitCode}）：${(stderr.trim() || stdout.trim()).slice(0, 2000)}`,
+          ok: true,
+          data: {
+            taskId: record.id,
+            status: record.status,
+            task: record.task.slice(0, 200),
+            directory: record.directory,
+            progress: record.progress,
+            result: record.result,
+            error: record.error,
+            createdAt: record.createdAt,
+            finishedAt: record.finishedAt,
+          },
         };
       }
-      return { ok: true, data: { text: (stdout.trim() || stderr.trim()).slice(0, 40_000), backend: 'dsh' } };
+      const tasks = runner.list(10).map((record) => ({
+        taskId: record.id,
+        status: record.status,
+        task: record.task.slice(0, 120),
+        progress: record.progress,
+        finishedAt: record.finishedAt,
+      }));
+      return {
+        ok: true,
+        data: { count: tasks.length, tasks },
+      };
     },
   };
 }
