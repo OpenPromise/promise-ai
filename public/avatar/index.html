@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Promise AI Avatar</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #0b0d12; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #e7e9f0; }
+    #scene { position: fixed; inset: 0; }
+    .panel {
+      position: fixed; z-index: 10; background: rgba(16, 20, 30, 0.72);
+      border: 1px solid rgba(255,255,255,0.08); border-radius: 14px;
+      backdrop-filter: blur(14px); padding: 12px 14px; font-size: 13px;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.35);
+    }
+    #top { top: 14px; left: 14px; }
+    #top h1 { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+    #top .meta { color: #9aa3b5; font-size: 12px; line-height: 1.6; }
+    #controls { bottom: 14px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; max-width: 94vw; }
+    #controls button {
+      border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.06);
+      color: #e7e9f0; border-radius: 999px; padding: 7px 14px; font-size: 13px;
+      cursor: pointer; transition: background .15s, transform .1s;
+    }
+    #controls button:hover { background: rgba(255,255,255,0.14); }
+    #controls button:active { transform: scale(0.96); }
+    #controls button.active { background: rgba(120,170,255,0.28); border-color: rgba(120,170,255,0.5); }
+    #history { right: 14px; top: 14px; max-height: 42vh; overflow: auto; max-width: 300px; }
+    #history h2 { font-size: 12px; margin-bottom: 6px; color: #9aa3b5; }
+    #history ul { list-style: none; }
+    #history li { padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 12px; color: #c7cdda; }
+    #history li .t { color: #7f8a9d; font-size: 11px; }
+    .hint { position: fixed; bottom: 74px; left: 50%; transform: translateX(-50%); font-size: 12px; color: #6f7a8d; z-index: 10; text-align: center; }
+    @media (max-width: 640px) {
+      #history { display: none; }
+      #top { max-width: 55vw; }
+    }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+      "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3.5.5/lib/three-vrm.module.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="scene"></div>
+  <div class="panel" id="top">
+    <h1>✦ Promise AI</h1>
+    <div class="meta" id="genome-meta">加载中…</div>
+  </div>
+  <div class="hint">拖动旋转 · 滚轮缩放</div>
+  <div class="panel" id="controls">
+    <button data-adj='{"parameter":"hairColor","delta":0.08}'>+ 蓝色</button>
+    <button data-adj='{"parameter":"cyberStyle","delta":0.08}'>+ 科技感</button>
+    <button data-adj='{"parameter":"cuteStyle","delta":0.08}'>+ 可爱</button>
+    <button data-adj='{"parameter":"minimalStyle","delta":0.08}'>+ 极简</button>
+    <span style="opacity:.35">|</span>
+    <button data-emotion="happy">开心</button>
+    <button data-emotion="angry">生气</button>
+    <button data-emotion="sad">难过</button>
+    <button data-emotion="surprised">惊讶</button>
+    <button data-emotion="relaxed">放松</button>
+    <button data-emotion="neutral">平静</button>
+    <button id="speak">说话（按住）</button>
+  </div>
+  <div class="panel" id="history">
+    <h2>成长史</h2>
+    <ul id="history-list"><li>加载中…</li></ul>
+  </div>
+  <script type="module" src="/avatar/app.js"></script>
+</body>
+</html>

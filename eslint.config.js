@@ -12,6 +12,7 @@ export default tseslint.config(
       'package-lock.json',
       'infrastructure/**',
       'apps/desktop-ui/**',
+      'public/**',
     ],
   },
   {

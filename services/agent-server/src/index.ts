@@ -12,11 +12,13 @@ import {
   createLocalEmbedder,
   createResilientEmbedder,
   InMemoryMemoryStore,
+  InMemoryAvatarStore,
   InMemoryTimelineStore,
   InMemorySessionStore,
   InMemoryTaskStore,
   InMemoryProfileStore,
   PostgresMemoryStore,
+  PostgresAvatarStore,
   PostgresProfileStore,
   PostgresSessionStore,
   PostgresTaskStore,
@@ -112,6 +114,7 @@ let memoryBackend = 'memory';
 let taskStore: InMemoryTaskStore | PostgresTaskStore = new InMemoryTaskStore();
 let profileStore: InMemoryProfileStore | PostgresProfileStore = new InMemoryProfileStore();
 let timelineStore: InMemoryTimelineStore | PostgresTimelineStore = new InMemoryTimelineStore();
+let avatarStore: InMemoryAvatarStore | PostgresAvatarStore = new InMemoryAvatarStore();
 if (config.databaseUrl) {
   const postgresMemory = new PostgresMemoryStore({
     connectionString: config.databaseUrl,
@@ -120,15 +123,18 @@ if (config.databaseUrl) {
   const postgresTasks = new PostgresTaskStore({ connectionString: config.databaseUrl });
   const postgresProfiles = new PostgresProfileStore({ connectionString: config.databaseUrl });
   const postgresTimeline = new PostgresTimelineStore({ connectionString: config.databaseUrl });
+  const postgresAvatar = new PostgresAvatarStore({ connectionString: config.databaseUrl });
   try {
     await postgresMemory.init();
     await postgresTasks.init();
     await postgresProfiles.init();
     await postgresTimeline.init();
+    await postgresAvatar.init();
     memory = postgresMemory;
     taskStore = postgresTasks;
     profileStore = postgresProfiles;
     timelineStore = postgresTimeline;
+    avatarStore = postgresAvatar;
     memoryBackend = 'postgres';
     console.log(`[memory] embedding: dashscope/${memoryEmbedder.dimensions ?? 'local'}`);
     console.log(`[memory] using postgres (${config.databaseUrl.split('@')[1] ?? ''})`);
@@ -395,6 +401,8 @@ const app = buildApp({
   hookSecret: process.env.HOOK_SECRET,
   processStartedAt,
   hostBootedRecently,
+  avatarStore,
+  publicDir: fileURLToPath(new URL('../../../public', import.meta.url)),
   createVoice,
   createTTS,
   createQwen,
