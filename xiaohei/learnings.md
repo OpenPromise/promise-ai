@@ -190,3 +190,58 @@
 - **同步动作**：主页（xiaohei/index.html）工作准则更新为 6 步（确认 → 方案先行 → 小步实现 → 错误自愈 → 质量门 → 结构化汇报），新增"自我进化"小节；engineer-tools.test.ts 增加对新准则关键词（质量门前移/自愈/Plan/Act 分离）的断言，防回归。
 - **效果**：准则层落地完成，全量 `npm run typecheck` + `npm test` 全绿；量化收益（任务成功率/返工率）待能力评测基线建立后补充。
 - **下一步**：① 建立 8-10 个代表性任务的能力评测基线（建议 4，SWE-bench 思路）；② 落地主动上下文工程——工具输出截断/摘要、仓库地图（建议 5）；③ 轨迹回放/复盘机制（建议 4 配套）。
+
+### 进化 #2（2026-08-20）：落地 grok-build 的 Plan 硬约束 / 安全 deny 优先 / 跨任务记忆沉淀
+
+- **调研来源**：xai-org/grok-build（Grok Build，SpaceXAI 官方编码 agent，Rust）。落地 3 条，全部有官方文档出处：
+  1. **Plan 硬约束 + 方案要素结构化**（来源：19-plan-mode.md）：grok-build 在规划阶段除 plan 文件外**拒绝一切文件编辑（任何权限模式下强制）**，且 plan 文件结构化包含"需复用的现有实现（带路径）"与"验证方式"。落地：准则 1 升级为"方案（改动清单、影响面、回滚点、**需复用的现有实现、验证方式**）经监督者确认后再动手；**方案确认前不修改任何文件（规划期只读硬约束）**"。
+  2. **安全 deny 优先 + 破坏性操作显式化**（来源：22-permissions-and-safety.md）：grok-build 的 deny > ask > allow，危险命令（rm / git push 等）即使 allow 也始终提示。落地：准则 7 补充"破坏性/永久操作（删除、覆盖、批量变更）即使任务明确要求，也须在方案中显式标注'永久/不可恢复'并预留回滚点；**错误自愈不得绕过安全边界（安全约束优先于自愈）**"——与仓库《新增工具权限准则》的"永久/破坏性操作须标注永久/不可恢复"呼应。
+  3. **跨任务记忆沉淀闭环**（来源：13-memory.md）：grok-build 用 /flush（会话要点沉淀）+ 首轮注入（新会话自动复用）+ /dream（合并去重）形成跨会话记忆。落地：新增准则 8"任务完成后把可复用的经验（踩坑、模式、结论）沉淀到 xiaohei/learnings.md 长期记忆，形成跨任务记忆闭环；已有沉淀不重复记录"——把 learnings.md 从"调研报告"升级为"每次任务结束即追加"的活文档。
+- **已有、未重复落地**：人格/准则注入（= persona system-reminder 注入）、关键节点留快照（= turn-boundary checkpoint）、质量门全绿才算完成（= Stop hook 硬门）、错误自愈（= 错误回喂模型）。
+- **同步动作**：engineer-tools.test.ts 新增三个关键词断言（规划期只读 / 永久/不可恢复 / learnings.md）防回归；主页（xiaohei/index.html）自我进化板块更新；本文件新增"八、Grok Build 专项分析"章节。
+- **效果**：准则层落地完成，本次任务全量 `npm run typecheck` + `npm test` 全绿；"任务完成即沉淀"的闭环已在本任务中首次执行（本记录即沉淀物）。
+- **下一步**：① 能力评测基线（SWE-bench 思路，8-10 个代表性任务）继续推进；② 子代理能力边界类型化（explore/plan 只读 vs general-purpose 全能力）可作为 harness 层改进候选；③ 建立"记忆 staleness"意识——复用 learnings.md 旧结论前先验证是否仍成立。
+
+---
+
+## 八、Grok Build（xai-org/grok-build）专项分析
+
+> 调研人：小黑；调研日期：2026-08-20；调研方式：GitHub REST API（`/search/repositories`、`/repos/{owner}/{repo}/readme`、contents API）抓取仓库元数据、README 与官方用户指南 12 篇文档（plan-mode / subagents / permissions / memory / sandbox / skills / hooks / background-tasks / headless / project-rules / sessions / agent-mode），并抓取 `checkpoint.rs` 源码确认回滚机制。
+
+### 1. 项目概况
+
+- **仓库**：[xai-org/grok-build](https://github.com/xai-org/grok-build)（SpaceXAI 官方，Rust，Apache-2.0，~25.8k stars，2026-07 创建；"synced periodically from the SpaceXAI monorepo"）。
+- **命名澄清**：GitHub 搜 "grokbuild"（无连字符）命中的多为第三方项目（如 GreyGunG/grokbuild-proxy，一个把 Grok Build 协议代理成 Claude Code/OpenAI 兼容接口的社区项目）；**官方项目名为 `grok-build`（带连字符）**，位于 xai-org org。同 org 相关项目还有 grok-build-plugin-cc（Claude Code 插件）、grok-1、grok-prompts、xai-cookbook 等。
+- **定位**："SpaceXAI's coding agent harness and TUI"——终端 AI 编码 agent，三形态复用同一 agent 运行时：全屏 TUI 交互、headless（脚本/CI）、ACP（Agent Client Protocol）嵌入编辑器。
+- **仓库布局**：`xai-grok-pager`（TUI）/ `xai-grok-shell`（agent 运行时 + leader/stdio/headless 入口）/ `xai-grok-tools`（工具实现）/ `xai-grok-workspace`（宿主文件系统、VCS、执行、**checkpoints**）。
+
+### 2. 核心机制（对标小黑的分析维度）
+
+- **工作流程/架构**：TUI 与 agent 运行时分离，三种入口共享同一运行时；`xai-grok-workspace` 内置 **turn-boundary checkpoint**（checkpoint.rs：按 `prompt_index` 打包文件系统 RewindPoint + hunk 增量 + git HEAD/index，恢复到任意一步时各域一起还原）。
+- **Plan Mode（19-plan-mode.md）**：规划阶段**除 plan.md 外所有文件编辑被硬性拒绝**——"This holds in every permission mode, including always-approve"，把"先方案后动手"做成工具层强制门，而非软约束；plan 文件结构化：Context（为什么改）/ 推荐方案（不是所有备选）/ 关键改动文件路径 / **需复用的现有函数与工具（带文件路径）** / 验证章节（如何端到端测试）；`exit_plan_mode` 呈现审批（批准 / 要求修改 / 行内评论）。
+- **子代理（16-subagents.md）**：内置 `general-purpose`（全能力）、`explore`（只读研究）、`plan`（只读规划）三种类型；persona 是行为覆盖层，以 `<system-reminder>` 注入子代理 prompt，不改 agent 类型/模型/工具；`isolation: worktree` 用 git worktree 隔离子代理改动；**深度限制=1**（子代理不能再生子代理，防失控扩展）；`resume_from` 延续已完成的子代理会话。
+- **质量保障**：hooks 的 **Stop 事件可以阻止 agent 结束回合，直到条件满足（如测试通过）并把原因回喂模型**（10-hooks.md）——把"质量门全绿才算完成"做成 harness 层硬门；`/loop` 定时回归测试；CI（cargo check/test/clippy/fmt）。
+- **人机协作**：Plan 审批流（预览/行内评论/修改意见）；TUI 任务面板（Ctrl+G 看子代理与后台任务实时状态）；permission mode 交互式批准 + "always allow" 记忆（按项目持久化）；headless 用于 CI 无人值守。
+- **权限与安全（22-permissions-and-safety.md）**：permission mode（ask / auto / acceptEdits / dontAsk / always-approve）+ 规则系统（**deny > ask > allow，deny 永远优先**，跨来源合并后按严重度评估）；危险命令清单（rm / chmod / chown / pkill / git push 等**始终提示**，不受"记住的批准"覆盖）；只读 shell 命令白名单（ls/cat/git status…）；规则不是封闭 allowlist（未匹配的命令落到 mode 兜底）；OS 级 sandbox（18-sandbox.md：Landlock/Seatbelt 应用到整个进程，workspace/read-only/strict 等 profile + `deny` glob 内核级拒绝 + shell 环境变量策略，默认剥掉 `*KEY*/*SECRET*/*TOKEN*`）。
+- **记忆（13-memory.md）**：跨会话 markdown 记忆（全局 MEMORY.md / 工作区 / 会话日志）+ 索引搜索；**首轮注入**（新会话自动检索相关记忆注入上下文）；`/flush`（LLM 总结本次会话要点写入日志，压缩前/收尾时用）；`/dream`（定期合并去重）；旧会话记忆带 **staleness 提示**（"先验证再依赖"）。
+- **Skills（08-skills.md）**：SKILL.md = YAML frontmatter（description/when-to-use 驱动自动唤起）+ 步骤化指令，把可重复流程沉淀一次、按需加载——"too specific for AGENTS.md but too long to retype"。
+
+### 3. 值得小黑学习的亮点（3-5 条，具体到做法）
+
+1. **Plan 硬约束 + 方案要素结构化**：规划期除方案外不落任何文件（工具层强制，任何权限模式都生效）；方案必须含 Context / 推荐方案 / 关键改动文件 / **需复用的现有实现（带路径）** / **验证方式**——比小黑的"软性说明方案"更强，且方案要素可直接照搬。
+2. **安全 deny 优先 + 破坏性操作显式化**：破坏性命令（rm / git push 等）即使任务要求或 allow 规则覆盖也始终提示；"永久/不可恢复"必须显式标注；**自愈与放权不得绕过安全边界**（安全约束 > 自主性）。
+3. **跨任务记忆闭环**：任务结束 `/flush` 沉淀要点 → 新会话首轮自动注入 → `/dream` 合并去重。小黑的 learnings.md 就是这个思路的文件版，缺的是"每次任务完成即沉淀"的习惯闭环。
+4. **子代理能力边界类型化**：explore/plan 只读、general-purpose 全能力；**深度限制=1** 防失控扩展——派生子代理时先定能力边界（只读 vs 读写），避免子代理越权改文件。
+5. **三形态复用同一运行时**：TUI / headless / ACP 共享 agent 运行时，对外形态再多不动核心架构——与"把对外接口多形态化"相反，克制地保持单一核心。
+
+### 4. 与小黑现状对照（已有 / 新增）
+
+- **已有，无需重复落地**：人格/准则注入（= persona 以 system-reminder 注入子代理）；关键节点留快照可回退最近一步（= turn-boundary checkpoint 思想）；质量门全绿才算完成（= Stop hook 硬门）；错误自愈一次再停止（= 错误回喂模型自愈）；不碰密钥/不执行破坏性命令（= 权限 deny 底线）。
+- **本次落地 3 条**（见"自我进化记录 #2"）：① Plan 硬约束 + 方案要素结构化；② 安全 deny 优先 + 破坏性/永久操作显式标注 + 自愈不绕过安全边界；③ 跨任务记忆沉淀闭环。
+
+### 5. 参考链接
+
+- 仓库与 README：https://github.com/xai-org/grok-build
+- 官方文档：docs.x.ai/build/overview；用户指南（仓库内 `crates/codegen/xai-grok-pager/docs/user-guide/`）：
+  19-plan-mode.md / 16-subagents.md / 22-permissions-and-safety.md / 13-memory.md / 18-sandbox.md / 08-skills.md / 10-hooks.md / 20-background-tasks.md / 14-headless-mode.md / 12-project-rules.md
+- 关键源码：`crates/codegen/xai-grok-workspace/src/session/checkpoint.rs`（turn-boundary 回滚）

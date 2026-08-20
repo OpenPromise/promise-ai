@@ -14,6 +14,10 @@ describe('buildXiaoHeiTask', () => {
     expect(task).toContain('质量门前移');
     expect(task).toContain('自愈');
     expect(task).toContain('Plan/Act 分离');
+    // 自我进化 #2（grok-build）：规划期只读硬约束 / 安全边界 deny 优先 / 跨任务记忆沉淀
+    expect(task).toContain('规划期只读');
+    expect(task).toContain('永久/不可恢复');
+    expect(task).toContain('learnings.md');
     // 需求原文原样出现在任务单里
     expect(task).toContain(request);
     // 监督者语境
