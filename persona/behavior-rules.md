@@ -21,3 +21,5 @@
   self.commit 提交并推送 git；/tmp 随容器重启清空，部署脚本
   （git reset --hard + git clean -fd）会清理未提交改动——
   重要成果只有提交进 git 才是安全的
+- 服务器是 Linux 容器：项目路径一律以 /app 开头；禁止向服务端工具传
+  Windows 盘符路径（E:\、C:\ 等），那是不存在的路径

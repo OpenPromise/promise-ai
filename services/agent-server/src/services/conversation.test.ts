@@ -148,6 +148,43 @@ describe('ConversationService', () => {
     ).toBe(true);
   });
 
+  it('模型只出推理不出正文时，用兜底文案避免静默空回复', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    const tools = new ToolRegistry();
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'deepseek-test',
+      configured: true,
+      async *chat(): AsyncIterable<ChatChunk> {
+        yield { delta: '' };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+    const service = new ConversationService({
+      store,
+      llm,
+      tools,
+      approvals: new ApprovalRegistry(),
+      memory: new InMemoryMemoryStore(),
+    });
+
+    let doneText = '';
+    for await (const envelope of service.runChat({
+      sessionId: session.id,
+      userMessage: '说点什么',
+    })) {
+      if (envelope.type === 'chat.done') {
+        doneText = (envelope.payload as { text?: string }).text ?? '';
+      }
+    }
+    expect(doneText).toContain('未生成可见回复');
+    const refreshed = await store.getSession(session.id);
+    expect(refreshed.messages.at(-1)?.content).toContain('未生成可见回复');
+  });
+
   it('compacts long history into a summary and emits agent.state', async () => {
     const store = new InMemorySessionStore();
     const session = await store.createSession({ systemPrompt: '你是助理。' });

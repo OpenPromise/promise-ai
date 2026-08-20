@@ -429,15 +429,20 @@ export class ConversationService {
       }
 
       if (!toolCalls || toolCalls.length === 0) {
+        // 推理模型偶发"只推理不出正文"：空回复时补一句，避免客户端静默无输出。
+        const finalText =
+          fullText.trim().length > 0
+            ? fullText
+            : '（本轮处理已完成，但未生成可见回复；如有需要请让我继续说明。）';
         await this.#store.addMessage(input.sessionId, {
           role: 'assistant',
-          content: fullText,
+          content: finalText,
         });
         yield createEnvelope({
           type: 'chat.done',
           sessionId: input.sessionId,
           requestId,
-          payload: { text: fullText, usage, durationMs: Date.now() - requestStartedAt },
+          payload: { text: finalText, usage, durationMs: Date.now() - requestStartedAt },
         });
         yield createEnvelope({
           type: 'agent.state',
