@@ -40,6 +40,7 @@ const envSchema = z.object({
   ),
   VOICE_ENABLED: z.preprocess(emptyToUndefined, z.enum(['true', 'false']).default('true')),
   VOICE_TTS_ENABLED: z.preprocess(emptyToUndefined, z.enum(['true', 'false']).default('true')),
+  AUTO_APPROVE_ALL: z.preprocess(emptyToUndefined, z.enum(['true', 'false']).default('false')),
   LLM_FALLBACK_PROVIDER: z.preprocess(
     emptyToUndefined,
     z.enum(['none', 'openrouter', 'dashscope']).default('none'),
@@ -130,6 +131,8 @@ export interface AppConfig {
   voiceEnabled: boolean;
   /** 语音合成开关；false 时 ASR 仍可用，但回复只出文字不发声。 */
   voiceTtsEnabled: boolean;
+  /** 全权限模式：true 时所有工具（含 L2/L3）自动执行，不再弹确认。 */
+  autoApproveAll: boolean;
   elevenlabs: {
     apiKey?: string;
     voiceId?: string;
@@ -225,6 +228,7 @@ export function loadConfig(
     },
     voiceEnabled: v.VOICE_ENABLED === 'true',
     voiceTtsEnabled: v.VOICE_TTS_ENABLED === 'true',
+    autoApproveAll: v.AUTO_APPROVE_ALL === 'true',
     elevenlabs: {
       apiKey: v.ELEVENLABS_API_KEY,
       voiceId: v.ELEVENLABS_VOICE_ID,

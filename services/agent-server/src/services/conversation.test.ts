@@ -6,6 +6,65 @@ import { ApprovalRegistry } from './approval.js';
 import { ConversationService, pruneToolResult, repairToolResultPairing } from './conversation.js';
 
 describe('ConversationService', () => {
+  it('auto-approves all tools when autoApproveAll is enabled', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    const tools = new ToolRegistry();
+    tools.register({
+      name: 'danger.run',
+      description: '危险操作',
+      inputSchema: { type: 'object', properties: {}, required: [] },
+      permissionLevel: 3,
+      async execute() {
+        return { ok: true, data: { ran: true } };
+      },
+    });
+
+    let callSeq = 0;
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'deepseek-test',
+      configured: true,
+      async *chat(): AsyncIterable<ChatChunk> {
+        callSeq += 1;
+        if (callSeq === 1) {
+          yield {
+            delta: '',
+            finishReason: 'tool_calls',
+            toolCalls: [{ id: 'call_1', name: 'danger.run', arguments: '{}' }],
+          };
+          return;
+        }
+        yield { delta: '已执行危险操作。' };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+
+    const service = new ConversationService({
+      store,
+      llm,
+      tools,
+      approvals: new ApprovalRegistry(),
+      memory: new InMemoryMemoryStore(),
+      autoApproveAll: true,
+    });
+
+    const types: string[] = [];
+    for await (const envelope of service.runChat({
+      sessionId: session.id,
+      userMessage: '执行危险操作',
+    })) {
+      types.push(envelope.type);
+    }
+    expect(types).not.toContain('permission.request');
+    const refreshed = await store.getSession(session.id);
+    expect(
+      refreshed.messages.some((m) => m.role === 'tool' && m.content.includes('"ran":true')),
+    ).toBe(true);
+  });
+
   it('compacts long history into a summary and emits agent.state', async () => {
     const store = new InMemorySessionStore();
     const session = await store.createSession({ systemPrompt: '你是助理。' });

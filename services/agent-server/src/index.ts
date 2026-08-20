@@ -252,6 +252,7 @@ const conversation = new ConversationService({
   tools: toolRegistry,
   approvals,
   memory,
+  autoApproveAll: config.autoApproveAll,
 });
 const taskService = new TaskService({
   tasks: taskStore,

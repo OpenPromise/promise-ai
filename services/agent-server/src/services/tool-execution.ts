@@ -85,6 +85,7 @@ export async function* runToolCallWithApproval(
   call: ToolCallInfo,
   context: ToolContext,
   headless: boolean,
+  autoApproveAll = false,
 ): AsyncGenerator<ProtocolEnvelope, ToolResult> {
   const tool = tools.get(call.name);
   if (!tool) {
@@ -111,7 +112,8 @@ export async function* runToolCallWithApproval(
     };
   }
 
-  if (tool.permissionLevel <= 1) {
+  // 全权限模式：所有等级工具直接执行（不弹确认，含无人值守任务）
+  if (autoApproveAll || tool.permissionLevel <= 1) {
     return runToolWithTimeout(tool, args, context);
   }
 

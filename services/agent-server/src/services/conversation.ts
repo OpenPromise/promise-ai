@@ -36,6 +36,8 @@ export interface ConversationServiceDeps {
   tools: ToolRegistry;
   approvals: ApprovalRegistry;
   memory: MemoryStore;
+  /** 全权限模式：所有工具（含 L2/L3）自动执行，不弹确认。 */
+  autoApproveAll?: boolean;
 }
 
 const MAX_TOOL_TURNS = 5;
@@ -270,6 +272,7 @@ export class ConversationService {
   readonly #tools: ToolRegistry;
   readonly #approvals: ApprovalRegistry;
   readonly #memory: MemoryStore;
+  readonly #autoApproveAll: boolean;
 
   constructor(deps: ConversationServiceDeps) {
     this.#store = deps.store;
@@ -277,6 +280,7 @@ export class ConversationService {
     this.#tools = deps.tools;
     this.#approvals = deps.approvals;
     this.#memory = deps.memory;
+    this.#autoApproveAll = deps.autoApproveAll ?? false;
   }
 
   /**
@@ -456,6 +460,7 @@ export class ConversationService {
             call,
             context,
             input.headless ?? false,
+            this.#autoApproveAll,
           );
           while (true) {
             const next = await iterator.next();

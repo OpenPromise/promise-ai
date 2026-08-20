@@ -78,6 +78,9 @@ npm run dev            # 启动 Agent Server（默认 :3000）
 `text-embedding-v4`、微信收图理解 `WEIXIN_VISION_MODEL`（qwen3.8-max）、
 桌面屏幕视觉 `qwen-vl-max` / `qwen3.8-max`。
 
+全权限模式：`AUTO_APPROVE_ALL=true` 时所有工具（含 L2/L3：终端、电源、
+删除等）自动执行，不弹确认；权限系统保留，随时可回退。
+
 选中的 Provider 没有配置 Key 时服务仍可启动，`/health` 会显示 `llm.configured: false`，
 调用聊天接口会返回 503。
 

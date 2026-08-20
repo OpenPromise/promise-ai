@@ -108,6 +108,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
               tools: deps.tools,
               approvals: deps.approvals,
               memory: deps.memory,
+              autoApproveAll: deps.config.autoApproveAll,
             }),
           });
         } else {
@@ -119,6 +120,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
             tools: deps.tools,
             approvals: deps.approvals,
             memory: deps.memory,
+            autoApproveAll: deps.config.autoApproveAll,
           });
           registerQwenVoiceRoutes(instance, {
             store: deps.store,
