@@ -494,11 +494,14 @@ export class ConversationService {
           payload: { text: finalText, usage, durationMs: Date.now() - requestStartedAt },
         });
         this.#profileIngest?.(input.userMessage);
-        void this.#timeline?.addEvent({
-          type: 'chat',
-          summary: `和用户对话：${input.userMessage.trim().slice(0, 120)}`,
-          sessionId: input.sessionId,
-        });
+        // 定时任务（headless）由 task 事件留痕，不再重复写 chat 事件。
+        if (!input.headless) {
+          void this.#timeline?.addEvent({
+            type: 'chat',
+            summary: `和用户对话：${input.userMessage.trim().slice(0, 120)}`,
+            sessionId: input.sessionId,
+          });
+        }
         yield createEnvelope({
           type: 'agent.state',
           sessionId: input.sessionId,
