@@ -27,6 +27,7 @@ import { createCodingTool } from './services/coding-tool.js';
 import { createSelfTools } from './services/self-tools.js';
 import { recoverInterruptedSessions } from './services/restart-recovery.js';
 import { createWeixinTools } from './services/weixin-tools.js';
+import { createCloudTools } from './services/cloud-tools.js';
 
 const config = loadConfig();
 console.log(
@@ -286,6 +287,19 @@ for (const tool of createSelfTools({ memoryBackend, memory, personaDir })) {
 const weixinBridgeUrl = process.env.WEIXIN_BRIDGE_URL ?? 'http://127.0.0.1:3100';
 for (const tool of createWeixinTools({ bridgeUrl: weixinBridgeUrl, store })) {
   toolRegistry.register(tool);
+}
+// 腾讯云轻量服务器管理：实例状态 / 防火墙规则（凭据来自环境变量，未配置则不注册）。
+if (config.tencent.configured) {
+  for (const tool of createCloudTools({
+    secretId: config.tencent.secretId!,
+    secretKey: config.tencent.secretKey!,
+    region: config.tencent.region,
+    instanceId: config.tencent.lighthouseInstanceId,
+  })) {
+    toolRegistry.register(tool);
+  }
+} else {
+  console.warn('[cloud-tools] TENCENT_SECRET_ID/TENCENT_SECRET_KEY 未配置，cloud.* 工具未注册');
 }
 // 删除工具由桌面端提供（filesystem.delete，L1 自动执行、不限制路径）；内置版
 // 限定工作区且需要二次确认，容易让模型误报"不在工作区"，因此不注册。

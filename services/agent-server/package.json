@@ -19,7 +19,8 @@
     "@personal-ai/tools": "0.1.0",
     "@personal-ai/types": "0.1.0",
     "cron-parser": "^5.10.0",
-    "fastify": "^5.0.0"
+    "fastify": "^5.0.0",
+    "tencentcloud-sdk-nodejs-lighthouse": "^4.1.283"
   },
   "scripts": {
     "test": "vitest run"

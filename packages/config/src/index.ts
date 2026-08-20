@@ -93,6 +93,16 @@ const envSchema = z.object({
   DATABASE_URL: optionalString,
   HOME_ASSISTANT_URL: optionalUrl,
   HOME_ASSISTANT_TOKEN: optionalString,
+  TENCENT_SECRET_ID: optionalString,
+  TENCENT_SECRET_KEY: optionalString,
+  TENCENT_REGION: z.preprocess(
+    emptyToUndefined,
+    z.string().trim().min(1).default('ap-shanghai'),
+  ),
+  TENCENT_LIGHTHOUSE_INSTANCE_ID: z.preprocess(
+    emptyToUndefined,
+    z.string().trim().min(1).default('lhins-f1k9cz9m'),
+  ),
 });
 
 export interface AppConfig {
@@ -160,6 +170,14 @@ export interface AppConfig {
   homeAssistant: {
     url?: string;
     token?: string;
+  };
+  tencent: {
+    secretId?: string;
+    secretKey?: string;
+    region: string;
+    /** 轻量应用服务器实例 ID（云防火墙等操作目标）。 */
+    lighthouseInstanceId: string;
+    configured: boolean;
   };
 }
 
@@ -251,6 +269,13 @@ export function loadConfig(
     homeAssistant: {
       url: v.HOME_ASSISTANT_URL,
       token: v.HOME_ASSISTANT_TOKEN,
+    },
+    tencent: {
+      secretId: v.TENCENT_SECRET_ID,
+      secretKey: v.TENCENT_SECRET_KEY,
+      region: v.TENCENT_REGION,
+      lighthouseInstanceId: v.TENCENT_LIGHTHOUSE_INSTANCE_ID,
+      configured: Boolean(v.TENCENT_SECRET_ID && v.TENCENT_SECRET_KEY),
     },
   };
 }
