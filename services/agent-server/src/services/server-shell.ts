@@ -212,7 +212,8 @@ export function createServerShellTool(
       'interactive=true 时在伪终端（PTY）下运行，适合交互式命令；' +
       'input 可写入命令标准输入（如回答交互式提示）。' +
       'sandbox=true 时在隔离的一次性容器里执行（断网、限内存/CPU、只挂 /projects），' +
-      '适合高风险/陌生命令；sandbox 与 interactive 不能同时用。',
+      '适合执行不信任/高风险命令；开发、部署、需要网络或访问主仓库的任务' +
+      '必须用默认模式（沙箱断网且碰不到 /app），sandbox 与 interactive 不能同时用。',
     inputSchema: {
       type: 'object',
       properties: {
