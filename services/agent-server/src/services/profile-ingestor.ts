@@ -3,10 +3,8 @@ import type {
   ProfileCategory,
   ProfileEntry,
   ProfileStore,
-  AvatarStore,
 } from '@personal-ai/memory';
 import { resolveProfileUserId } from '@personal-ai/memory';
-import { mapPreferenceToAvatar } from '@personal-ai/memory';
 
 /**
  * 对话后自动抽取画像（Mem0 两阶段 infer 思路的落地）：
@@ -33,8 +31,6 @@ export interface ProfileIngestorOptions {
   compactThreshold?: number;
   /** 两次自动整理的最小间隔（毫秒）。 */
   compactCooldownMs?: number;
-  /** Avatar 偏好存储：抽取到的审美/外观偏好喂给进化引擎（user 源）。 */
-  avatarStore?: AvatarStore;
 }
 
 /** 画像少于该条数时，整理直接跳过（不值得花一次 LLM）。 */
@@ -199,7 +195,6 @@ export class ProfileIngestor {
   readonly #minIntervalMs: number;
   readonly #compactThreshold: number;
   readonly #compactCooldownMs: number;
-  readonly #avatarStore?: AvatarStore;
   #lastRunAt = 0;
   #lastCompactAt = 0;
 
@@ -209,7 +204,6 @@ export class ProfileIngestor {
     this.#minIntervalMs = options.minIntervalMs ?? 10 * 60 * 1000;
     this.#compactThreshold = options.compactThreshold ?? 50;
     this.#compactCooldownMs = options.compactCooldownMs ?? 30 * 60 * 1000;
-    this.#avatarStore = options.avatarStore;
   }
 
   /** 节流：距上次抽取不足 minIntervalMs 时跳过。 */
@@ -237,27 +231,6 @@ export class ProfileIngestor {
       console.log(`[profile] applyExtractedFacts applied=${applied}`);
       if (applied > 0) {
         console.log(`[profile] 对话后自动抽取：应用 ${applied} 条画像更新`);
-      }
-      // Avatar 进化证据：偏好类事实映射到外观参数，喂给 avatar_preferences（user 源）。
-      if (this.#avatarStore) {
-        let avatarHits = 0;
-        for (const fact of facts) {
-          if (fact.event === 'DELETE' || fact.event === 'NONE') continue;
-          const hits = mapPreferenceToAvatar(`${fact.key} ${fact.value}`);
-          for (const hit of hits) {
-            avatarHits += 1;
-            await this.#avatarStore.addPreferenceEvidence({
-              parameter: hit.parameter,
-              direction: hit.direction,
-              source: 'user',
-              confidence: 0.3,
-              consistency: 1,
-            });
-          }
-        }
-        if (avatarHits > 0) {
-          console.log(`[profile] avatar 偏好证据 +${avatarHits}`);
-        }
       }
       // Letta memory pressure：画像过多时自动整理（带冷却，失败静默）。
       const updated = await this.#store.getProfile(userId);

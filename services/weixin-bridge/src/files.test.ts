@@ -15,7 +15,9 @@ describe('sanitizeFileName', () => {
   it('strips path components and rejects traversal', () => {
     expect(sanitizeFileName('报告.pdf')).toBe('报告.pdf');
     expect(sanitizeFileName('../../etc/passwd')).toBe('passwd');
-    expect(sanitizeFileName('a\\b\\c.txt')).toBe('c.txt');
+    expect(sanitizeFileName('a\\b\\c.txt')).toBe(
+      process.platform === 'win32' ? 'c.txt' : 'a_b_c.txt',
+    );
     expect(sanitizeFileName('   ')).toBe('file.bin');
   });
 });

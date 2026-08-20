@@ -12,15 +12,11 @@ import {
   createLocalEmbedder,
   createResilientEmbedder,
   InMemoryMemoryStore,
-  InMemoryAvatarStore,
-  InMemoryWorldStore,
   InMemoryTimelineStore,
   InMemorySessionStore,
   InMemoryTaskStore,
   InMemoryProfileStore,
   PostgresMemoryStore,
-  PostgresAvatarStore,
-  PostgresWorldStore,
   PostgresProfileStore,
   PostgresSessionStore,
   PostgresTaskStore,
@@ -42,11 +38,6 @@ import { createSystemStatusTool } from './services/system-status.js';
 import { createProfileTools } from './services/profile-tools.js';
 import { ProfileIngestor } from './services/profile-ingestor.js';
 import { createTimelineTools } from './services/timeline-tools.js';
-import { createAvatarTools } from './services/avatar-tools.js';
-import { AvatarEventBus } from './services/avatar-events.js';
-import { createWorldTools } from './services/world-tools.js';
-import { WorldEventBus } from './services/world-events.js';
-import { WorldService } from './services/world-service.js';
 import { HookService } from './services/hook-service.js';
 
 const config = loadConfig();
@@ -121,8 +112,6 @@ let memoryBackend = 'memory';
 let taskStore: InMemoryTaskStore | PostgresTaskStore = new InMemoryTaskStore();
 let profileStore: InMemoryProfileStore | PostgresProfileStore = new InMemoryProfileStore();
 let timelineStore: InMemoryTimelineStore | PostgresTimelineStore = new InMemoryTimelineStore();
-let avatarStore: InMemoryAvatarStore | PostgresAvatarStore = new InMemoryAvatarStore();
-let worldStore: InMemoryWorldStore | PostgresWorldStore = new InMemoryWorldStore();
 if (config.databaseUrl) {
   const postgresMemory = new PostgresMemoryStore({
     connectionString: config.databaseUrl,
@@ -131,21 +120,15 @@ if (config.databaseUrl) {
   const postgresTasks = new PostgresTaskStore({ connectionString: config.databaseUrl });
   const postgresProfiles = new PostgresProfileStore({ connectionString: config.databaseUrl });
   const postgresTimeline = new PostgresTimelineStore({ connectionString: config.databaseUrl });
-  const postgresAvatar = new PostgresAvatarStore({ connectionString: config.databaseUrl });
-  const postgresWorld = new PostgresWorldStore({ connectionString: config.databaseUrl });
   try {
     await postgresMemory.init();
     await postgresTasks.init();
     await postgresProfiles.init();
     await postgresTimeline.init();
-    await postgresAvatar.init();
-    await postgresWorld.init();
     memory = postgresMemory;
     taskStore = postgresTasks;
     profileStore = postgresProfiles;
     timelineStore = postgresTimeline;
-    avatarStore = postgresAvatar;
-    worldStore = postgresWorld;
     memoryBackend = 'postgres';
     console.log(`[memory] embedding: dashscope/${memoryEmbedder.dimensions ?? 'local'}`);
     console.log(`[memory] using postgres (${config.databaseUrl.split('@')[1] ?? ''})`);
@@ -272,7 +255,6 @@ const llm = new FallbackLLMProvider({
 const profileIngestor = new ProfileIngestor({
   llm,
   store: profileStore,
-  avatarStore,
 });
 // Voice cascade may use a faster model than text chat to cut latency; with
 // DashScope the same Qwen model is used for both.
@@ -317,7 +299,6 @@ const conversation = new ConversationService({
   memory,
   profile: profileStore,
   timeline: timelineStore,
-  worldStore,
   profileIngest: (message) => void profileIngestor.ingest(message),
   autoApproveAll: config.autoApproveAll,
 });
@@ -348,56 +329,13 @@ toolRegistry.register(createServerShellTool());
 // system.status：服务器健康巡检（L0 只读）——定时任务自主监控用。
 toolRegistry.register(createSystemStatusTool());
 // 用户画像：结构化记住用户的事实/偏好/习惯，跨会话注入。
-for (const tool of createProfileTools({ store: profileStore, llm, avatarStore })) {
+for (const tool of createProfileTools({ store: profileStore, llm })) {
   toolRegistry.register(tool);
 }
 // 事件时间线：记录/查看"我们之间发生过什么"。
 for (const tool of createTimelineTools({ store: timelineStore })) {
   toolRegistry.register(tool);
 }
-const avatarEventBus = new AvatarEventBus();
-for (const tool of createAvatarTools({
-  store: avatarStore,
-  onChange: (snapshot) => avatarEventBus.publish(snapshot),
-})) {
-  toolRegistry.register(tool);
-}
-// 「她的世界」：世界状态 + 活动循环 + 工具（AI Town world model 单角色版）。
-const worldEventBus = new WorldEventBus();
-const worldService = new WorldService({
-  store: worldStore,
-  timeline: timelineStore,
-  bus: worldEventBus,
-});
-worldService.start();
-for (const tool of createWorldTools({ store: worldStore, service: worldService })) {
-  toolRegistry.register(tool);
-}
-// AI 自身审美种子：persona 主题（夜猫子/独立）初始化为最小化/科技倾向，
-// 置信度从低开始，随成长与自我表达积累。
-void (async () => {
-  try {
-    const prefs = await avatarStore.listPreferences();
-    if (!prefs.some((p) => p.source === 'ai')) {
-      for (const seed of [
-        { parameter: 'minimalStyle', direction: 1 as const },
-        { parameter: 'cyberStyle', direction: 1 as const },
-      ]) {
-        await avatarStore.addPreferenceEvidence({
-          ...seed,
-          source: 'ai',
-          confidence: 0.3,
-          consistency: 1,
-        });
-      }
-      console.log('[avatar] 已播种 AI 自身审美（minimal/tech，低置信度）');
-    }
-  } catch (error) {
-    console.warn(
-      `[avatar] AI 审美种子失败：${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-})();
 // 自我开发：self.info / self.check / system.restart（守护进程/容器负责重启拉起）。
 for (const tool of createSelfTools({ memoryBackend, memory, personaDir })) {
   toolRegistry.register(tool);
@@ -465,12 +403,6 @@ const app = buildApp({
   hookSecret: process.env.HOOK_SECRET,
   processStartedAt,
   hostBootedRecently,
-  avatarStore,
-  avatarEvents: avatarEventBus,
-  worldStore,
-  worldService,
-  worldEvents: worldEventBus,
-  publicDir: fileURLToPath(new URL('../../../public', import.meta.url)),
   createVoice,
   createTTS,
   createQwen,
@@ -505,7 +437,6 @@ const shutdown = async (signal: string): Promise<void> => {
   app.log.info({ signal }, 'shutting down agent-server');
   taskService.stop();
   reminderService.stop();
-  worldService.stop();
   await app.close();
   process.exit(0);
 };

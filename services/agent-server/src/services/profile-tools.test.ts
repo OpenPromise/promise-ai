@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { InMemoryAvatarStore, InMemoryProfileStore } from '@personal-ai/memory';
+import { InMemoryProfileStore } from '@personal-ai/memory';
 import type { GenerateResult, LLMProvider } from '@personal-ai/llm';
 import { createProfileTools } from './profile-tools.js';
 
@@ -120,32 +120,5 @@ describe('profile.* 用户画像工具', () => {
     );
     expect(result.ok).toBe(true);
     expect((result.data as { currentValue: string }).currentValue).toBe('夜夜');
-  });
-
-  it('set 记录 preference 时同步喂 avatar 证据（user 源）', async () => {
-    const { store, byName } = makeTools();
-    const avatarStore = new InMemoryAvatarStore();
-    const llm: LLMProvider = {
-      name: 'fake',
-      model: 'test',
-      configured: true,
-      async *chat() {
-        yield { delta: '' };
-      },
-      async generate(): Promise<GenerateResult> {
-        return { text: '' };
-      },
-    };
-    const tools = createProfileTools({ store, llm, avatarStore });
-    const setTool = tools.find((t) => t.name === 'profile.set')!;
-    await setTool.execute(
-      { key: '喜好', value: '喜欢蓝色', category: 'preference' },
-      { sessionId: 's1' },
-    );
-    const prefs = await avatarStore.listPreferences();
-    expect(
-      prefs.some((p) => p.source === 'user' && p.parameter === 'hairColor' && p.direction === 1),
-    ).toBe(true);
-    expect(byName.get('profile.set')?.permissionLevel).toBe(1);
   });
 });

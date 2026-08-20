@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createBuiltinTools,
@@ -151,7 +152,8 @@ describe('filesystem.search', () => {
     const tool = createFilesystemSearchTool({
       allowedRoots: [process.cwd()],
     });
-    const result = await tool.execute({ query: '*.md', root: 'C:\\Windows' }, { sessionId: 's1' });
+    const outsideRoot = path.resolve(path.dirname(process.cwd()), 'outside');
+    const result = await tool.execute({ query: '*.md', root: outsideRoot }, { sessionId: 's1' });
     expect(result.ok).toBe(false);
     expect(result.error).toContain('不在允许的工作区内');
   });
