@@ -22,6 +22,9 @@ export function registerHealthRoutes(app: FastifyInstance, deps: HealthDeps): vo
       model: deps.llm.model,
       configured: deps.llm.configured,
     },
+    autoApproveAll: deps.config.autoApproveAll,
+    voiceEnabled: deps.config.voiceEnabled,
+    voiceTtsEnabled: deps.config.voiceTtsEnabled,
     memory: { backend: deps.memoryBackend },
   }));
 }
