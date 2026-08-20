@@ -1,5 +1,6 @@
 import { lighthouse } from 'tencentcloud-sdk-nodejs-lighthouse';
 import type { Tool, ToolResult } from '@personal-ai/tools';
+import type { TimelineStore } from '@personal-ai/memory';
 
 /**
  * 腾讯云轻量应用服务器（Lighthouse）管理工具。
@@ -44,6 +45,8 @@ export interface CloudToolOptions {
     secretKey: string;
     region: string;
   }) => LighthouseClientLike;
+  /** 事件时间线：云操作留痕。 */
+  timeline?: TimelineStore;
 }
 
 interface FirewallRule {
@@ -119,6 +122,7 @@ export function createCloudTools(options: CloudToolOptions): Tool[] {
     secretKey,
     region = 'ap-shanghai',
     instanceId = 'lhins-f1k9cz9m',
+    timeline,
   } = options;
   const clientFactory = options.clientFactory ?? createLighthouseClient;
   const client = clientFactory({ secretId, secretKey, region });
@@ -225,6 +229,11 @@ export function createCloudTools(options: CloudToolOptions): Tool[] {
             });
           }
           await client.CreateFirewallRules({ InstanceId: instanceId, FirewallRules: toAdd });
+          void timeline?.addEvent({
+            type: 'cloud',
+            summary: `开放云服务器 TCP ${portNumber} 端口（IPv4+IPv6）`,
+            metadata: { port: portNumber },
+          });
           return {
             ok: true,
             data: {
@@ -297,6 +306,11 @@ export function createCloudTools(options: CloudToolOptions): Tool[] {
               return payload;
             }),
           });
+          void timeline?.addEvent({
+            type: 'cloud',
+            summary: `关闭云服务器 TCP ${portNumber} 端口（移除 ${matching.length} 条规则）`,
+            metadata: { port: portNumber, removed: matching.length },
+          });
           return {
             ok: true,
             data: {
@@ -338,6 +352,11 @@ export function createCloudTools(options: CloudToolOptions): Tool[] {
             };
           }
           await client.RebootInstances({ InstanceIds: [instanceId] });
+          void timeline?.addEvent({
+            type: 'cloud',
+            summary: '重启云服务器（服务将中断约 1-3 分钟）',
+            metadata: { instanceId },
+          });
           return {
             ok: true,
             data: {

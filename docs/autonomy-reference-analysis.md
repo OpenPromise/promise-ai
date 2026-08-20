@@ -120,3 +120,15 @@
   http/https、限制页面大小（SSRF/滥用防护）
 - ✅ ⑤ 工具预算熔断：RunChatInput.toolBudget + 超限熔断通知
 - ✅ ⑥ 密钥访问审计：server.shell 输出含敏感密钥时留审计日志（已脱敏）
+
+## 事件时间线（阶段 4，2026-08-20）
+
+- ✅ 事件时间线落地：`timeline_events` 表（OpenClaw trajectory 事件信封：
+  type/summary/sessionId/runId/metadata/ts）+ InMemory/Postgres 双实现
+- ✅ 自动写入：对话结束（chat）、定时任务完成/失败（task）、云操作
+  开/关端口与重启（cloud）、手动记录（timeline.add）
+- ✅ `timeline.list`（L0）/ `timeline.add`（L1）工具
+- ✅ 每次会话注入最近 8 条事件（Letta 回顾思路）——让 AI 知道
+  "我们之间发生过什么"
+- ⏸ 定期回顾蒸馏（Letta reflection）：时间线 → 画像的自动蒸馏任务，
+  等积累数据后再做

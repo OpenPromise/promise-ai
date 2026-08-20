@@ -9,7 +9,7 @@ import {
   pruneToolResult,
   repairToolResultPairing,
 } from './conversation.js';
-import { InMemoryProfileStore } from '@personal-ai/memory';
+import { InMemoryProfileStore, InMemoryTimelineStore } from '@personal-ai/memory';
 
 describe('ConversationService', () => {
   it('用户画像注入持久上下文', async () => {
@@ -29,6 +29,51 @@ describe('ConversationService', () => {
     expect(context).toContain('用户画像');
     expect(context).toContain('[fact] 称呼：小夜');
     expect(context).toContain('[habit] 作息：夜猫子');
+  });
+
+  it('事件时间线注入持久上下文', async () => {
+    const memory = new InMemoryMemoryStore();
+    const timeline = new InMemoryTimelineStore();
+    await timeline.addEvent({ type: 'cloud', summary: '开放端口 8080' });
+    const context = await collectPersistentContext(memory, undefined, timeline);
+    expect(context).toContain('最近发生的事件时间线');
+    expect(context).toContain('[cloud]');
+    expect(context).toContain('开放端口 8080');
+  });
+
+  it('对话结束后写入 chat 时间线事件', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    const timeline = new InMemoryTimelineStore();
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'deepseek-test',
+      configured: true,
+      async *chat(): AsyncIterable<ChatChunk> {
+        yield { delta: '好的。' };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+    const service = new ConversationService({
+      store,
+      llm,
+      tools: new ToolRegistry(),
+      approvals: new ApprovalRegistry(),
+      memory: new InMemoryMemoryStore(),
+      timeline,
+    });
+    for await (const _envelope of service.runChat({
+      sessionId: session.id,
+      userMessage: '帮我看看服务器',
+    })) {
+      // drain
+    }
+    const events = await timeline.listEvents();
+    expect(events.some((e) => e.type === 'chat' && e.summary.includes('帮我看看服务器'))).toBe(
+      true,
+    );
   });
 
   it('LLM 工具名下划线化传输，tool_calls 返回时还原为真实名执行', async () => {

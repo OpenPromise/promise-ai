@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { InMemoryTimelineStore } from '@personal-ai/memory';
 import {
   createCloudTools,
   type LighthouseClientLike,
@@ -65,6 +66,17 @@ function makeTools(client: LighthouseClientLike) {
     region: 'ap-shanghai',
     instanceId: INSTANCE_ID,
     clientFactory: () => client,
+  });
+}
+
+function makeToolsWithTimeline(client: LighthouseClientLike, timeline: InMemoryTimelineStore) {
+  return createCloudTools({
+    secretId: 'test-secret-id',
+    secretKey: 'test-secret-key',
+    region: 'ap-shanghai',
+    instanceId: INSTANCE_ID,
+    clientFactory: () => client,
+    timeline,
   });
 }
 
@@ -205,6 +217,19 @@ describe('cloud.firewall_open', () => {
     const result = await tool.execute({ port: 70000 }, { sessionId: 's1' });
     expect(result.ok).toBe(false);
     expect(result.error).toContain('1-65535');
+  });
+
+  it('开放端口成功时写入时间线', async () => {
+    const client = makeStubClient({
+      DescribeFirewallRules: vi.fn(async () => ({
+        FirewallRuleSet: [{ Protocol: 'TCP', Port: '22', CidrBlock: '0.0.0.0/0', Action: 'ACCEPT' }],
+      })),
+    });
+    const timeline = new InMemoryTimelineStore();
+    const tool = makeToolsWithTimeline(client, timeline)[2]!;
+    await tool.execute({ port: 8080 }, { sessionId: 's1' });
+    const events = await timeline.listEvents();
+    expect(events.some((e) => e.type === 'cloud' && e.summary.includes('8080'))).toBe(true);
   });
 });
 

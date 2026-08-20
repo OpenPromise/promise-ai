@@ -12,6 +12,7 @@ import {
   createLocalEmbedder,
   createResilientEmbedder,
   InMemoryMemoryStore,
+  InMemoryTimelineStore,
   InMemorySessionStore,
   InMemoryTaskStore,
   InMemoryProfileStore,
@@ -19,6 +20,7 @@ import {
   PostgresProfileStore,
   PostgresSessionStore,
   PostgresTaskStore,
+  PostgresTimelineStore,
 } from '@personal-ai/memory';
 import { ToolRegistry, createBuiltinTools } from '@personal-ai/tools';
 import { buildApp } from './app.js';
@@ -35,6 +37,7 @@ import { createServerShellTool } from './services/server-shell.js';
 import { createSystemStatusTool } from './services/system-status.js';
 import { createProfileTools } from './services/profile-tools.js';
 import { ProfileIngestor } from './services/profile-ingestor.js';
+import { createTimelineTools } from './services/timeline-tools.js';
 
 const config = loadConfig();
 const processStartedAt = Date.now();
@@ -107,6 +110,7 @@ let memory: InMemoryMemoryStore | PostgresMemoryStore = new InMemoryMemoryStore(
 let memoryBackend = 'memory';
 let taskStore: InMemoryTaskStore | PostgresTaskStore = new InMemoryTaskStore();
 let profileStore: InMemoryProfileStore | PostgresProfileStore = new InMemoryProfileStore();
+let timelineStore: InMemoryTimelineStore | PostgresTimelineStore = new InMemoryTimelineStore();
 if (config.databaseUrl) {
   const postgresMemory = new PostgresMemoryStore({
     connectionString: config.databaseUrl,
@@ -114,13 +118,16 @@ if (config.databaseUrl) {
   });
   const postgresTasks = new PostgresTaskStore({ connectionString: config.databaseUrl });
   const postgresProfiles = new PostgresProfileStore({ connectionString: config.databaseUrl });
+  const postgresTimeline = new PostgresTimelineStore({ connectionString: config.databaseUrl });
   try {
     await postgresMemory.init();
     await postgresTasks.init();
     await postgresProfiles.init();
+    await postgresTimeline.init();
     memory = postgresMemory;
     taskStore = postgresTasks;
     profileStore = postgresProfiles;
+    timelineStore = postgresTimeline;
     memoryBackend = 'postgres';
     console.log(`[memory] embedding: dashscope/${memoryEmbedder.dimensions ?? 'local'}`);
     console.log(`[memory] using postgres (${config.databaseUrl.split('@')[1] ?? ''})`);
@@ -282,6 +289,7 @@ const conversation = new ConversationService({
   approvals,
   memory,
   profile: profileStore,
+  timeline: timelineStore,
   profileIngest: (message) => void profileIngestor.ingest(message),
   autoApproveAll: config.autoApproveAll,
 });
@@ -290,6 +298,7 @@ const taskService = new TaskService({
   sessions: store,
   conversation,
   systemPrompt: () => persona.getSystemPrompt(),
+  timeline: timelineStore,
 });
 
 const { tools, stores } = createBuiltinTools({
@@ -314,6 +323,10 @@ toolRegistry.register(createSystemStatusTool());
 for (const tool of createProfileTools({ store: profileStore, llm })) {
   toolRegistry.register(tool);
 }
+// 事件时间线：记录/查看"我们之间发生过什么"。
+for (const tool of createTimelineTools({ store: timelineStore })) {
+  toolRegistry.register(tool);
+}
 // 自我开发：self.info / self.check / system.restart（守护进程/容器负责重启拉起）。
 for (const tool of createSelfTools({ memoryBackend, memory, personaDir })) {
   toolRegistry.register(tool);
@@ -330,6 +343,7 @@ if (config.tencent.configured) {
     secretKey: config.tencent.secretKey!,
     region: config.tencent.region,
     instanceId: config.tencent.lighthouseInstanceId,
+    timeline: timelineStore,
   })) {
     toolRegistry.register(tool);
   }
@@ -362,6 +376,7 @@ const app = buildApp({
   approvals,
   memory,
   profile: profileStore,
+  timeline: timelineStore,
   profileIngest: (message) => void profileIngestor.ingest(message),
   memoryBackend,
   sessionBackend,

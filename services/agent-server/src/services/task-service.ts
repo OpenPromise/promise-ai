@@ -4,6 +4,7 @@ import {
   type SessionStore,
   type Task,
   type TaskStore,
+  type TimelineStore,
 } from '@personal-ai/memory';
 import type { ConversationService } from './conversation.js';
 
@@ -12,6 +13,8 @@ export interface TaskServiceDeps {
   sessions: SessionStore;
   conversation: ConversationService;
   systemPrompt: () => Promise<string>;
+  /** 事件时间线：任务完成/失败留痕。 */
+  timeline?: TimelineStore;
   tickIntervalMs?: number;
 }
 
@@ -62,6 +65,7 @@ export class TaskService {
   readonly #sessions: SessionStore;
   readonly #conversation: ConversationService;
   readonly #systemPrompt: () => Promise<string>;
+  readonly #timeline?: TimelineStore;
   readonly #tickIntervalMs: number;
   readonly #listeners = new Set<(event: TaskRunEvent) => void>();
   #timer: NodeJS.Timeout | undefined;
@@ -72,6 +76,7 @@ export class TaskService {
     this.#sessions = deps.sessions;
     this.#conversation = deps.conversation;
     this.#systemPrompt = deps.systemPrompt;
+    this.#timeline = deps.timeline;
     this.#tickIntervalMs = deps.tickIntervalMs ?? TICK_INTERVAL_MS;
   }
 
@@ -157,12 +162,17 @@ export class TaskService {
           if (text) output = text;
         }
       }
-      await this.#tasks.addRun({
+      const run = await this.#tasks.addRun({
         taskId: task.id,
         status: 'success',
         output,
         startedAt,
         finishedAt: finishedAt(),
+      });
+      void this.#timeline?.addEvent({
+        type: 'task',
+        summary: `定时任务「${task.name}」完成${output.trim() ? `：${output.trim().slice(0, 100)}` : ''}`,
+        runId: run.id,
       });
       this.#emit({
         taskId: task.id,
@@ -176,12 +186,17 @@ export class TaskService {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await this.#tasks.addRun({
+      const run = await this.#tasks.addRun({
         taskId: task.id,
         status: 'error',
         error: message,
         startedAt,
         finishedAt: finishedAt(),
+      });
+      void this.#timeline?.addEvent({
+        type: 'task',
+        summary: `定时任务「${task.name}」失败：${message.slice(0, 100)}`,
+        runId: run.id,
       });
       this.#emit({
         taskId: task.id,

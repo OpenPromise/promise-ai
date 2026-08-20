@@ -7,7 +7,7 @@ import type {
   LLMToolCallWire,
   LLMProvider,
 } from '@personal-ai/llm';
-import type { ProfileStore, SessionStore } from '@personal-ai/memory';
+import type { ProfileStore, SessionStore, TimelineStore } from '@personal-ai/memory';
 import type { MemoryStore } from '@personal-ai/memory';
 import { createEnvelope } from '@personal-ai/protocol';
 import type { ProtocolEnvelope } from '@personal-ai/protocol';
@@ -43,6 +43,8 @@ export interface ConversationServiceDeps {
   memory: MemoryStore;
   /** 用户画像存储：注入"用户画像"上下文（结构化长期关系记忆）。 */
   profile?: ProfileStore;
+  /** 事件时间线：记录/注入"我们之间发生过什么"。 */
+  timeline?: TimelineStore;
   /** 对话正常结束后异步抽取画像（Mem0 两阶段思路）；不阻塞回复。 */
   profileIngest?: (userMessage: string) => void;
   /** 全权限模式：所有工具（含 L2/L3）自动执行，不弹确认。 */
@@ -60,9 +62,11 @@ const MEMORY_PROMPT_PREFIX = '以下是关于用户的长期记忆（可能过�
 const GOAL_PROMPT_PREFIX = '以下是用户的长期目标（goal，请持续关注并在对话中主动推进）：';
 const FEEDBACK_PROMPT_PREFIX = '以下是近期反馈与教训（[feedback]，请避免重蹈覆辙）：';
 const PROFILE_PROMPT_PREFIX = '以下是用户画像（跨会话记住的用户事实/偏好/习惯，请主动贴合）：';
+const TIMELINE_PROMPT_PREFIX = '以下是最近发生的事件时间线（供回忆上下文，按时间倒序）：';
 const GOAL_CONTEXT_LIMIT = 5;
 const FEEDBACK_CONTEXT_LIMIT = 3;
 const PROFILE_CONTEXT_LIMIT = 30;
+const TIMELINE_CONTEXT_LIMIT = 8;
 const AUTO_APPROVE_PROMPT =
   '【当前为全权限模式】所有工具都会自动执行，无需用户确认。' +
   '即使工具描述里写着"需要确认"，也直接调用，不要询问或等待用户确认。';
@@ -186,6 +190,7 @@ export function pruneToolResult(content: string, maxChars = TOOL_RESULT_MAX_CHAR
 export async function collectPersistentContext(
   memory: MemoryStore,
   profile?: ProfileStore,
+  timeline?: TimelineStore,
 ): Promise<string | null> {
   const entries = await memory.list();
   const goals = entries
@@ -212,6 +217,16 @@ export async function collectPersistentContext(
         `${PROFILE_PROMPT_PREFIX}\n${profileEntries
           .slice(0, PROFILE_CONTEXT_LIMIT)
           .map((entry) => `- [${entry.category}] ${entry.key}：${entry.value}`)
+          .join('\n')}`,
+      );
+    }
+  }
+  if (timeline) {
+    const events = await timeline.listEvents({ limit: TIMELINE_CONTEXT_LIMIT });
+    if (events.length > 0) {
+      blocks.push(
+        `${TIMELINE_PROMPT_PREFIX}\n${events
+          .map((event) => `- [${event.type}] ${event.createdAt.slice(0, 16)} ${event.summary}`)
           .join('\n')}`,
       );
     }
@@ -319,6 +334,7 @@ export class ConversationService {
   readonly #approvals: ApprovalRegistry;
   readonly #memory: MemoryStore;
   readonly #profile?: ProfileStore;
+  readonly #timeline?: TimelineStore;
   readonly #profileIngest?: (userMessage: string) => void;
   readonly #autoApproveAll: boolean;
 
@@ -329,6 +345,7 @@ export class ConversationService {
     this.#approvals = deps.approvals;
     this.#memory = deps.memory;
     this.#profile = deps.profile;
+    this.#timeline = deps.timeline;
     this.#profileIngest = deps.profileIngest;
     this.#autoApproveAll = deps.autoApproveAll ?? false;
   }
@@ -369,7 +386,7 @@ export class ConversationService {
       return toolNameByWire.get(wireName) ?? wireName;
     };
     const [persistentContext, relevantMemories] = await Promise.all([
-      collectPersistentContext(this.#memory, this.#profile),
+      collectPersistentContext(this.#memory, this.#profile, this.#timeline),
       this.#memory.search(input.userMessage, MEMORY_LIMIT),
     ]);
     let memoryInjected = false;
@@ -477,6 +494,11 @@ export class ConversationService {
           payload: { text: finalText, usage, durationMs: Date.now() - requestStartedAt },
         });
         this.#profileIngest?.(input.userMessage);
+        void this.#timeline?.addEvent({
+          type: 'chat',
+          summary: `和用户对话：${input.userMessage.trim().slice(0, 120)}`,
+          sessionId: input.sessionId,
+        });
         yield createEnvelope({
           type: 'agent.state',
           sessionId: input.sessionId,
@@ -609,6 +631,11 @@ export class ConversationService {
           role: 'assistant',
           content: note,
         });
+        void this.#timeline?.addEvent({
+          type: 'chat',
+          summary: `和用户对话（已停止）：${input.userMessage.trim().slice(0, 120)}`,
+          sessionId: input.sessionId,
+        });
         yield createEnvelope({
           type: 'chat.done',
           sessionId: input.sessionId,
@@ -644,6 +671,11 @@ export class ConversationService {
     await this.#store.addMessage(input.sessionId, {
       role: 'assistant',
       content: finalSummary,
+    });
+    void this.#timeline?.addEvent({
+      type: 'chat',
+      summary: `和用户对话（多轮工具任务）：${input.userMessage.trim().slice(0, 120)}`,
+      sessionId: input.sessionId,
     });
     yield createEnvelope({
       type: 'chat.done',
