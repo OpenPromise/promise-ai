@@ -218,7 +218,14 @@ export class PostgresTaskStore implements TaskStore {
     const id = randomUUID();
     await this.#pool.query(
       `INSERT INTO tasks (id, name, schedule, action, session_id, tools) VALUES ($1, $2, $3, $4, $5, $6)`,
-      [id, input.name, input.schedule, input.action, input.sessionId, input.tools ?? null],
+      [
+        id,
+        input.name,
+        input.schedule,
+        input.action,
+        input.sessionId,
+        input.tools ? JSON.stringify(input.tools) : null,
+      ],
     );
     const task = await this.getTask(id);
     if (!task) throw new Error('failed to read back inserted task');
@@ -265,7 +272,7 @@ export class PostgresTaskStore implements TaskStore {
         next.enabled,
         next.lastRunAt ?? null,
         next.sessionId,
-        next.tools ?? null,
+        next.tools ? JSON.stringify(next.tools) : null,
       ],
     );
     return this.getTask(id);
