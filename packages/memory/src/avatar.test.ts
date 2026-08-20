@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyAvatarDelta,
+  computeEvolutionScore,
   defaultAvatarGenome,
   InMemoryAvatarStore,
+  mapPreferenceToAvatar,
   MAX_EVOLUTION_DELTA,
 } from './avatar.js';
 
@@ -75,5 +77,51 @@ describe('InMemoryAvatarStore', () => {
     const events = await store.listEvolutionEvents();
     expect(events[0]?.parameter).toBe('cuteStyle');
     expect(events[1]?.parameter).toBe('hairColor');
+  });
+});
+
+describe('computeEvolutionScore（用户计划 §7 公式）', () => {
+  const base = {
+    confidence: 0.9,
+    evidenceCount: 5,
+    consistency: 1,
+    source: 'user' as const,
+    firstSeenAt: new Date(Date.now() - 7 * 86_400_000).toISOString(),
+  };
+  it('证据充足且长期稳定 → 高分', () => {
+    expect(computeEvolutionScore(base)).toBeGreaterThanOrEqual(0.5);
+  });
+  it('单次证据 → 低分（不足触发）', () => {
+    const weak = {
+      ...base,
+      confidence: 0.3,
+      evidenceCount: 1,
+      firstSeenAt: new Date().toISOString(),
+    };
+    expect(computeEvolutionScore(weak)).toBeLessThan(0.5);
+  });
+  it('时间因子：新证据分数更低', () => {
+    const fresh = { ...base, firstSeenAt: new Date().toISOString() };
+    expect(computeEvolutionScore(fresh)).toBeLessThan(computeEvolutionScore(base));
+  });
+});
+
+describe('mapPreferenceToAvatar（偏好文本 → 参数方向）', () => {
+  it('识别蓝色/极简/科技/可爱等关键词', () => {
+    expect(mapPreferenceToAvatar('我喜欢蓝色')).toEqual([
+      { parameter: 'hairColor', direction: 1 },
+    ]);
+    expect(mapPreferenceToAvatar('我喜欢极简风格')).toEqual([
+      { parameter: 'minimalStyle', direction: 1 },
+    ]);
+    expect(mapPreferenceToAvatar('有点赛博朋克')).toEqual([
+      { parameter: 'cyberStyle', direction: 1 },
+    ]);
+    expect(mapPreferenceToAvatar('短发好看')).toEqual([
+      { parameter: 'hairLength', direction: -1 },
+    ]);
+  });
+  it('无关文本无命中', () => {
+    expect(mapPreferenceToAvatar('今天天气不错')).toEqual([]);
   });
 });

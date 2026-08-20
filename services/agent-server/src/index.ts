@@ -40,6 +40,7 @@ import { createSystemStatusTool } from './services/system-status.js';
 import { createProfileTools } from './services/profile-tools.js';
 import { ProfileIngestor } from './services/profile-ingestor.js';
 import { createTimelineTools } from './services/timeline-tools.js';
+import { createAvatarTools } from './services/avatar-tools.js';
 import { HookService } from './services/hook-service.js';
 
 const config = loadConfig();
@@ -253,7 +254,11 @@ const llm = new FallbackLLMProvider({
     : {}),
 });
 // 对话后自动抽取画像（Mem0 两阶段思路）：快模型 + 节流 + 失败静默。
-const profileIngestor = new ProfileIngestor({ llm, store: profileStore });
+const profileIngestor = new ProfileIngestor({
+  llm,
+  store: profileStore,
+  avatarStore,
+});
 // Voice cascade may use a faster model than text chat to cut latency; with
 // DashScope the same Qwen model is used for both.
 const primaryVoiceLlm =
@@ -334,6 +339,34 @@ for (const tool of createProfileTools({ store: profileStore, llm })) {
 for (const tool of createTimelineTools({ store: timelineStore })) {
   toolRegistry.register(tool);
 }
+for (const tool of createAvatarTools({ store: avatarStore })) {
+  toolRegistry.register(tool);
+}
+// AI 自身审美种子：persona 主题（夜猫子/独立）初始化为最小化/科技倾向，
+// 置信度从低开始，随成长与自我表达积累。
+void (async () => {
+  try {
+    const prefs = await avatarStore.listPreferences();
+    if (!prefs.some((p) => p.source === 'ai')) {
+      for (const seed of [
+        { parameter: 'minimalStyle', direction: 1 as const },
+        { parameter: 'cyberStyle', direction: 1 as const },
+      ]) {
+        await avatarStore.addPreferenceEvidence({
+          ...seed,
+          source: 'ai',
+          confidence: 0.3,
+          consistency: 1,
+        });
+      }
+      console.log('[avatar] 已播种 AI 自身审美（minimal/tech，低置信度）');
+    }
+  } catch (error) {
+    console.warn(
+      `[avatar] AI 审美种子失败：${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+})();
 // 自我开发：self.info / self.check / system.restart（守护进程/容器负责重启拉起）。
 for (const tool of createSelfTools({ memoryBackend, memory, personaDir })) {
   toolRegistry.register(tool);

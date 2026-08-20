@@ -118,6 +118,63 @@ export const PERSONALITY_PARAMS = Object.keys(defaultAvatarGenome().personality)
 /** 单次变化最大步长（渐变原则：禁止 0.2 → 1.0）。 */
 export const MAX_EVOLUTION_DELTA = 0.08;
 
+/** 进化触发阈值（可配置，0~1）。 */
+export const DEFAULT_EVOLVE_THRESHOLD = 0.5;
+
+/**
+ * EvolutionScore = PreferenceStrength × EvidenceCount × Consistency ×
+ * TimeFactor × AIConfidence（用户计划 §7）。超过阈值才允许永久变化。
+ */
+export function computeEvolutionScore(
+  preference: Pick<
+    AvatarPreference,
+    'confidence' | 'evidenceCount' | 'consistency' | 'source' | 'firstSeenAt'
+  >,
+  now = Date.now(),
+): number {
+  const strength = preference.confidence;
+  const evidenceFactor = Math.min(1, preference.evidenceCount / 5);
+  const consistency = preference.consistency;
+  const days = Math.max(
+    0,
+    (now - new Date(preference.firstSeenAt).getTime()) / 86_400_000,
+  );
+  const timeFactor = Math.min(1, days / 3);
+  const aiConfidence = preference.source === 'ai' ? 1 : 0.85;
+  return strength * evidenceFactor * consistency * timeFactor * aiConfidence;
+}
+
+/** 偏好文本 → Avatar 参数方向的关键词映射（Phase 3 轻量，无需额外 LLM）。 */
+const PREFERENCE_KEYWORD_MAP: Array<{ keywords: string[]; parameter: string; direction: 1 | -1 }> = [
+  { keywords: ['蓝色', '蓝发', '深蓝', '天蓝'], parameter: 'hairColor', direction: 1 },
+  { keywords: ['紫色', '紫发'], parameter: 'hairColor', direction: -1 },
+  { keywords: ['粉色', '粉发', '可爱', '萌'], parameter: 'cuteStyle', direction: 1 },
+  { keywords: ['科技', '赛博', '未来', '机械', '霓虹'], parameter: 'cyberStyle', direction: 1 },
+  { keywords: ['极简', '简约', '简单', '干净', '冷淡'], parameter: 'minimalStyle', direction: 1 },
+  { keywords: ['短发'], parameter: 'hairLength', direction: -1 },
+  { keywords: ['长发'], parameter: 'hairLength', direction: 1 },
+  { keywords: ['红色', '红衣'], parameter: 'clothingColor', direction: 1 },
+  { keywords: ['青色', '绿色', '清新'], parameter: 'clothingColor', direction: -1 },
+  { keywords: ['配饰', '饰品', '项链', '耳环'], parameter: 'accessoryLevel', direction: 1 },
+];
+
+export interface AvatarPreferenceHit {
+  parameter: string;
+  direction: 1 | -1;
+}
+
+/** 把一句偏好文本映射成 Avatar 参数方向（可多个命中）。 */
+export function mapPreferenceToAvatar(text: string): AvatarPreferenceHit[] {
+  const lower = text.toLowerCase();
+  const hits: AvatarPreferenceHit[] = [];
+  for (const { keywords, parameter, direction } of PREFERENCE_KEYWORD_MAP) {
+    if (keywords.some((keyword) => lower.includes(keyword.toLowerCase()))) {
+      hits.push({ parameter, direction });
+    }
+  }
+  return hits;
+}
+
 /**
  * 对 appearance/personality 参数应用小步增量（钳制步长与 0~1 范围）。
  * 返回新 genome 与旧值；参数非法返回 null。
