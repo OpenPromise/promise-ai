@@ -30,6 +30,8 @@ describe('profile.* 用户画像工具', () => {
     expect(byName.get('profile.set')?.permissionLevel).toBe(1);
     expect(byName.get('profile.forget')?.permissionLevel).toBe(1);
     expect(byName.get('profile.compact')?.permissionLevel).toBe(1);
+    expect(byName.get('profile.history')?.permissionLevel).toBe(0);
+    expect(byName.get('profile.rollback')?.permissionLevel).toBe(1);
   });
 
   it('set 记录并覆盖，list 返回全部', async () => {
@@ -89,5 +91,34 @@ describe('profile.* 用户画像工具', () => {
     expect(data.after).toBe(1);
     const profile = await store.getProfile('default');
     expect(profile?.entries).toHaveLength(1);
+  });
+
+  it('history 返回变更历史（新→旧）', async () => {
+    const { byName } = makeTools();
+    await byName.get('profile.set')!.execute({ key: 'name', value: '夜夜' }, { sessionId: 's1' });
+    await byName.get('profile.set')!.execute({ key: 'name', value: '小明' }, { sessionId: 's1' });
+    const result = await byName.get('profile.history')!.execute(
+      { key: 'name' },
+      { sessionId: 's1' },
+    );
+    const data = result.data as {
+      events: Array<{ event: string; oldValue?: string; newValue?: string }>;
+    };
+    expect(data.events[0]?.event).toBe('UPDATE');
+    expect(data.events[0]?.oldValue).toBe('夜夜');
+    expect(data.events[0]?.newValue).toBe('小明');
+    expect(data.events[1]?.event).toBe('ADD');
+  });
+
+  it('rollback 撤销最近一次修改', async () => {
+    const { byName } = makeTools();
+    await byName.get('profile.set')!.execute({ key: 'name', value: '夜夜' }, { sessionId: 's1' });
+    await byName.get('profile.set')!.execute({ key: 'name', value: '小明' }, { sessionId: 's1' });
+    const result = await byName.get('profile.rollback')!.execute(
+      { key: 'name' },
+      { sessionId: 's1' },
+    );
+    expect(result.ok).toBe(true);
+    expect((result.data as { currentValue: string }).currentValue).toBe('夜夜');
   });
 });

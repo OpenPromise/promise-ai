@@ -172,6 +172,89 @@ export function createProfileTools(options: ProfileToolOptions): Tool[] {
         }
       },
     },
+    {
+      name: 'profile.history',
+      description:
+        '查看用户画像变更历史（只读 L0）：每次 ADD/UPDATE/DELETE 的时间、' +
+        '旧值、新值。可按 key 过滤、limit 限制条数（新→旧）。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          key: { type: 'string', maxLength: 64, description: '只看某个 key 的历史' },
+          limit: {
+            type: 'number',
+            minimum: 1,
+            maximum: 100,
+            description: '返回条数，默认 20',
+          },
+        },
+        required: [],
+      },
+      permissionLevel: 0,
+      async execute(input: unknown): Promise<ToolResult> {
+        const { key, limit } = (input ?? {}) as { key?: string; limit?: number };
+        const events = await store.listHistory(resolveProfileUserId(), {
+          ...(key?.trim() ? { key: key.trim() } : {}),
+          limit: Math.min(Math.max(1, Math.floor(limit ?? 20)), 100),
+        });
+        return {
+          ok: true,
+          data: {
+            count: events.length,
+            events,
+            note: events.length === 0 ? '暂无变更历史' : undefined,
+          },
+        };
+      },
+    },
+    {
+      name: 'profile.rollback',
+      description:
+        '回滚用户画像的某个 key（L1）：默认撤销该 key 最近一次修改；' +
+        '传 toEventId 则恢复到那次事件之后的状态（event id 用 profile.history 查）。' +
+        '回滚会覆盖当前值，但回滚本身也会记录一条新事件，可再次回滚。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          key: { type: 'string', minLength: 1, maxLength: 64, description: '要回滚的 key' },
+          toEventId: {
+            type: 'string',
+            description: '恢复到该事件之后的状态；省略则撤销最近一次修改',
+          },
+        },
+        required: ['key'],
+      },
+      permissionLevel: 1 as PermissionLevel,
+      async execute(input: unknown): Promise<ToolResult> {
+        const { key, toEventId } = (input ?? {}) as { key?: string; toEventId?: string };
+        const trimmedKey = key?.trim();
+        if (!trimmedKey) return { ok: false, error: '缺少 key 参数' };
+        try {
+          const profile = await store.rollbackEntry(resolveProfileUserId(), trimmedKey, {
+            ...(toEventId?.trim() ? { toEventId: toEventId.trim() } : {}),
+          });
+          const current = profile.entries.find((entry) => entry.key === trimmedKey);
+          return {
+            ok: true,
+            data: {
+              key: trimmedKey,
+              ...(toEventId?.trim()
+                ? { toEventId: toEventId.trim() }
+                : { undoLast: true }),
+              currentValue: current?.value ?? null,
+              note: current
+                ? `已回滚 ${trimmedKey}，当前值：${current.value}`
+                : `已回滚 ${trimmedKey}，当前无该条目`,
+            },
+          };
+        } catch (error) {
+          return {
+            ok: false,
+            error: `回滚失败：${error instanceof Error ? error.message : String(error)}`,
+          };
+        }
+      },
+    },
   ];
 
   return tools;
