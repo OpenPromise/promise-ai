@@ -493,7 +493,10 @@ export class ConversationService {
           requestId,
           payload: { text: finalText, usage, durationMs: Date.now() - requestStartedAt },
         });
-        this.#profileIngest?.(input.userMessage);
+        // 定时任务（headless）的 action 不是用户说的话，不参与画像/偏好抽取。
+        if (!input.headless) {
+          this.#profileIngest?.(input.userMessage);
+        }
         // 定时任务（headless）由 task 事件留痕，不再重复写 chat 事件。
         if (!input.headless) {
           void this.#timeline?.addEvent({
