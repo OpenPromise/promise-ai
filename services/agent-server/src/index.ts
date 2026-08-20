@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import { loadConfig } from '@personal-ai/config';
 import { FilePersonaProvider } from '@personal-ai/core';
 import { ElevenLabsSTT, ElevenLabsTTS } from '@personal-ai/elevenlabs';
@@ -40,6 +41,16 @@ const processStartedAt = Date.now();
 console.log(
   `[config] autoApproveAll=${config.autoApproveAll} provider=${config.llmProvider} voice=${config.voiceEnabled} tts=${config.voiceTtsEnabled}`,
 );
+
+/** 读宿主机 uptime（容器与宿主机共享内核，/proc/uptime 即宿主机值）。 */
+async function readHostUptimeSeconds(): Promise<number | null> {
+  try {
+    const text = await readFile('/proc/uptime', 'utf8');
+    return parseFloat(text.split(/\s+/)[0] ?? '0') || 0;
+  } catch {
+    return null;
+  }
+}
 
 /** Enumerates fixed drive roots (C:\, D:\ …) so file tools work anywhere on disk. */
 function listFixedDriveRoots(): string[] {
@@ -332,6 +343,15 @@ taskService.start();
 const reminderService = new ReminderService({ reminders: stores.reminders });
 reminderService.start();
 
+// 宿主机是否刚开机：决定是否发"云服务器重启完成"通知（真重启才发，
+// 普通部署/容器重启不误报）。
+const hostUptimeSeconds = await readHostUptimeSeconds();
+const hostBootedRecently = hostUptimeSeconds !== null && hostUptimeSeconds < 10 * 60;
+console.log(
+  `[boot] host uptime=${hostUptimeSeconds ?? 'unknown'}s，` +
+    (hostBootedRecently ? '检测到真重启，将发送重启完成通知' : '部署/常规重启，抑制重启通知'),
+);
+
 const app = buildApp({
   config,
   store,
@@ -348,6 +368,7 @@ const app = buildApp({
   subscribeTaskEvents: (listener) => taskService.onRun(listener),
   subscribeReminderEvents: (listener) => reminderService.onDue(listener),
   processStartedAt,
+  hostBootedRecently,
   createVoice,
   createTTS,
   createQwen,

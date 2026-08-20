@@ -47,6 +47,8 @@ export interface AppDeps {
   subscribeReminderEvents?: (listener: (event: ReminderDueEvent) => void) => () => void;
   /** 进程启动时间戳：用于重启完成通知（开机自启闭环）。 */
   processStartedAt?: number;
+  /** 宿主机是否刚开机（< 10 分钟）；区分真重启与部署/容器重启。 */
+  hostBootedRecently?: boolean;
 }
 
 /** 空 TTS：语音输出禁用时使用（ASR 仍工作，回复以文字形式发送）。 */
@@ -85,6 +87,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       subscribeTaskEvents: deps.subscribeTaskEvents ?? (() => () => {}),
       subscribeReminderEvents: deps.subscribeReminderEvents ?? (() => () => {}),
       processStartedAt: deps.processStartedAt,
+      hostBootedRecently: deps.hostBootedRecently,
     });
   }
   registerSessionRoutes(app, {

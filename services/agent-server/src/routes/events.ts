@@ -7,10 +7,28 @@ export interface EventRouteDeps {
   subscribeReminderEvents: (listener: (event: ReminderDueEvent) => void) => () => void;
   /** 进程启动时间戳：用于重启完成通知（开机自启闭环）。 */
   processStartedAt?: number;
+  /**
+   * 宿主机是否刚开机（< 10 分钟）。区分"云服务器真重启"与"部署/容器重启"：
+   * 只有真重启才发 system.boot 通知，避免每次部署都误报"云服务器重启完成"。
+   */
+  hostBootedRecently?: boolean;
 }
 
 /** 进程启动后该时间窗口内，任何事件订阅者都会收到一次 system.boot。 */
 const BOOT_NOTICE_WINDOW_MS = 10 * 60 * 1000;
+
+/** 是否应发"云服务器重启完成"通知：宿主机刚开机 且 进程启动不久。 */
+export function shouldEmitBootNotice(
+  processStartedAt: number | undefined,
+  now: number,
+  hostBootedRecently: boolean | undefined,
+): boolean {
+  return (
+    Boolean(hostBootedRecently) &&
+    processStartedAt !== undefined &&
+    now - processStartedAt < BOOT_NOTICE_WINDOW_MS
+  );
+}
 
 /**
  * Server-Sent Events 推送端点：桌面端常驻订阅，任务执行完成/失败时
@@ -27,12 +45,9 @@ export function registerEventRoutes(app: FastifyInstance, deps: EventRouteDeps):
     });
     reply.raw.write(': connected\n\n');
 
-    // 重启完成通知：进程刚启动（如云服务器重启后自启）时，推送一次
-    // system.boot，微信桥订阅到后转发给所有已绑定对端。
-    if (
-      deps.processStartedAt !== undefined &&
-      Date.now() - deps.processStartedAt < BOOT_NOTICE_WINDOW_MS
-    ) {
+    // 重启完成通知：只有"宿主机真重启"（开机自启）才推送 system.boot，
+    // 普通部署/容器重启（宿主机 uptime 很大）不推送，避免误报。
+    if (shouldEmitBootNotice(deps.processStartedAt, Date.now(), deps.hostBootedRecently)) {
       reply.raw.write(
         `event: system.boot\ndata: ${JSON.stringify({
           bootedAt: new Date().toISOString(),
