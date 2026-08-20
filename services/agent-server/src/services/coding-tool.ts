@@ -6,7 +6,8 @@ import type { PermissionLevel, Tool, ToolResult } from '@personal-ai/tools';
 
 /**
  * coding.run 服务端实现：在服务器（容器）上直接驱动本机 AI 编程代理。
- * 默认后端 dsh（DeepSeek Harness，插件化）；CODING_AGENT=claude 可切 Claude Code。
+ * 默认后端 dsh（DeepSeek Harness，插件化、开源底盘，可自由扩展）；
+ * CODING_AGENT=claude 或 backend=claude 可切 Claude Code（复杂/大型任务更强）。
  * 桌面端工具列表不再包含 coding.run——它属于"大脑"而不是"客户端外壳"。
  */
 
@@ -15,6 +16,8 @@ interface CodingInput {
   task?: string;
   permissionMode?: string;
   timeoutMinutes?: number;
+  /** 编码代理后端：dsh（默认，开源底盘）或 claude（复杂任务更强）。 */
+  backend?: 'auto' | 'dsh' | 'claude';
 }
 
 /** 本机 Claude Code 可执行文件（原生 exe；Linux 上通常不存在）。 */
@@ -71,10 +74,8 @@ function resolveDshBin(): string | null {
 
 /**
  * coding.run 后端：dsh（默认，DeepSeek Harness，插件化可扩展）或 claude（Claude Code，
- * 同一目录会话可续接）。通过环境变量 CODING_AGENT=claude 切回。
+ * 同一目录会话可续接）。环境变量 CODING_AGENT=claude 或 backend=claude 切换。
  */
-const CODING_AGENT: 'dsh' | 'claude' =
-  (process.env.CODING_AGENT ?? '').toLowerCase() === 'claude' ? 'claude' : 'dsh';
 
 /**
  * Claude Code 会话复用：key 为规范化目录，value 为 Claude 的 session_id。
@@ -187,6 +188,8 @@ export function createCodingTool(): Tool {
       'directory 是服务器文件系统路径：持久工作目录用 /app（bind mount，重启不丢）；' +
       '不要在 /tmp 下放重要文件（容器重启会清空）。' +
       '完成开发后必须调用 self.commit 提交并推送 git，否则部署脚本会清理未提交的改动。' +
+      'backend 选择：dsh=开源底盘（默认，插件化可扩展，适合常规开发与自动化）；' +
+      'claude=Claude Code（复杂架构设计、大型重构、疑难 bug 更强，经 OpenRouter 认证）。' +
       '仅用于需要读写代码、修改文件或复杂工程调查的任务；' +
       '如果只是查文件是否存在、看目录内容、读文件、查状态这类轻量问题，' +
       '优先用 filesystem.search / filesystem.read / terminal.run 等轻量工具，不要启动 coding.run。',
@@ -214,6 +217,13 @@ export function createCodingTool(): Tool {
           maximum: 60,
           description: '等待上限（分钟），默认 10',
         },
+        backend: {
+          type: 'string',
+          enum: ['auto', 'dsh', 'claude'],
+          description:
+            '编码代理后端：auto=按环境默认（CODING_AGENT，缺省 dsh）；' +
+            'dsh=DeepSeek Harness 开源底盘（默认）；claude=Claude Code（复杂任务更强）',
+        },
       },
       required: ['directory', 'task'],
     },
@@ -225,6 +235,7 @@ export function createCodingTool(): Tool {
         task,
         permissionMode = 'acceptEdits',
         timeoutMinutes = 10,
+        backend = 'auto',
       } = (input ?? {}) as CodingInput;
       if (!directory?.trim() || !task?.trim()) {
         return { ok: false, error: '缺少 directory 或 task 参数' };
@@ -237,8 +248,14 @@ export function createCodingTool(): Tool {
       }
       const mode = permissionMode === 'bypassPermissions' ? 'bypassPermissions' : 'acceptEdits';
       const timeoutMs = Math.min(Math.max(1, Math.floor(timeoutMinutes)), 60) * 60 * 1000;
+      const resolvedBackend =
+        backend === 'dsh' || backend === 'claude'
+          ? backend
+          : process.env.CODING_AGENT === 'claude'
+            ? 'claude'
+            : 'dsh';
 
-      if (CODING_AGENT === 'dsh') {
+      if (resolvedBackend === 'dsh') {
         const taskText = task.trim();
         if (taskText.length > 20_000) {
           return {

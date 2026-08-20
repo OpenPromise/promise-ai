@@ -34,6 +34,10 @@ const envSchema = z.object({
     emptyToUndefined,
     z.string().trim().min(1).default('deepseek-v4-flash'),
   ),
+  DEEPSEEK_PRO_MODEL: z.preprocess(
+    emptyToUndefined,
+    z.string().trim().min(1).default('deepseek-v4-pro'),
+  ),
   DEEPSEEK_BASE_URL: z.preprocess(
     emptyToUndefined,
     z.string().url().default('https://api.deepseek.com'),
@@ -134,6 +138,8 @@ export interface AppConfig {
   deepseek: {
     apiKey?: string;
     model: string;
+    /** 复杂任务路由用的强模型（flash 为主，必要时切 pro）。 */
+    proModel: string;
     baseUrl: string;
     configured: boolean;
   };
@@ -241,6 +247,7 @@ export function loadConfig(
     deepseek: {
       apiKey: v.DEEPSEEK_API_KEY,
       model: v.DEEPSEEK_LLM_MODEL,
+      proModel: v.DEEPSEEK_PRO_MODEL,
       baseUrl: v.DEEPSEEK_BASE_URL,
       configured: Boolean(v.DEEPSEEK_API_KEY),
     },

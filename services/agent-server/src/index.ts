@@ -28,6 +28,7 @@ import { createSelfTools } from './services/self-tools.js';
 import { recoverInterruptedSessions } from './services/restart-recovery.js';
 import { createWeixinTools } from './services/weixin-tools.js';
 import { createCloudTools } from './services/cloud-tools.js';
+import { createRoutedLLMProvider } from './services/llm-router.js';
 
 const config = loadConfig();
 console.log(
@@ -179,10 +180,21 @@ const primaryLlm =
         model: config.openrouter.model,
       })
     : config.llmProvider === 'deepseek'
-      ? new OpenRouterProvider({
-          apiKey: config.deepseek.apiKey,
-          baseUrl: config.deepseek.baseUrl,
-          model: config.deepseek.model,
+      ? // flash/pro 双速路由：日常走 flash（快、省），复杂任务切 pro（强）。
+        // 语音级联仍用单独构造的 voiceLlm（保持低延迟）。
+        createRoutedLLMProvider({
+          fast: new OpenRouterProvider({
+            apiKey: config.deepseek.apiKey,
+            baseUrl: config.deepseek.baseUrl,
+            model: config.deepseek.model,
+          }),
+          smart: new OpenRouterProvider({
+            apiKey: config.deepseek.apiKey,
+            baseUrl: config.deepseek.baseUrl,
+            model: config.deepseek.proModel,
+          }),
+          onRoute: (_input, model) =>
+            console.log(`[llm-router] ${model === 'smart' ? 'pro' : 'flash'} 处理本次请求`),
         })
       : new OpenRouterProvider({
           apiKey: config.dashscope.apiKey,
