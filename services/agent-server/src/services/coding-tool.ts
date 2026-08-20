@@ -184,7 +184,10 @@ export function createCodingTool(): Tool {
       'dsh 模式每次调用是全新会话（headless 无续接）；claude 模式同一目录的后续任务会自动延续会话。' +
       '耗时较长（通常 30 秒到数分钟），建议在文字聊天中使用；语音会话可走 voice.delegate。' +
       'dsh 模式下 acceptEdits=工作区内写入，bypassPermissions=完全免沙箱。' +
-      'directory 是服务器文件系统路径（如 /app 或 /tmp/projects/xxx）。',
+      'directory 是服务器文件系统路径（如 /app 或 /tmp/projects/xxx）。' +
+      '仅用于需要读写代码、修改文件或复杂工程调查的任务；' +
+      '如果只是查文件是否存在、看目录内容、读文件、查状态这类轻量问题，' +
+      '优先用 filesystem.search / filesystem.read / terminal.run 等轻量工具，不要启动 coding.run。',
     inputSchema: {
       type: 'object',
       properties: {
