@@ -75,6 +75,109 @@ describe('chatOnce', () => {
     });
     expect(reply.error).toContain('503');
   });
+
+  it('长任务工具（engineer.delegate）派单时触发 onLongTaskStarted 确认', async () => {
+    const started: string[] = [];
+    const finished: string[] = [];
+    const fetchImpl = vi.fn(async (_url: unknown) =>
+      sseResponse([
+        JSON.stringify({
+          type: 'agent.tool_call',
+          payload: {
+            toolCalls: [
+              { id: 'call_1', name: 'engineer.delegate', arguments: '{"task":"修复登录"}' },
+            ],
+          },
+        }),
+        JSON.stringify({
+          type: 'agent.tool_result',
+          payload: { callId: 'call_1', name: 'engineer.delegate', result: { ok: true } },
+        }),
+        JSON.stringify({
+          type: 'chat.token',
+          payload: { delta: '小黑已完成：修复登录。' },
+        }),
+      ]),
+    );
+
+    const reply = await chatOnce('http://agent:3000', 's1', '派活', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      onLongTaskStarted: async (name) => {
+        started.push(name);
+      },
+      onLongTaskFinished: async (name) => {
+        finished.push(name);
+      },
+    });
+    expect(started).toEqual(['engineer.delegate']);
+    expect(finished).toEqual(['engineer.delegate']);
+    expect(reply.text).toBe('小黑已完成：修复登录。');
+  });
+
+  it('coding.run 同样触发派单确认；轻量工具不触发', async () => {
+    const started: string[] = [];
+    const finished: string[] = [];
+    const fetchImpl = vi.fn(async (_url: unknown) =>
+      sseResponse([
+        JSON.stringify({
+          type: 'agent.tool_call',
+          payload: { toolCalls: [{ id: 'c1', name: 'filesystem.read', arguments: '{}' }] },
+        }),
+        JSON.stringify({
+          type: 'agent.tool_call',
+          payload: { toolCalls: [{ id: 'c2', name: 'coding.run', arguments: '{}' }] },
+        }),
+        JSON.stringify({
+          type: 'agent.tool_result',
+          payload: { callId: 'c1', name: 'filesystem.read', result: { ok: true } },
+        }),
+        JSON.stringify({
+          type: 'agent.tool_result',
+          payload: { callId: 'c2', name: 'coding.run', result: { ok: true } },
+        }),
+        JSON.stringify({ type: 'chat.done', payload: { text: '完成' } }),
+      ]),
+    );
+
+    await chatOnce('http://agent:3000', 's1', '干活', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      onLongTaskStarted: async (name) => {
+        started.push(name);
+      },
+      onLongTaskFinished: async (name) => {
+        finished.push(name);
+      },
+    });
+    // filesystem.read 不触发，只有 coding.run 触发一次
+    expect(started).toEqual(['coding.run']);
+    expect(finished).toEqual(['coding.run']);
+  });
+
+  it('同一轮多个长任务调用只推送一次派单确认', async () => {
+    const started: string[] = [];
+    const fetchImpl = vi.fn(async (_url: unknown) =>
+      sseResponse([
+        JSON.stringify({
+          type: 'agent.tool_call',
+          payload: {
+            toolCalls: [
+              { id: 'c1', name: 'engineer.delegate', arguments: '{}' },
+              { id: 'c2', name: 'coding.run', arguments: '{}' },
+            ],
+          },
+        }),
+        JSON.stringify({ type: 'chat.done', payload: { text: '完成' } }),
+      ]),
+    );
+
+    await chatOnce('http://agent:3000', 's1', '干活', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      onLongTaskStarted: async (name) => {
+        started.push(name);
+      },
+    });
+    expect(started).toEqual(['engineer.delegate']);
+  });
 });
 
 describe('parseApprovalText', () => {

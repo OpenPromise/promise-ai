@@ -34,6 +34,14 @@ const SEGMENT_MIN_CHARS = 20;
 /** 无段落边界时，缓冲超过该长度即按句末标点提前切一次。 */
 const FLUSH_THRESHOLD_CHARS = 400;
 
+/** 长任务工具白名单：这些工具执行时向微信推送"已派出/已完成"进度节点。 */
+const LONG_TASK_TOOLS = ['engineer.delegate', 'coding.run'];
+/** 长任务工具开始时的确认文案（程序保证，不依赖模型输出文字）。 */
+const TOOL_START_HINTS: Record<string, string> = {
+  'engineer.delegate': '🔧 收到，已派给小黑！预计几分钟，干完我验收后向你汇报。',
+  'coding.run': '🔧 收到，开始执行开发任务，预计几分钟，完成后向你汇报。',
+};
+
 export interface ChatReply {
   text: string;
   error?: string;
@@ -126,6 +134,10 @@ export async function chatOnce(
     onPermissionRequest?: (info: { requestId: string; toolName: string }) => void;
     /** 检测到完整段落/句子时回调：提前发送该段。reject 视为发送失败，内容保留到最终补发。 */
     onSegment?: (segmentText: string) => Promise<void>;
+    /** 长任务工具开始执行时回调（派单确认：程序保证，不依赖模型输出文字）。 */
+    onLongTaskStarted?: (toolName: string) => Promise<void>;
+    /** 长任务工具执行完成时回调（进度节点：完成后随 chat.done 发完整报告）。 */
+    onLongTaskFinished?: (toolName: string) => Promise<void>;
   } = {},
 ): Promise<ChatReply> {
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -150,6 +162,8 @@ export async function chatOnce(
   /** 尚未提前发送的原始文本缓冲（始终是 text 的后缀）。 */
   let earlyBuffer = '';
   let alreadySentFirst = false;
+  let longTaskStartedSent = false;
+  const longTaskFinishedIds = new Set<string>();
   try {
     await consumeSse(response, async (line) => {
       const trimmed = line.trim();
@@ -220,6 +234,38 @@ export async function chatOnce(
         case 'chat.error':
           error = envelope.payload?.error ?? '未知错误';
           break;
+        case 'agent.tool_call': {
+          const toolCalls = (envelope.payload as { toolCalls?: Array<{ name?: string }> })
+            ?.toolCalls ?? [];
+          const longTask = toolCalls.find((call) => call.name && LONG_TASK_TOOLS.includes(call.name));
+          if (longTask?.name && !longTaskStartedSent) {
+            longTaskStartedSent = true;
+            try {
+              await options.onLongTaskStarted?.(longTask.name);
+            } catch (err) {
+              // 派单确认发送失败不阻塞主流程（chat.done 仍会发完整报告）。
+              options.log?.(
+                `[weixin] 派单确认发送失败：${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+          }
+          break;
+        }
+        case 'agent.tool_result': {
+          const name = (envelope.payload as { name?: string }).name ?? '';
+          const callId = (envelope.payload as { callId?: string }).callId ?? '';
+          if (LONG_TASK_TOOLS.includes(name) && callId && !longTaskFinishedIds.has(callId)) {
+            longTaskFinishedIds.add(callId);
+            try {
+              await options.onLongTaskFinished?.(name);
+            } catch (err) {
+              options.log?.(
+                `[weixin] 任务完成推送失败：${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+          }
+          break;
+        }
       }
     });
   } finally {
@@ -453,6 +499,30 @@ async function handleInboundMessage(msg: WeixinMessage, options: RelayOptions): 
             buildReplyMessage({
               to: peer,
               text: markdownToPlain(segmentText),
+              contextToken: msg.context_token,
+              runId: msg.run_id,
+            }),
+          );
+        },
+        // 长任务进度节点：派单确认 + 完成提示，让用户知道任务在进行。
+        // 失败由 chatOnce 吞掉，完整报告仍会随 chat.done 发出。
+        onLongTaskStarted: async (toolName) => {
+          await client.sendMessage(
+            buildReplyMessage({
+              to: peer,
+              text:
+                TOOL_START_HINTS[toolName] ??
+                `🔧 已派出任务：${toolName}，预计几分钟，完成后向你汇报。`,
+              contextToken: msg.context_token,
+              runId: msg.run_id,
+            }),
+          );
+        },
+        onLongTaskFinished: async () => {
+          await client.sendMessage(
+            buildReplyMessage({
+              to: peer,
+              text: '✔️ 任务完成，正在整理报告…',
               contextToken: msg.context_token,
               runId: msg.run_id,
             }),
