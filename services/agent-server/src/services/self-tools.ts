@@ -306,7 +306,9 @@ export function createSelfTools(
       description:
         '证据驱动的自我改进（Prime /refine 思路）：把一条失败证据或用户反馈提炼成' +
         '一条小规则，只追加到 persona/refinements.md（不改写基础人设），并写入 ' +
-        '[feedback] 长期记忆；返回当前 git 快照作为回滚点。每次只沉淀一条规则。',
+        '[feedback] 长期记忆；返回当前 git 快照作为回滚点。每次只沉淀一条规则。' +
+        '注意：工具结果已带 [失败分类] 标注——"可恢复"（超时/网络/文件未就绪）' +
+        '不应沉淀成"禁用某工具"的规则，只有"工具/参数缺陷"才值得写教训。',
       inputSchema: {
         type: 'object',
         properties: {

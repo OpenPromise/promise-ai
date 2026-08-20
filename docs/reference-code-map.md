@@ -55,3 +55,14 @@
   我们的 ApprovalRegistry 已接近，补上 always/never 记忆化即可
 4. **OpenCrabs 失败反馈分类器**：区分“可恢复失败”与“真缺陷”，
   让 self.refine 只沉淀真正的教训，不误伤可用工具
+
+## 落地进度
+
+- ✅ ① server.shell 工程化（2026-08-20）：进程组树 kill（超时/取消清理
+  孤儿进程）+ 环境密钥输出脱敏（[REDACTED]）+ 工作目录校验 + 测试
+- ✅ ④ 失败反馈分类器：`failure-classifier.ts` 区分可恢复/缺陷/未知，
+  工具失败自动在结果里标注 [失败分类]，self.refine 描述同步引导
+- ⏸ ② Workspace 抽象：暂缓——当前 /projects + server.shell + 文件工具
+  已覆盖场景，过早抽象违反本项目“禁止过度工程化”原则
+- ⏸ ③ 权限 always/never：暂缓——全权限模式（AUTO_APPROVE_ALL=true）
+  下不会弹审批，等回退到正常权限模式时再补（含桌面 UI 支持）

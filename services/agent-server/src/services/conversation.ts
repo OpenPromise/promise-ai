@@ -20,6 +20,7 @@ import {
 } from '@personal-ai/tools';
 import { approvalFingerprint, ApprovalRegistry } from './approval.js';
 import { runToolCallWithApproval } from './tool-execution.js';
+import { classifyToolFailure, FAILURE_CLASS_LABEL } from './failure-classifier.js';
 
 export interface RunChatInput {
   sessionId: string;
@@ -515,7 +516,17 @@ export class ConversationService {
         if (result === undefined) {
           result = { ok: false, error: `工具 ${call.name} 执行异常` };
         }
-        const toolContent = pruneToolResult(JSON.stringify(result));
+        const failureLabel = result.ok
+          ? null
+          : classifyToolFailure(
+              call.name,
+              typeof result.error === 'string' ? result.error : '',
+            );
+        // OpenCrabs 思路：失败时给模型标注"可恢复 vs 缺陷"，避免把环境性
+        // 失败沉淀成"禁用工具"的错误教训。
+        const toolContent =
+          pruneToolResult(JSON.stringify(result)) +
+          (failureLabel ? `\n[失败分类] ${FAILURE_CLASS_LABEL[failureLabel]}` : '');
         const toolMessage: LLMChatMessage = {
           role: 'tool',
           content: toolContent,

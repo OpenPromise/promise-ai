@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { access } from 'node:fs/promises';
 import type { PermissionLevel, Tool, ToolResult } from '@personal-ai/tools';
 
 /**
@@ -14,6 +15,7 @@ export interface ShellOutput {
   exitCode: number;
   stdout: string;
   stderr: string;
+  timedOut: boolean;
 }
 
 export type ShellRunner = (
@@ -26,10 +28,13 @@ function defaultRunner(
   options: { cwd: string; timeoutMs: number; signal: AbortSignal },
 ): Promise<ShellOutput> {
   return new Promise((resolve, reject) => {
+    // detached=true：bash 自成进程组，超时/取消时对整个进程组发信号，
+    // 保证 sleep/npm install/docker 等子进程不会成为孤儿继续跑（OpenClaw kill-tree 思路）。
     const child = spawn('/bin/bash', ['-lc', command], {
       cwd: options.cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: process.env,
+      detached: process.platform !== 'win32',
     });
     let stdout = '';
     let stderr = '';
@@ -39,24 +44,66 @@ function defaultRunner(
     child.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk.toString('utf8');
     });
+    const killTree = (signal: NodeJS.Signals): void => {
+      if (!child.pid) return;
+      try {
+        if (process.platform === 'win32') {
+          child.kill(signal);
+        } else {
+          // 负 PID = 整个进程组（Linux/容器）
+          process.kill(-child.pid, signal);
+        }
+      } catch {
+        child.kill(signal);
+      }
+    };
     const onAbort = (): void => {
-      child.kill('SIGTERM');
+      killTree('SIGTERM');
+      // 2 秒后仍存活则强杀，避免个别进程不响应 SIGTERM
+      const killer = setTimeout(() => killTree('SIGKILL'), 2000);
+      killer.unref?.();
     };
     if (options.signal.aborted) onAbort();
     else options.signal.addEventListener('abort', onAbort, { once: true });
     child.on('error', reject);
-    const timer = setTimeout(() => child.kill('SIGTERM'), options.timeoutMs);
+    const timer = setTimeout(() => {
+      onAbort();
+    }, options.timeoutMs);
     timer.unref?.();
     child.on('close', (code, signal) => {
       clearTimeout(timer);
       options.signal.removeEventListener('abort', onAbort);
-      resolve({
-        exitCode: signal === 'SIGTERM' ? 124 : (code ?? 1),
-        stdout,
-        stderr,
-      });
+      const timedOut = signal === 'SIGTERM' || signal === 'SIGKILL';
+      resolve({ exitCode: timedOut ? 124 : (code ?? 1), stdout, stderr, timedOut });
     });
   });
+}
+
+/**
+ * 收集环境变量中的敏感值（API Key / Secret / Token / 密码），用于命令输出脱敏。
+ * 防止 bot 执行 `env` / `cat .env` 后把密钥回显进会话历史（OpenClaw 输出脱敏思路）。
+ */
+export function collectSecrets(env: NodeJS.ProcessEnv = process.env): string[] {
+  const values = new Set<string>();
+  for (const [key, value] of Object.entries(env)) {
+    if (!value || value.length < 8) continue;
+    if (/(API_?KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL)/i.test(key)) {
+      values.add(value);
+    }
+  }
+  // 长的先替换，避免短值先替换破坏长值匹配
+  return [...values].sort((a, b) => b.length - a.length);
+}
+
+/** 把输出中的敏感值替换为占位符。 */
+export function redactOutput(output: string, secrets: string[]): string {
+  let result = output;
+  for (const secret of secrets) {
+    if (secret.length >= 8) {
+      result = result.split(secret).join('[REDACTED]');
+    }
+  }
+  return result;
 }
 
 export interface ServerShellToolOptions {
@@ -78,7 +125,9 @@ export function createServerShellTool(
       '在服务器容器内执行 bash 命令（相当于容器内终端，L3 系统级）。' +
       '可做任何服务器操作：git clone / npm install / 运行服务 / docker 起容器并映射端口等。' +
       '默认工作目录 /projects（宿主机持久工作区，重启不丢）。' +
-      '输出最多返回 20000 字符；长任务请拆分或加大 timeoutSeconds。',
+      '输出最多返回 20000 字符；长任务请拆分或加大 timeoutSeconds。' +
+      '命令输出中的 API 密钥等敏感值会自动脱敏为 [REDACTED]；' +
+      '超时/取消会终止整个进程树，不留孤儿进程。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -108,6 +157,11 @@ export function createServerShellTool(
         return { ok: false, error: '缺少 command 参数' };
       }
       const resolvedCwd = cwd?.trim() || defaultCwd;
+      try {
+        await access(resolvedCwd);
+      } catch {
+        return { ok: false, error: `工作目录不存在：${resolvedCwd}` };
+      }
       const timeoutMs = Math.min(Math.max(1, Math.floor(timeoutSeconds)), 300) * 1000;
       const controller = new AbortController();
       try {
@@ -116,15 +170,17 @@ export function createServerShellTool(
           timeoutMs,
           signal: controller.signal,
         });
-        const timedOut = result.exitCode === 124;
+        const secrets = collectSecrets();
         return {
           ok: true,
           data: {
             exitCode: result.exitCode,
-            timedOut,
-            stdout: result.stdout.slice(0, 20_000),
-            stderr: result.stderr.slice(0, 10_000),
-            note: timedOut ? `命令超过 ${Math.round(timeoutMs / 1000)} 秒被终止` : undefined,
+            timedOut: result.timedOut,
+            stdout: redactOutput(result.stdout, secrets).slice(0, 20_000),
+            stderr: redactOutput(result.stderr, secrets).slice(0, 10_000),
+            note: result.timedOut
+              ? `命令超过 ${Math.round(timeoutMs / 1000)} 秒被终止（已清理进程树）`
+              : undefined,
           },
         };
       } catch (error) {
