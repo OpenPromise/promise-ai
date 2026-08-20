@@ -115,4 +115,46 @@ describe('OpenRouterProvider', () => {
     });
     expect(dashscope.name).toBe('dashscope');
   });
+
+  it('toolChoice=required 时请求体携带 tool_choice（派单硬校验的 API 层支持）', async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
+      },
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(stream, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new OpenRouterProvider({
+      apiKey: 'sk-ds-test',
+      baseUrl: 'https://api.deepseek.com/v1',
+      name: 'deepseek',
+    });
+    for await (const _chunk of provider.chat({
+      messages: [{ role: 'user', content: '派单' }],
+      tools: [
+        {
+          type: 'function',
+          function: { name: 'engineer.delegate', description: '派给小黑', parameters: {} },
+        },
+      ],
+      toolChoice: 'required',
+    })) {
+      // drain
+    }
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body.tool_choice).toBe('required');
+    expect(body.tools).toHaveLength(1);
+    expect(body.stream).toBe(true);
+  });
 });

@@ -70,6 +70,16 @@ const TIMELINE_CONTEXT_LIMIT = 8;
 const AUTO_APPROVE_PROMPT =
   '【当前为全权限模式】所有工具都会自动执行，无需用户确认。' +
   '即使工具描述里写着"需要确认"，也直接调用，不要询问或等待用户确认。';
+/** 长任务派单工具：声称派单给小黑时必须真调用其一（程序硬校验）。 */
+const LONG_TASK_TOOLS = ['engineer.delegate', 'coding.run'];
+/** 声称"已派单/已开工"但实际没调工具时的检测模式（针对 bot 回复文字）。 */
+const DISPATCH_CLAIM_PATTERN =
+  /已派(给)?小黑|派出(给小黑)?|派给小黑|已派出去了|这就(派|开工)|正在派(给)?小黑|让小黑(去|来|分析|做|处理|搞)/;
+/** 检测到假派单后注入的系统校验提示（强制下一轮真正调用工具）。 */
+const DISPATCH_ENFORCE_PROMPT =
+  '【系统校验】你刚才声称"已派单给小黑/已开始开发"，但本轮没有实际调用 ' +
+  'engineer.delegate（派给小黑）或 coding.run（自我开发）工具。用户需要任务真正执行，' +
+  '不要只输出文字。请立即调用对应工具完成派单；如你已经说过确认语，直接调用，不要重复说明。';
 const COMPACTION_PROMPT = [
   '你是对话摘要助手。请把下面这段 AI 助理与用户的对话压缩成一份简洁的中文摘要，',
   '保留：用户的重要事实与偏好、已完成的任务和关键结果、尚未解决的事项。',
@@ -443,6 +453,8 @@ export class ConversationService {
     let toolCallsUsed = 0;
     let toolBudgetExceeded = false;
     let stopToolLoop = false;
+    /** 检测到"声称派单但未调工具"后，下一轮强制模型必须调用工具（tool_choice=required）。 */
+    let dispatchRetryPending = false;
 
     await this.#store.addMessage(input.sessionId, {
       role: 'user',
@@ -479,8 +491,10 @@ export class ConversationService {
       const chatInput: ChatInput = {
         messages: messagesForTurn,
         ...(tools.length > 0 ? { tools } : {}),
+        ...(dispatchRetryPending ? { toolChoice: 'required' as const } : {}),
         ...(input.signal ? { signal: input.signal } : {}),
       };
+      dispatchRetryPending = false;
 
       try {
         for await (const chunk of chatWithTimeoutAndRetry(this.#llm, chatInput)) {
@@ -523,6 +537,22 @@ export class ConversationService {
           payload: { state: 'listening' },
         });
         return;
+      }
+
+      // 派单硬校验（治"只说已派、实际没派"的反复事故）：
+      // 模型文字声称"已派单/已开工"时，本轮必须真正调用派单工具
+      // （engineer.delegate / coding.run）。
+      // - 未调任何工具 → 注入系统提示强制补调；
+      // - 只调了无关工具 → 同样拦截，防止"调个工具糊弄过去"。
+      const claimedDispatch = !input.headless && DISPATCH_CLAIM_PATTERN.test(fullText);
+      const dispatchedToBlack = (toolCalls ?? []).some((call) =>
+        LONG_TASK_TOOLS.includes(call.name),
+      );
+      if (claimedDispatch && !dispatchedToBlack && turn < MAX_TOOL_TURNS - 1) {
+        messages.push({ role: 'assistant', content: fullText });
+        messages.push({ role: 'user', content: DISPATCH_ENFORCE_PROMPT });
+        dispatchRetryPending = true;
+        continue;
       }
 
       if (!toolCalls || toolCalls.length === 0) {

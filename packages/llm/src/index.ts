@@ -31,9 +31,23 @@ export interface LLMTool {
   function: LLMToolFunction;
 }
 
+/**
+ * 强制/约束模型是否调用工具（OpenAI 兼容 tool_choice）。
+ * - 'auto'：模型自行决定（默认行为）
+ * - 'required'：本轮必须调用某个工具（配合 guardrail 防止"声称派单却不调工具"）
+ * - 'none'：禁用工具
+ * - 指定函数：强制调用该工具
+ */
+export type ToolChoice =
+  | 'auto'
+  | 'required'
+  | 'none'
+  | { type: 'function'; function: { name: string } };
+
 export interface ChatInput {
   messages: LLMChatMessage[];
   tools?: LLMTool[];
+  toolChoice?: ToolChoice;
   signal?: AbortSignal;
 }
 

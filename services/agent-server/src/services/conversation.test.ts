@@ -766,6 +766,213 @@ describe('ConversationService', () => {
     ]);
   });
 
+  it('声称"已派给小黑"但未调工具时，强制注入校验并补调 engineer.delegate', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    let delegated = 0;
+    const tools = new ToolRegistry();
+    tools.register({
+      name: 'engineer.delegate',
+      description: '派给小黑',
+      inputSchema: { type: 'object', properties: { task: { type: 'string' } } },
+      permissionLevel: 1,
+      async execute() {
+        delegated += 1;
+        return { ok: true, data: { text: '小黑完成' } };
+      },
+    });
+
+    let callSeq = 0;
+    let enforcePromptSeen = false;
+    let toolChoiceRequiredSeen = false;
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'test',
+      configured: true,
+      async *chat(input: ChatInput): AsyncIterable<ChatChunk> {
+        callSeq += 1;
+        if (callSeq === 1) {
+          // 第一轮：只输出"已派给小黑"文字，不调工具（旧 bug 行为）
+          yield { delta: '收到，已派给小黑！让它去分析 grokbuild 项目。' };
+          return;
+        }
+        if (callSeq === 2) {
+          // 第二轮：应看到系统校验提示，并真正调用 engineer.delegate
+          enforcePromptSeen = input.messages.some(
+            (m) => m.role === 'user' && m.content.includes('系统校验'),
+          );
+          toolChoiceRequiredSeen = input.toolChoice === 'required';
+          yield {
+            delta: '',
+            finishReason: 'tool_calls',
+            toolCalls: [
+              {
+                id: 'call_delegate',
+                name: 'engineer_delegate',
+                arguments: JSON.stringify({ task: '分析 grokbuild' }),
+              },
+            ],
+          };
+          return;
+        }
+        yield { delta: '小黑分析完了，汇报如下。' };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+
+    const service = new ConversationService({
+      store,
+      llm,
+      tools,
+      approvals: new ApprovalRegistry(),
+      memory: new InMemoryMemoryStore(),
+    });
+    let finalText = '';
+    for await (const envelope of service.runChat({
+      sessionId: session.id,
+      userMessage: '让小黑分析一下 grokbuild 项目',
+    })) {
+      if (envelope.type === 'chat.done') {
+        finalText = (envelope.payload as { text?: string }).text ?? '';
+      }
+    }
+
+    expect(callSeq).toBe(3);
+    expect(enforcePromptSeen).toBe(true);
+    expect(toolChoiceRequiredSeen).toBe(true);
+    expect(delegated).toBe(1);
+    expect(finalText).toContain('小黑分析完了');
+  });
+
+  it('普通回复不含派单声称时不触发强制补调（不误伤）', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    let callSeq = 0;
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'test',
+      configured: true,
+      async *chat(): AsyncIterable<ChatChunk> {
+        callSeq += 1;
+        yield { delta: '好的，我看看。' };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+    const service = new ConversationService({
+      store,
+      llm,
+      tools: new ToolRegistry(),
+      approvals: new ApprovalRegistry(),
+      memory: new InMemoryMemoryStore(),
+    });
+    for await (const _ of service.runChat({
+      sessionId: session.id,
+      userMessage: '帮我看看',
+    })) {
+      // drain
+    }
+    expect(callSeq).toBe(1);
+  });
+
+  it('声称已派单但只调了无关工具时，同样拦截并强制补调 engineer.delegate', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    let delegated = 0;
+    let unrelatedCalls = 0;
+    const tools = new ToolRegistry();
+    tools.register({
+      name: 'engineer.delegate',
+      description: '派给小黑',
+      inputSchema: { type: 'object', properties: { task: { type: 'string' } } },
+      permissionLevel: 1,
+      async execute() {
+        delegated += 1;
+        return { ok: true, data: { text: '小黑完成' } };
+      },
+    });
+    tools.register({
+      name: 'fs.readDir',
+      description: '列目录',
+      inputSchema: { type: 'object', properties: { path: { type: 'string' } } },
+      permissionLevel: 0,
+      async execute() {
+        unrelatedCalls += 1;
+        return { ok: true, data: { files: ['src'] } };
+      },
+    });
+
+    let callSeq = 0;
+    let toolChoiceRequiredSeen = false;
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'test',
+      configured: true,
+      async *chat(input: ChatInput): AsyncIterable<ChatChunk> {
+        callSeq += 1;
+        if (callSeq === 1) {
+          // 第一轮：嘴上说"已派给小黑"，实际只调了无关工具 fs.readDir
+          yield { delta: '收到，已派给小黑！先看下仓库结构。' };
+          yield {
+            delta: '',
+            finishReason: 'tool_calls',
+            toolCalls: [
+              { id: 'call_read', name: 'fs_readDir', arguments: JSON.stringify({ path: '.' }) },
+            ],
+          };
+          return;
+        }
+        if (callSeq === 2) {
+          // 第二轮：被强制 required，必须真正调用 engineer.delegate
+          toolChoiceRequiredSeen = input.toolChoice === 'required';
+          yield {
+            delta: '',
+            finishReason: 'tool_calls',
+            toolCalls: [
+              {
+                id: 'call_delegate',
+                name: 'engineer_delegate',
+                arguments: JSON.stringify({ task: '分析 grokbuild' }),
+              },
+            ],
+          };
+          return;
+        }
+        yield { delta: '小黑已开工，结果稍后汇报。' };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+
+    const service = new ConversationService({
+      store,
+      llm,
+      tools,
+      approvals: new ApprovalRegistry(),
+      memory: new InMemoryMemoryStore(),
+    });
+    let finalText = '';
+    for await (const envelope of service.runChat({
+      sessionId: session.id,
+      userMessage: '让小黑分析一下 grokbuild 项目',
+    })) {
+      if (envelope.type === 'chat.done') {
+        finalText = (envelope.payload as { text?: string }).text ?? '';
+      }
+    }
+
+    expect(callSeq).toBe(3);
+    expect(toolChoiceRequiredSeen).toBe(true);
+    // 无关工具必须被拦截，一次都不能执行
+    expect(unrelatedCalls).toBe(0);
+    expect(delegated).toBe(1);
+    expect(finalText).toContain('小黑已开工');
+  });
+
   it('stops the loop when the same tool call repeats', async () => {
     const store = new InMemorySessionStore();
     const session = await store.createSession({ systemPrompt: '你是助理。' });
