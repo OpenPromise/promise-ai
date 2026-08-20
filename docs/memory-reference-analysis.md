@@ -104,4 +104,8 @@
 - ✅ P1 `profile.compact` 画像整理（2026-08-20）：>20 条时 flash 合并重复/
   删陈旧/精简，目标 ≤30 条（Letta memory pressure）；画像 >50 条时
   对话后自动整理（冷却 30 分钟）；工具手动可调
-- ⏸ P2 审计字段：视需要再加
+- ✅ P2 变更历史 + 一键回滚（2026-08-20）：ProfileStore 记录每次
+  ADD/UPDATE/DELETE 事件（old_value/new_value/category/时间），
+  profile.history 查询、profile.rollback 撤销/恢复到指定事件；
+  回滚本身也留痕（Mem0 轻量方式，未上 git 记忆仓库）
+- ⏸ 作用域（user/agent/run 隔离）：单用户场景不需要，暂缓
