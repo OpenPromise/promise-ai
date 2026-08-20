@@ -64,7 +64,8 @@ function toEvent(row: {
     ...(row.metadata && typeof row.metadata === 'object'
       ? { metadata: row.metadata as Record<string, unknown> }
       : {}),
-    createdAt: row.created_at,
+    // pg 把 timestamptz 解析成 Date 对象，统一转 ISO 字符串供展示/排序。
+    createdAt: new Date(row.created_at).toISOString(),
   };
 }
 
