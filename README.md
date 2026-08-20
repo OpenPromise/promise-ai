@@ -61,12 +61,9 @@ npm run dev            # 启动 Agent Server（默认 :3000）
 
 通过 `LLM_PROVIDER` 选择大脑：
 
-- `dashscope`（默认）：千问 OpenAI 兼容接口，需要 `DASHSCOPE_API_KEY`；
-  文字推理默认用 `DASHSCOPE_LLM_MODEL=qwen3.8-max`
-- `openrouter`：走 OpenRouter 聚合网关，需要 `OPENROUTER_API_KEY`；
-  `OPENROUTER_MODEL` 可换成任意 OpenRouter 模型 ID（如 `x-ai/grok-4.6`、`deepseek/deepseek-chat`）
-- `deepseek`：DeepSeek 官方 API，需要 `DEEPSEEK_API_KEY`；
+- `deepseek`：DeepSeek 官方 API（当前唯一推理后端），需要 `DEEPSEEK_API_KEY`；
   `DEEPSEEK_LLM_MODEL` 默认 `deepseek-v4-flash`
+- `dashscope`：千问 OpenAI 兼容接口（可选备用），需要 `DASHSCOPE_API_KEY`
 
 语音开关拆成两个：
 
@@ -85,13 +82,12 @@ npm run dev            # 启动 Agent Server（默认 :3000）
 调用聊天接口会返回 503。
 
 主模型未产出内容即失败时，可自动切换到备用后端（OpenCrabs 故障转移思路）：
-`LLM_FALLBACK_PROVIDER=none|openrouter|dashscope`（默认 `none`），
-`LLM_FALLBACK_MODEL` 指定备用模型（默认 `deepseek/deepseek-v4-pro`）。
+`LLM_FALLBACK_PROVIDER=none`（默认，仅 DeepSeek 官方；openrouter 已停用）。
 流式输出一旦开始则不回滚，中途失败按既有错误路径重试/上报。
 
 ## 语音层（Phase 3）
 
-语音链路（cascade 模式）：**Qwen ASR（实时转写）→ Qwen/OpenRouter（思考回复）→
+语音链路（cascade 模式）：**Qwen ASR（实时转写）→ DeepSeek（思考回复）→
 ElevenLabs TTS（语音合成）**；默认 `s2s` 模式为 Qwen 端到端实时语音，通过
 WebSocket 暴露给终端：
 

@@ -28,7 +28,9 @@ if git status --porcelain | grep -q .; then
   du -sh "$BACKUP_DIR"
 fi
 # 只保留最近 7 份备份，避免备份目录无限膨胀
-ls -1d "$BACKUP_ROOT"/2* 2>/dev/null | sort | head -n -7 | xargs -r rm -rf
+if ls -1d "$BACKUP_ROOT"/2* >/dev/null 2>&1; then
+  ls -1dt "$BACKUP_ROOT"/2* | tail -n +8 | xargs -r rm -rf
+fi
 
 # 记录部署前 HEAD：用于判断本次是否发生依赖变更
 PREV_HEAD=$(git rev-parse HEAD)
