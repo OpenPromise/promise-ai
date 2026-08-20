@@ -973,6 +973,91 @@ describe('ConversationService', () => {
     expect(finalText).toContain('小黑已开工');
   });
 
+  it('DeepSeek 思考模式不支持 tool_choice 时自动降级重试并完成派单', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    let delegated = 0;
+    const tools = new ToolRegistry();
+    tools.register({
+      name: 'engineer.delegate',
+      description: '派给小黑',
+      inputSchema: { type: 'object', properties: { task: { type: 'string' } } },
+      permissionLevel: 1,
+      async execute() {
+        delegated += 1;
+        return { ok: true, data: { text: '小黑完成' } };
+      },
+    });
+
+    let callSeq = 0;
+    let requiredAttemptSeen = false;
+    let degradedAttemptSeen = false;
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'test',
+      configured: true,
+      async *chat(input: ChatInput): AsyncIterable<ChatChunk> {
+        callSeq += 1;
+        if (callSeq === 1) {
+          // 第一轮：只输出"已派给小黑"文字，不调工具（旧 bug 行为）
+          yield { delta: '收到，已派给小黑！让它写简历。' };
+          return;
+        }
+        if (callSeq === 2) {
+          // 第二轮：带 tool_choice=required，但思考模式模型直接 400 拒绝
+          requiredAttemptSeen = input.toolChoice === 'required';
+          throw new Error(
+            'deepseek API error 400: {"error":{"message":"Thinking mode does not support this tool_choice",' +
+              '"type":"invalid_request_error","param":null,"code":"invalid_request_error"}}',
+          );
+        }
+        if (callSeq === 3) {
+          // 降级重试：不带 tool_choice，系统校验提示仍在上下文，模型真正调工具
+          degradedAttemptSeen = input.toolChoice === undefined;
+          yield {
+            delta: '',
+            finishReason: 'tool_calls',
+            toolCalls: [
+              {
+                id: 'call_delegate',
+                name: 'engineer_delegate',
+                arguments: JSON.stringify({ task: '把测试文档改写成简历' }),
+              },
+            ],
+          };
+          return;
+        }
+        yield { delta: '小黑已开工，写完发你。' };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+
+    const service = new ConversationService({
+      store,
+      llm,
+      tools,
+      approvals: new ApprovalRegistry(),
+      memory: new InMemoryMemoryStore(),
+    });
+    let finalText = '';
+    for await (const envelope of service.runChat({
+      sessionId: session.id,
+      userMessage: '让小黑把测试文档改写成简历',
+    })) {
+      if (envelope.type === 'chat.done') {
+        finalText = (envelope.payload as { text?: string }).text ?? '';
+      }
+    }
+
+    expect(callSeq).toBe(4);
+    expect(requiredAttemptSeen).toBe(true);
+    expect(degradedAttemptSeen).toBe(true);
+    expect(delegated).toBe(1);
+    expect(finalText).toContain('小黑已开工');
+  });
+
   it('stops the loop when the same tool call repeats', async () => {
     const store = new InMemorySessionStore();
     const session = await store.createSession({ systemPrompt: '你是助理。' });

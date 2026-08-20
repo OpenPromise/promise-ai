@@ -126,6 +126,16 @@ function isRetryableLlmError(error: unknown): boolean {
 }
 
 /**
+ * DeepSeek 等"思考模式"模型不接受 tool_choice 参数（400 invalid_request_error，
+ * 如 "Thinking mode does not support this tool_choice"）。
+ * 这类是确定性参数错误，重试相同请求无意义；应降级为不带 tool_choice 再试。
+ */
+function isToolChoiceUnsupportedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /tool_choice/i.test(message) && /not support|unsupported|invalid/i.test(message);
+}
+
+/**
  * 给 LLM 流加上"无数据超时"与"首 token 前重试"：
  * - 超时：超过 idleTimeoutMs 没有任何 chunk 时中断本次尝试；
  * - 重试：仅在还没有产出任何 token 时重试（避免重复流内容），
@@ -139,8 +149,11 @@ async function* chatWithTimeoutAndRetry(
 ): AsyncGenerator<ChatChunk, void, undefined> {
   const idleTimeoutMs = options.idleTimeoutMs ?? LLM_IDLE_TIMEOUT_MS;
   const retryAttempts = options.retryAttempts ?? LLM_RETRY_ATTEMPTS;
+  /** 当前模型不支持 tool_choice 时降级一次（保留 messages 里的系统校验提示）。 */
+  let degradedToolChoice = false;
 
   for (let attempt = 0; ; attempt++) {
+    const request = degradedToolChoice ? { ...input, toolChoice: undefined } : input;
     const controller = new AbortController();
     const onAbort = (): void => controller.abort(input.signal?.reason);
     if (input.signal?.aborted) {
@@ -163,7 +176,7 @@ async function* chatWithTimeoutAndRetry(
     let gotChunk = false;
 
     try {
-      for await (const chunk of llm.chat({ ...input, signal: controller.signal })) {
+      for await (const chunk of llm.chat({ ...request, signal: controller.signal })) {
         gotChunk = true;
         armTimer();
         yield chunk;
@@ -175,6 +188,11 @@ async function* chatWithTimeoutAndRetry(
       if (timer) clearTimeout(timer);
       input.signal?.removeEventListener('abort', onAbort);
       if (input.signal?.aborted) throw error;
+      // 思考模式不支持 tool_choice：降级重试（确定性参数错误，不计数到 retryAttempts）。
+      if (input.toolChoice && !degradedToolChoice && isToolChoiceUnsupportedError(error)) {
+        degradedToolChoice = true;
+        continue;
+      }
       if (!gotChunk && (timedOut || isRetryableLlmError(error)) && attempt < retryAttempts) {
         await delayMs(LLM_RETRY_BASE_DELAY_MS * 2 ** attempt);
         continue;
