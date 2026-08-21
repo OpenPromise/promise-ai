@@ -107,6 +107,13 @@ const envSchema = z.object({
     z.string().url().default('https://dashscope.aliyuncs.com/compatible-mode/v1'),
   ),
   HOOK_SECRET: optionalString,
+  /**
+   * agent-server API 共享 token。两个容器分开部署（bridge 通过 compose 网络
+   * 访问 app:3000），不能靠绑 127.0.0.1 收窄暴露面，只能用共享密钥。
+   */
+  AGENT_API_TOKEN: optionalString,
+  /** weixin-bridge 自身端点的共享 token（agent-server 调桥时带上）。 */
+  BRIDGE_TOKEN: optionalString,
   HOME_ASSISTANT_URL: optionalUrl,
   HOME_ASSISTANT_TOKEN: optionalString,
   TENCENT_SECRET_ID: optionalString,
@@ -185,6 +192,14 @@ export interface AppConfig {
   databaseUrl?: string;
   /** webhook 共享密钥（HOOK_SECRET）；未配置时 hook 端点拒绝所有请求。 */
   hookSecret?: string;
+  /**
+   * agent-server API 共享 token（AGENT_API_TOKEN）。配置后所有非豁免 API
+   * 必须带 `Authorization: Bearer` 或 `x-agent-token`；生产环境未配置时
+   * API 一律拒绝（fail closed），开发/测试未配置时放行。
+   */
+  agentApiToken?: string;
+  /** weixin-bridge 端点共享 token（BRIDGE_TOKEN）；未配置时桥的受保护端点拒绝请求。 */
+  bridgeToken?: string;
   homeAssistant: {
     url?: string;
     token?: string;
@@ -265,6 +280,8 @@ export function loadConfig(
     voiceEnabled: v.VOICE_ENABLED === 'true',
     voiceTtsEnabled: v.VOICE_TTS_ENABLED === 'true',
     hookSecret: v.HOOK_SECRET,
+    agentApiToken: v.AGENT_API_TOKEN,
+    bridgeToken: v.BRIDGE_TOKEN,
     autoApproveAll: v.AUTO_APPROVE_ALL === 'true',
     elevenlabs: {
       apiKey: v.ELEVENLABS_API_KEY,

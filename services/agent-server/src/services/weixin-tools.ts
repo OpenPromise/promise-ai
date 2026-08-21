@@ -6,6 +6,8 @@ export interface WeixinToolOptions {
   /** weixin-bridge 地址（如 http://weixin-bridge:3100）。 */
   bridgeUrl: string;
   store: SessionStore;
+  /** 微信桥共享 token（BRIDGE_TOKEN）：bridge 端点鉴权用，未配置时不带。 */
+  bridgeToken?: string;
   fetchImpl?: typeof fetch;
 }
 
@@ -21,6 +23,7 @@ async function postBridge(
   path: string,
   body: unknown,
   timeoutMs = 60_000,
+  token?: string,
 ): Promise<BridgeResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -28,7 +31,10 @@ async function postBridge(
   try {
     const response = await fetchImpl(`${bridgeUrl.replace(/\/+$/, '')}${path}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        ...(token ? { 'x-bridge-token': token } : {}),
+      },
       body: JSON.stringify(body),
       signal: controller.signal,
     });
@@ -62,12 +68,14 @@ async function getBridge(
   bridgeUrl: string,
   path: string,
   timeoutMs = 15_000,
+  token?: string,
 ): Promise<BridgeResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   timer.unref?.();
   try {
     const response = await fetchImpl(`${bridgeUrl.replace(/\/+$/, '')}${path}`, {
+      ...(token ? { headers: { 'x-bridge-token': token } } : {}),
       method: 'GET',
       signal: controller.signal,
     });
@@ -167,7 +175,7 @@ export function createWeixinTools(options: WeixinToolOptions): Tool[] {
         const result = await postBridge(fetchImpl, options.bridgeUrl, '/api/weixin/send-image', {
           sessionId: ctx.sessionId,
           imageBase64: loaded.bytes.toString('base64'),
-        });
+        }, 120_000, options.bridgeToken);
         return result.ok
           ? { ok: true, data: { sent: true, source: source.trim() } }
           : { ok: false, error: result.error ?? '发送图片失败' };
@@ -182,7 +190,7 @@ export function createWeixinTools(options: WeixinToolOptions): Tool[] {
       permissionLevel: 0,
       timeoutMs: 20_000,
       async execute(): Promise<ToolResult> {
-        const result = await getBridge(fetchImpl, options.bridgeUrl, '/api/weixin/files');
+        const result = await getBridge(fetchImpl, options.bridgeUrl, '/api/weixin/files', 15_000, options.bridgeToken);
         if (!result.ok) return { ok: false, error: result.error ?? '获取文件列表失败' };
         const data = (result.data ?? {}) as { files?: Array<{ name: string; size: number }> };
         return {
@@ -214,7 +222,7 @@ export function createWeixinTools(options: WeixinToolOptions): Tool[] {
         if (!fileName?.trim()) return { ok: false, error: '缺少 fileName' };
         const result = await postBridge(fetchImpl, options.bridgeUrl, '/api/weixin/delete-file', {
           fileName: fileName.trim(),
-        });
+        }, 20_000, options.bridgeToken);
         if (!result.ok) return { ok: false, error: result.error ?? '删除文件失败' };
         return { ok: true, data: result.data };
       },
@@ -251,6 +259,7 @@ export function createWeixinTools(options: WeixinToolOptions): Tool[] {
             fileName: fileName.trim(),
           },
           20_000,
+          options.bridgeToken,
         );
         if (!result.ok) return { ok: false, error: result.error ?? '发送文件失败' };
         return { ok: true, data: result.data };

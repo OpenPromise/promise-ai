@@ -18,8 +18,18 @@ export interface RelayOptions {
   filesDir?: string;
   /** 单轮对话总上限（毫秒）；默认 5 分钟，可用 WEIXIN_CHAT_TIMEOUT_MS 覆盖。 */
   chatTimeoutMs?: number;
+  /** agent-server API 共享 token（AGENT_API_TOKEN）；未配置时不带该头。 */
+  apiToken?: string;
   log?: (message: string) => void;
   fetchImpl?: typeof fetch;
+}
+
+/** agent-server 调用头：配了 token 才加，未配时保持原样（向后兼容）。 */
+export function agentHeaders(
+  apiToken: string | undefined,
+  extra: Record<string, string> = {},
+): Record<string, string> {
+  return apiToken ? { ...extra, 'x-agent-token': apiToken } : { ...extra };
 }
 
 const LONG_POLL_TIMEOUT_MS = 35_000;
@@ -247,6 +257,8 @@ export async function chatOnce(
     signal?: AbortSignal;
     fetchImpl?: typeof fetch;
     log?: (message: string) => void;
+    /** agent-server API 共享 token；未配置时不带该头。 */
+    apiToken?: string;
     /** 权限请求到达时回调（发送微信授权提示）。 */
     onPermissionRequest?: (info: { requestId: string; toolName: string }) => void;
     /** 审批窗口（服务端 expiresAt）到点仍未答复时回调：告知用户授权已超时。 */
@@ -304,6 +316,7 @@ async function chatOnceInner(
   options: {
     fetchImpl?: typeof fetch;
     log?: (message: string) => void;
+    apiToken?: string;
     onPermissionRequest?: (info: { requestId: string; toolName: string }) => void;
     onPermissionTimeout?: (info: { requestId: string; toolName: string }) => void;
     onSegment?: (segmentText: string) => Promise<void>;
@@ -317,7 +330,7 @@ async function chatOnceInner(
     `${agentUrl.replace(/\/+$/, '')}/api/sessions/${sessionId}/chat`,
     {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: agentHeaders(options.apiToken, { 'content-type': 'application/json' }),
       body: JSON.stringify({ message: userMessage, requestId: randomUUID() }),
       signal,
     },
@@ -534,13 +547,14 @@ async function ensureSession(
   state: AccountState,
   persist: () => Promise<void>,
   fetchImpl: typeof fetch,
+  apiToken?: string,
 ): Promise<string | undefined> {
   const existing = state.peerSessions[peer];
   if (existing) return existing;
   try {
     const response = await fetchImpl(`${agentUrl.replace(/\/+$/, '')}/api/sessions`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: agentHeaders(apiToken, { 'content-type': 'application/json' }),
       body: JSON.stringify({ metadata: { weixinPeer: peer } }),
     });
     if (!response.ok) return undefined;
@@ -620,7 +634,14 @@ async function handleInboundMessage(msg: WeixinMessage, options: RelayOptions): 
   if (parts.length === 0) return;
   const userMessage = parts.join('\n');
 
-  const sessionId = await ensureSession(agentUrl, peer, state, persist, fetchImpl);
+  const sessionId = await ensureSession(
+    agentUrl,
+    peer,
+    state,
+    persist,
+    fetchImpl,
+    options.apiToken,
+  );
   if (!sessionId) {
     log?.(`[weixin] 无法为 ${peer} 创建会话，跳过`);
     return;
@@ -633,7 +654,7 @@ async function handleInboundMessage(msg: WeixinMessage, options: RelayOptions): 
     if (decision === undefined) {
       await fetchImpl(`${agentUrl.replace(/\/+$/, '')}/api/sessions/${sessionId}/permission`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: agentHeaders(options.apiToken, { 'content-type': 'application/json' }),
         body: JSON.stringify({
           requestId: pending.requestId,
           approved: false,
@@ -658,7 +679,7 @@ async function handleInboundMessage(msg: WeixinMessage, options: RelayOptions): 
       `${agentUrl.replace(/\/+$/, '')}/api/sessions/${sessionId}/permission`,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: agentHeaders(options.apiToken, { 'content-type': 'application/json' }),
         body: JSON.stringify({
           requestId: pending.requestId,
           approved,
@@ -722,6 +743,7 @@ async function handleInboundMessage(msg: WeixinMessage, options: RelayOptions): 
       const reply = await chatOnce(agentUrl, sessionId, userMessage, {
         fetchImpl,
         log,
+        ...(options.apiToken ? { apiToken: options.apiToken } : {}),
         ...(options.chatTimeoutMs ? { totalTimeoutMs: options.chatTimeoutMs } : {}),
         onPermissionRequest: (info) => {
           void client

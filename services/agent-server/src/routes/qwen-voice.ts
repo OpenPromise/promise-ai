@@ -7,6 +7,7 @@ import { createEnvelope } from '@personal-ai/protocol';
 import { randomUUID } from 'node:crypto';
 import type { ApprovalRegistry } from '../services/approval.js';
 import type { ConversationService } from '../services/conversation.js';
+import { isApiTokenValid, type ApiAuthDeps } from './auth.js';
 import { splitSentences } from '../services/sentences.js';
 
 interface VoiceParams {
@@ -19,6 +20,8 @@ export interface QwenVoiceRouteDeps {
   approvals: ApprovalRegistry;
   createQwenASR: () => QwenRealtimeClient;
   createTTS: () => TTSProvider;
+  /** API 共享 token 鉴权配置（WebSocket 升级用路由级 preValidation）。 */
+  auth?: ApiAuthDeps;
 }
 
 interface VoiceTask {
@@ -43,7 +46,17 @@ interface VoiceTask {
  *   ElevenLabs TTS (natural prosody, low latency) back to the desktop.
  */
 export function registerQwenVoiceRoutes(app: FastifyInstance, deps: QwenVoiceRouteDeps): void {
-  app.get('/ws/voice/:sessionId', { websocket: true }, (socket, request) => {
+  app.get(
+    '/ws/voice/:sessionId',
+    {
+      websocket: true,
+    },
+    (socket, request) => {
+    // WebSocket 升级钩子在 @fastify/websocket 下不可靠，handler 内再校验一次
+    if (deps.auth && !isApiTokenValid(request, deps.auth)) {
+      socket.close(1008, 'unauthorized');
+      return;
+    }
     const { sessionId } = (request.params ?? {}) as VoiceParams;
     // 连接级 id：只用于与具体对话轮无关的信封（voice.ready / transcript / 错误）。
     const connectionId = randomUUID();
@@ -382,10 +395,15 @@ export function registerQwenVoiceRoutes(app: FastifyInstance, deps: QwenVoiceRou
                 reason?: string;
               };
               if (payload.requestId && typeof payload.approved === 'boolean') {
-                deps.approvals.respond(payload.requestId, {
-                  approved: payload.approved,
-                  ...(payload.reason ? { reason: payload.reason } : {}),
-                });
+                // 归属校验：本连接只能答复自己会话的请求（N-P0-3）。
+                deps.approvals.respond(
+                  payload.requestId,
+                  {
+                    approved: payload.approved,
+                    ...(payload.reason ? { reason: payload.reason } : {}),
+                  },
+                  sessionId,
+                );
               }
             }
           } catch {

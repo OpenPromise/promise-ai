@@ -95,6 +95,23 @@ describe('config', () => {
     expect(config.homeAssistant.url).toBeUndefined();
   });
 
+  it('读取 API 共享 token（agent-server 校验用）与 bridge token（调用微信桥用）', () => {
+    const config = loadConfig(
+      { ...baseEnv, AGENT_API_TOKEN: '  tok-agent  ', BRIDGE_TOKEN: 'tok-bridge' },
+      { loadDotenv: false },
+    );
+    expect(config.agentApiToken).toBe('tok-agent');
+    expect(config.bridgeToken).toBe('tok-bridge');
+  });
+
+  it('token 未配置/空串时为 undefined（由调用方决定拒绝还是放行）', () => {
+    const config = loadConfig({ ...baseEnv, AGENT_API_TOKEN: '', BRIDGE_TOKEN: '  ' }, {
+      loadDotenv: false,
+    });
+    expect(config.agentApiToken).toBeUndefined();
+    expect(config.bridgeToken).toBeUndefined();
+  });
+
   it('throws ConfigError on invalid values', () => {
     expect(() => loadConfig({ ...baseEnv, PORT: 'not-a-number' }, { loadDotenv: false })).toThrow(
       ConfigError,

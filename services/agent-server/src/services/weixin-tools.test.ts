@@ -132,6 +132,46 @@ describe('weixin.delete_file', () => {
   });
 });
 
+describe('微信桥鉴权头（N-P1-9 调用侧）', () => {
+  it('配置 bridgeToken 时 POST/GET 都带 x-bridge-token；未配置时不加', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      return new Response(JSON.stringify({ ok: true, files: [] }), { status: 200 });
+    });
+    const store = await makeStore('wx_peer');
+    const session = (await store.listSessions())[0]!;
+
+    const withToken = createWeixinTools({
+      bridgeUrl: 'http://weixin-bridge:3100',
+      store,
+      bridgeToken: 'tok-bridge',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await withToken
+      .find((t) => t.name === 'weixin.delete_file')!
+      .execute({ fileName: 'a.txt' }, { sessionId: session.id });
+    await withToken.find((t) => t.name === 'weixin.list_files')!.execute({}, { sessionId: session.id });
+
+    const post = calls.find((c) => c.url.includes('/delete-file'))!;
+    expect((post.init?.headers as Record<string, string>)['x-bridge-token']).toBe('tok-bridge');
+    const get = calls.find((c) => c.url.includes('/api/weixin/files'))!;
+    expect((get.init?.headers as Record<string, string>)['x-bridge-token']).toBe('tok-bridge');
+
+    calls.length = 0;
+    const withoutToken = createWeixinTools({
+      bridgeUrl: 'http://weixin-bridge:3100',
+      store,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await withoutToken
+      .find((t) => t.name === 'weixin.list_files')!
+      .execute({}, { sessionId: session.id });
+    const bare = calls.find((c) => c.url.includes('/api/weixin/files'))!;
+    expect((bare.init?.headers as Record<string, string> | undefined)?.['x-bridge-token']).toBeUndefined();
+  });
+});
+
 describe('weixin.send_file', () => {
   it('starts an async background send via the bridge', async () => {
     const store = await makeStore('wx_peer');

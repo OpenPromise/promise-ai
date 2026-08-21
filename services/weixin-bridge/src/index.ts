@@ -17,6 +17,7 @@ import {
   resolveFileByName,
 } from './files.js';
 import { FileJobManager } from './jobs.js';
+import { checkBridgeAuth } from './auth.js';
 
 try {
   const { config } = await import('dotenv');
@@ -33,6 +34,10 @@ const botAgent = process.env.WEIXIN_BOT_AGENT ?? 'PromiseAi/0.1.0';
 const baseUrl = process.env.WEIXIN_BASE_URL ?? undefined;
 const visionModel = process.env.WEIXIN_VISION_MODEL ?? 'qwen3.8-max';
 const filesDir = process.env.WEIXIN_FILES_DIR ?? path.join(stateDir, 'files');
+/** 桥自身端点的共享 token（未配置时受保护端点全拒）。 */
+const bridgeToken = process.env.BRIDGE_TOKEN?.trim() || undefined;
+/** 调 agent-server API 用的共享 token（两个容器配同一个 AGENT_API_TOKEN）。 */
+const agentApiToken = process.env.AGENT_API_TOKEN?.trim() || undefined;
 
 await mkdir(stateDir, { recursive: true });
 const stateFile = path.join(stateDir, 'state.json');
@@ -143,6 +148,7 @@ function startEventPusher(): void {
       client,
       peers: () => Object.keys(stateStore.account?.peerSessions ?? {}),
       log,
+      apiToken: agentApiToken,
     },
     eventController.signal,
   ).catch((error) => {
@@ -156,6 +162,22 @@ const loginManager = new LoginManager({
 });
 
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' } });
+
+// 桥端点鉴权（N-P1-9）：除探活与扫码登录链路外都要 x-bridge-token。
+// 未配置 BRIDGE_TOKEN 时受保护端点一律 401——发消息/删文件这类能力不能裸奔。
+app.addHook('onRequest', async (request, reply) => {
+  const result = checkBridgeAuth({
+    url: request.url,
+    headers: request.headers,
+    token: bridgeToken,
+  });
+  if (!result.ok) {
+    return reply.code(result.status).send({ error: result.error });
+  }
+});
+if (!bridgeToken) {
+  log('⚠️ 未配置 BRIDGE_TOKEN：除 /health 与扫码登录页外，桥端点全部拒绝访问');
+}
 
 const LOGIN_PAGE = `<!doctype html>
 <html lang="zh-CN">

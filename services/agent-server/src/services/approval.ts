@@ -60,6 +60,14 @@ export interface ApprovalRegistryOptions {
 }
 
 /**
+ * respond 结果：
+ * - `resolved`：已作答；
+ * - `not_found`：请求不存在或已过期（路由回 404）；
+ * - `forbidden`：requestId 存在但属于别的会话（路由回 403），请求保持待处理。
+ */
+export type ApprovalRespondResult = 'resolved' | 'not_found' | 'forbidden';
+
+/**
  * Tracks in-flight permission requests for L2/L3 tool calls. The agent loop
  * awaits the promise; the transport layer (SSE endpoint or voice WebSocket)
  * resolves it via {@link respond}. Requests auto-deny on timeout.
@@ -110,14 +118,26 @@ export class ApprovalRegistry {
     return { request, decision };
   }
 
-  /** Resolves a pending request. Returns false when the request is unknown/expired. */
-  respond(requestId: string, decision: ApprovalDecision): boolean {
+  /**
+   * Resolves a pending request.
+   *
+   * 传入 `sessionId` 时会断言归属（N-P0-3）：requestId 必须属于该会话，
+   * 否则返回 `forbidden` 且请求保持待处理——防止第三方拿到别的会话的
+   * requestId 就能替它点"允许"。语音通道等内部调用已在会话上下文内，
+   * 可以不传。
+   */
+  respond(
+    requestId: string,
+    decision: ApprovalDecision,
+    sessionId?: string,
+  ): ApprovalRespondResult {
     const pending = this.#pending.get(requestId);
-    if (!pending) return false;
+    if (!pending) return 'not_found';
+    if (sessionId !== undefined && pending.request.sessionId !== sessionId) return 'forbidden';
     this.#pending.delete(requestId);
     clearTimeout(pending.timer);
     pending.resolve(decision);
-    return true;
+    return 'resolved';
   }
 
   listPending(sessionId: string): ApprovalRequest[] {

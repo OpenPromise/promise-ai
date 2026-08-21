@@ -1312,6 +1312,116 @@ describe('runWeixinRelay', () => {
   });
 });
 
+describe('agent-server 共享 token（N-P0-1 桥接侧）', () => {
+  it('chatOnce 带上 x-agent-token；未配置时不加任何多余头', async () => {
+    const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({ url: String(url), headers: (init.headers ?? {}) as Record<string, string> });
+      return sseResponse([JSON.stringify({ type: 'chat.token', payload: { delta: 'ok' } })]);
+    });
+
+    await chatOnce('http://agent:3000', 's1', '你好', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      apiToken: 'tok-agent',
+    });
+    expect(calls[0]?.headers['x-agent-token']).toBe('tok-agent');
+
+    calls.length = 0;
+    await chatOnce('http://agent:3000', 's1', '你好', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(calls[0]?.headers['x-agent-token']).toBeUndefined();
+    expect(calls[0]?.headers['content-type']).toBe('application/json');
+  });
+
+  it('relay 的建会话与审批答复也带 token', async () => {
+    const controller = new AbortController();
+    const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+    let polls = 0;
+    const sent: Array<{ text?: string }> = [];
+
+    const client = {
+      baseUrl: 'https://ilinkai.weixin.qq.com',
+      async notifyStart() {},
+      async notifyStop() {},
+      async getUpdates(_buf: string, options: { signal?: AbortSignal }) {
+        polls += 1;
+        const msg = (text: string) => ({
+          from_user_id: 'wx_peer',
+          message_type: 1,
+          message_state: 2,
+          context_token: 'ctx',
+          run_id: `r${polls}`,
+          item_list: [{ type: 1, text_item: { text } }],
+        });
+        if (polls === 1) return { ret: 0, get_updates_buf: 'buf-2', msgs: [msg('你好') ] };
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, 60_000);
+          options.signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            resolve(undefined);
+          });
+        });
+        throw new Error('aborted');
+      },
+      async getConfig() {
+        return { ret: 0, typing_ticket: 'ticket' };
+      },
+      async sendTyping() {},
+      async sendMessage(message: {
+        item_list?: Array<{ text_item?: { text?: string } }>;
+      }) {
+        sent.push({ text: message.item_list?.[0]?.text_item?.text });
+      },
+    } as unknown as ILinkClient;
+
+    const state: AccountState = {
+      token: 'tok',
+      baseUrl: 'https://ilinkai.weixin.qq.com',
+      accountId: 'bot-1',
+      peerSessions: {},
+      savedAt: new Date().toISOString(),
+    };
+
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      const u = String(url);
+      calls.push({ url: u, headers: (init.headers ?? {}) as Record<string, string> });
+      if (u.endsWith('/api/sessions')) {
+        return new Response(JSON.stringify({ id: 'session-tok' }), { status: 201 });
+      }
+      if (u.endsWith('/chat')) {
+        return sseResponse([JSON.stringify({ type: 'chat.token', payload: { delta: '好' } })]);
+      }
+      return new Response('{}', { status: 200 });
+    });
+
+    const relayPromise = runWeixinRelay(
+      {
+        agentUrl: 'http://agent:3000',
+        client,
+        state,
+        persist: vi.fn(async () => {}),
+        log: () => {},
+        apiToken: 'tok-agent',
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      },
+      controller.signal,
+    );
+
+    const deadline = Date.now() + 6000;
+    while (!sent.some((m) => m.text?.includes('好')) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    controller.abort();
+    await relayPromise;
+
+    const sessionCall = calls.find((call) => call.url.endsWith('/api/sessions'));
+    expect(sessionCall?.headers['x-agent-token']).toBe('tok-agent');
+    const chatCall = calls.find((call) => call.url.endsWith('/chat'));
+    expect(chatCall?.headers['x-agent-token']).toBe('tok-agent');
+  });
+});
+
 describe('withTimeout', () => {
   it('超时真正触发（clearTimeout 不再在 race 决出前被同步调用）', async () => {
     const never = new Promise<string>(() => {});

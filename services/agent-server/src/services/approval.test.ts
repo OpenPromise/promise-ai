@@ -37,6 +37,44 @@ describe('ApprovalRequest.expiresAt', () => {
   });
 });
 
+describe('ApprovalRegistry.respond 归属校验（N-P0-3）', () => {
+  it('requestId 属于别的会话时拒绝作答，原请求仍待处理', () => {
+    const registry = new ApprovalRegistry({ timeoutMs: 30_000 });
+    const { request } = registry.request({
+      sessionId: 's-owner',
+      toolName: 'files.delete',
+      arguments: { path: '/tmp/x' },
+      permissionLevel: 2,
+      confirmationsNeeded: 1,
+    });
+
+    // 冒充其他会话作答：既不放行也不消费该请求
+    expect(registry.respond(request.requestId, { approved: true }, 's-attacker')).toBe('forbidden');
+    expect(registry.listPending('s-owner')).toHaveLength(1);
+
+    // 归属会话作答才生效
+    expect(registry.respond(request.requestId, { approved: true }, 's-owner')).toBe('resolved');
+    expect(registry.listPending('s-owner')).toHaveLength(0);
+
+    // 未知/已过期请求：not_found（与"归属不符"区分开，路由分别回 404 / 403）
+    expect(registry.respond('no-such-request', { approved: true }, 's-owner')).toBe('not_found');
+
+    registry.clearForSession('s-owner');
+  });
+
+  it('不传 sessionId 时按内部调用处理（语音通道等已在同一会话上下文内）', () => {
+    const registry = new ApprovalRegistry({ timeoutMs: 30_000 });
+    const { request } = registry.request({
+      sessionId: 's-internal',
+      toolName: 'app.launch',
+      arguments: {},
+      permissionLevel: 2,
+      confirmationsNeeded: 1,
+    });
+    expect(registry.respond(request.requestId, { approved: false })).toBe('resolved');
+  });
+});
+
 describe('ApprovalRegistry 有界指纹记忆', () => {
   it('每会话指纹数与会话总数封顶，最旧记录被驱逐', () => {
     const registry = new ApprovalRegistry({ timeoutMs: 30_000 });

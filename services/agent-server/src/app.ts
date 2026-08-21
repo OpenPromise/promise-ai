@@ -14,6 +14,7 @@ import type {
 import type { QwenRealtimeClient } from '@personal-ai/qwen-realtime';
 import type { ToolRegistry } from '@personal-ai/tools';
 import { registerHealthRoutes } from './routes/health.js';
+import { registerApiAuth } from './routes/auth.js';
 import { registerXiaoheiRoutes } from './routes/xiaohei.js';
 import { registerSessionRoutes } from './routes/sessions.js';
 import { registerVoiceRoutes } from './routes/voice.js';
@@ -94,6 +95,13 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     autoApproveAll: deps.config.autoApproveAll,
   });
 
+  // API 共享 token 鉴权：必须在所有路由注册之前挂根级 onRequest 钩子，
+  // 这样 /api/** 与 /ws/voice/** 都被覆盖（/health、/xiaohei、/api/hooks/* 豁免）。
+  registerApiAuth(app, {
+    token: deps.config.agentApiToken,
+    nodeEnv: deps.config.nodeEnv,
+  });
+
   registerHealthRoutes(app, { llm: deps.llm });
   // 小黑欢迎界面：http://<host>:3000/xiaohei
   registerXiaoheiRoutes(app);
@@ -133,6 +141,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
             approvals: deps.approvals,
             voice: deps.config.qwenRealtime.voice,
             createQwen: () => deps.createQwen!(deps.config.qwenRealtime.model),
+            auth: { token: deps.config.agentApiToken, nodeEnv: deps.config.nodeEnv },
             // 语音委托子代理：复杂/多步任务交给文本推理代理执行（OpenDex run_task 模式）。
             conversation: new ConversationService({
               store: deps.store,
@@ -162,6 +171,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
             createTTS: deps.config.voiceTtsEnabled
               ? (deps.createTTS ?? (() => deps.createVoice().tts))
               : createNoopTTS,
+            auth: { token: deps.config.agentApiToken, nodeEnv: deps.config.nodeEnv },
           });
         }
       } else {
@@ -172,6 +182,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
             conversation,
             approvals: deps.approvals,
             createVoice: deps.createVoice,
+            auth: { token: deps.config.agentApiToken, nodeEnv: deps.config.nodeEnv },
           });
         }
       }

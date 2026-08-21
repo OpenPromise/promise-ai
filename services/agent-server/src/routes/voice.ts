@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import type { ApprovalRegistry } from '../services/approval.js';
 import type { ConversationService } from '../services/conversation.js';
 import { splitSentences } from '../services/sentences.js';
+import { isApiTokenValid, type ApiAuthDeps } from './auth.js';
 
 interface VoiceParams {
   sessionId: string;
@@ -17,6 +18,8 @@ export interface VoiceRouteDeps {
   conversation: ConversationService;
   approvals: ApprovalRegistry;
   createVoice: () => VoiceGateway;
+  /** API 共享 token 鉴权配置（WebSocket 升级用路由级 preValidation）。 */
+  auth?: ApiAuthDeps;
 }
 
 interface VoiceTask {
@@ -31,7 +34,17 @@ interface VoiceTask {
 }
 
 export function registerVoiceRoutes(app: FastifyInstance, deps: VoiceRouteDeps): void {
-  app.get('/ws/voice/:sessionId', { websocket: true }, (socket, request) => {
+  app.get(
+    '/ws/voice/:sessionId',
+    {
+      websocket: true,
+    },
+    (socket, request) => {
+    // WebSocket 升级钩子在 @fastify/websocket 下不可靠，handler 内再校验一次
+    if (deps.auth && !isApiTokenValid(request, deps.auth)) {
+      socket.close(1008, 'unauthorized');
+      return;
+    }
     const { sessionId } = (request.params ?? {}) as VoiceParams;
     // 连接级 id：只用于与具体对话轮无关的信封（voice.ready / transcript / 错误）。
     const connectionId = randomUUID();
@@ -84,8 +97,9 @@ export function registerVoiceRoutes(app: FastifyInstance, deps: VoiceRouteDeps):
           sessionId,
           requestId: task.requestId,
           payload: { data: chunk.data.toString('base64'), format: chunk.format },
-        });
-      }
+    },
+  );
+}
     };
 
     const runVoiceTask = async (userText: string): Promise<void> => {
@@ -330,10 +344,15 @@ export function registerVoiceRoutes(app: FastifyInstance, deps: VoiceRouteDeps):
                 reason?: string;
               };
               if (payload.requestId && typeof payload.approved === 'boolean') {
-                deps.approvals.respond(payload.requestId, {
-                  approved: payload.approved,
-                  ...(payload.reason ? { reason: payload.reason } : {}),
-                });
+                // 归属校验：本连接只能答复自己会话的请求（N-P0-3）。
+                deps.approvals.respond(
+                  payload.requestId,
+                  {
+                    approved: payload.approved,
+                    ...(payload.reason ? { reason: payload.reason } : {}),
+                  },
+                  sessionId,
+                );
               }
             }
           } catch {

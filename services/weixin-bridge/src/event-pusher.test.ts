@@ -135,4 +135,52 @@ describe('formatEvent', () => {
     expect(Object.keys(calls[0]?.headers ?? {})).toHaveLength(0);
     expect(calls[1]?.headers).toEqual({ 'Last-Event-ID': '2' });
   });
+
+  it('配置 apiToken 时 /api/events 带上 x-agent-token（与 Last-Event-ID 并存）', async () => {
+    const encoder = new TextEncoder();
+    const calls: Array<{ headers?: Record<string, string> }> = [];
+    const controller = new AbortController();
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      calls.push({ headers: (init?.headers ?? {}) as Record<string, string> });
+      if (calls.length === 1) {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(streamController) {
+              streamController.enqueue(
+                encoder.encode('id: 7\nevent: reminder.due\ndata: {"text":"喝水"}\n\n'),
+              );
+              streamController.close();
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      await new Promise<void>((resolve) => {
+        controller.signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      throw new Error('aborted');
+    });
+
+    const client = {
+      async sendMessage(message: { to: string; text: string }) {
+        return message;
+      },
+    } as never;
+    const runPromise = runEventPusher(
+      {
+        agentUrl: 'http://agent:3000',
+        client,
+        peers: () => ['wx_peer'],
+        apiToken: 'tok-agent',
+        fetchImpl: fetchMock as unknown as typeof fetch,
+      },
+      controller.signal,
+    );
+    await vi.waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(2));
+    controller.abort();
+    await runPromise.catch(() => {});
+
+    expect(calls[0]?.headers).toEqual({ 'x-agent-token': 'tok-agent' });
+    expect(calls[1]?.headers).toEqual({ 'x-agent-token': 'tok-agent', 'Last-Event-ID': '7' });
+  });
 });

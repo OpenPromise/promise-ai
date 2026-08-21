@@ -40,6 +40,8 @@ export interface EventPusherOptions {
   client: ILinkClient;
   /** 返回要推送的微信对端列表。 */
   peers: () => string[];
+  /** agent-server API 共享 token（AGENT_API_TOKEN）；未配置时不带该头。 */
+  apiToken?: string;
   log?: (message: string) => void;
   fetchImpl?: typeof fetch;
 }
@@ -102,7 +104,7 @@ export async function runEventPusher(
   options: EventPusherOptions,
   signal: AbortSignal,
 ): Promise<void> {
-  const { agentUrl, client, peers, log } = options;
+  const { agentUrl, client, peers, log, apiToken } = options;
   const fetchImpl = options.fetchImpl ?? fetch;
   let failures = 0;
   /** 最近一次已处理事件的 SSE id：断线重连时回传 Last-Event-ID 拉回错过的通知。 */
@@ -112,7 +114,10 @@ export async function runEventPusher(
     try {
       const response = await fetchImpl(`${agentUrl.replace(/\/+$/, '')}/api/events`, {
         signal,
-        ...(lastEventId ? { headers: { 'Last-Event-ID': lastEventId } } : {}),
+        headers: {
+          ...(apiToken ? { 'x-agent-token': apiToken } : {}),
+          ...(lastEventId ? { 'Last-Event-ID': lastEventId } : {}),
+        },
       });
       if (!response.ok) throw new Error(`events HTTP ${response.status}`);
       failures = 0;

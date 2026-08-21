@@ -19,6 +19,7 @@ import type { QwenRealtimeClient } from '@personal-ai/qwen-realtime';
 import { ToolRegistry } from '@personal-ai/tools';
 import { buildApp } from './app.js';
 import { ApprovalRegistry } from './services/approval.js';
+import type { HookService } from './services/hook-service.js';
 
 const testConfig = loadConfig(
   {
@@ -2074,6 +2075,178 @@ describe('agent-server', () => {
   });
 });
 
+describe('API 共享 token 鉴权（N-P0-1）', () => {
+  const tokenConfig = loadConfig(
+    {
+      NODE_ENV: 'test',
+      PORT: '3001',
+      LOG_LEVEL: 'silent',
+      AGENT_API_TOKEN: 'tok-secret',
+    },
+    { loadDotenv: false },
+  );
+
+  it('配置了 token：非豁免 API 缺 token 一律 401', async () => {
+    const app = build(tokenConfig);
+    for (const url of ['/api/sessions', '/api/sessions/abc/chat', '/api/sessions/abc/permission']) {
+      const response = await app.inject({ method: 'POST', url, payload: {} });
+      expect(response.statusCode, url).toBe(401);
+    }
+    const get = await app.inject({ method: 'GET', url: '/api/sessions/abc' });
+    expect(get.statusCode).toBe(401);
+  });
+
+  it('Authorization: Bearer 与 x-agent-token 两种头都放行', async () => {
+    const app = build(tokenConfig);
+    const bearer = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      headers: { authorization: 'Bearer tok-secret' },
+      payload: {},
+    });
+    expect(bearer.statusCode).toBe(201);
+
+    const headerToken = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      headers: { 'x-agent-token': 'tok-secret' },
+      payload: {},
+    });
+    expect(headerToken.statusCode).toBe(201);
+
+    const wrong = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      headers: { 'x-agent-token': 'tok-wrong' },
+      payload: {},
+    });
+    expect(wrong.statusCode).toBe(401);
+  });
+
+  it('/health、/xiaohei、/api/hooks/:name 保持免 token（探活、静态页、hooks 自带 HOOK_SECRET）', async () => {
+    const hooks = {
+      async handle() {},
+    } as unknown as HookService;
+    const app = buildApp({
+      config: tokenConfig,
+      store: new InMemorySessionStore(),
+      llm: fakeLLM(),
+      persona: stubPersona,
+      tools: new ToolRegistry(),
+      approvals: new ApprovalRegistry({ timeoutMs: 5000 }),
+      memory: new InMemoryMemoryStore(),
+      createVoice: () => ({ stt: makeStubSTT(), tts: stubTTS }),
+      hooks,
+      hookSecret: 'hook-secret',
+    });
+
+    expect((await app.inject({ method: 'GET', url: '/health' })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/xiaohei' })).statusCode).toBe(200);
+    // hooks 端点不被 API token 拦截，但仍由 HOOK_SECRET 把关
+    const noSecret = await app.inject({ method: 'POST', url: '/api/hooks/github', payload: {} });
+    expect(noSecret.statusCode).toBe(401);
+    expect(noSecret.json().error).toContain('x-hook-secret');
+    const withSecret = await app.inject({
+      method: 'POST',
+      url: '/api/hooks/github',
+      headers: { 'x-hook-secret': 'hook-secret' },
+      payload: {},
+    });
+    expect(withSecret.statusCode).toBe(200);
+  });
+
+  it('语音 WebSocket 升级同样要 token（缺 token 直接 401，不建立连接）', async () => {
+    const app = build(tokenConfig);
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    const { port } = app.server.address() as AddressInfo;
+    try {
+      const sessionId = await createSession(app, 'tok-secret');
+      const denied = new WebSocket(`ws://127.0.0.1:${port}/ws/voice/${sessionId}`);
+      // WS 无法在 HTTP 层拒绝升级（fastify-websocket 限制）：握手成功后
+      // handler 内鉴权失败会立即 socket.close(1008)，未鉴权连接无法正常使用。
+      const outcome = await new Promise<{ opened: boolean; code?: number }>((resolve) => {
+        denied.once('error', () => resolve({ opened: false }));
+        denied.once('close', (code) => resolve({ opened: false, code }));
+        denied.once('open', () => {
+          denied.once('close', (code) => resolve({ opened: true, code }));
+        });
+      });
+      // 握手成功但立即被服务器关闭（code 1008），或握手前失败——都算"未鉴权被拒"
+      expect(outcome.opened === false || outcome.code === 1008).toBe(true);
+
+      const allowed = new WebSocket(`ws://127.0.0.1:${port}/ws/voice/${sessionId}`, {
+        headers: { 'x-agent-token': 'tok-secret' },
+      });
+      await new Promise<void>((resolve, reject) => {
+        allowed.once('open', () => resolve());
+        allowed.once('error', reject);
+      });
+      allowed.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('生产环境未配置 token：非豁免 API 一律拒绝（fail closed），探活仍可用', async () => {
+    const prodConfig = loadConfig(
+      { NODE_ENV: 'production', PORT: '3001', LOG_LEVEL: 'silent' },
+      { loadDotenv: false },
+    );
+    const app = build(prodConfig);
+    const denied = await app.inject({ method: 'POST', url: '/api/sessions', payload: {} });
+    expect(denied.statusCode).toBe(401);
+    expect(denied.json().error).toContain('AGENT_API_TOKEN');
+    expect((await app.inject({ method: 'GET', url: '/health' })).statusCode).toBe(200);
+  });
+
+  it('开发/测试未配置 token：保持放行（不误伤本地开发）', async () => {
+    const response = await build(testConfig).inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: {},
+    });
+    expect(response.statusCode).toBe(201);
+  });
+});
+
+describe('审批归属校验（N-P0-3）', () => {
+  it('拿别的会话的 requestId 作答返回 403，未知 requestId 仍是 404', async () => {
+    const approvals = new ApprovalRegistry({ timeoutMs: 30_000 });
+    const app = build(testConfig, fakeLLM(), undefined, new ToolRegistry(), approvals);
+    const ownerSession = await createSession(app);
+    const otherSession = await createSession(app);
+    const { request } = approvals.request({
+      sessionId: ownerSession,
+      toolName: 'files.delete',
+      arguments: { path: '/tmp/x' },
+      permissionLevel: 2,
+      confirmationsNeeded: 1,
+    });
+
+    const foreign = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${otherSession}/permission`,
+      payload: { requestId: request.requestId, approved: true },
+    });
+    expect(foreign.statusCode).toBe(403);
+
+    const unknown = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ownerSession}/permission`,
+      payload: { requestId: 'no-such-request', approved: true },
+    });
+    expect(unknown.statusCode).toBe(404);
+
+    const owner = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ownerSession}/permission`,
+      payload: { requestId: request.requestId, approved: true },
+    });
+    expect(owner.statusCode).toBe(200);
+    approvals.clearForSession(ownerSession);
+  });
+});
+
 async function waitFor(
   predicate: () => boolean | Promise<boolean>,
   timeoutMs = 5000,
@@ -2087,10 +2260,11 @@ async function waitFor(
   }
 }
 
-async function createSession(app: FastifyInstance): Promise<string> {
+async function createSession(app: FastifyInstance, token?: string): Promise<string> {
   const response = await app.inject({
     method: 'POST',
     url: '/api/sessions',
+    ...(token ? { headers: { 'x-agent-token': token } } : {}),
     payload: {},
   });
   return (response.json() as { id: string }).id;

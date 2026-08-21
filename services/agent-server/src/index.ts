@@ -372,7 +372,11 @@ for (const tool of createSelfTools({ memoryBackend, memory, personaDir })) {
 }
 // 微信媒体发送：weixin.send_image / weixin.send_voice（桥在服务端负责上传与投递）。
 const weixinBridgeUrl = process.env.WEIXIN_BRIDGE_URL ?? 'http://127.0.0.1:3100';
-for (const tool of createWeixinTools({ bridgeUrl: weixinBridgeUrl, store })) {
+for (const tool of createWeixinTools({
+  bridgeUrl: weixinBridgeUrl,
+  store,
+  bridgeToken: config.bridgeToken,
+})) {
   toolRegistry.register(tool);
 }
 // 腾讯云轻量服务器管理：实例状态 / 防火墙规则（凭据来自环境变量，未配置则不注册）。

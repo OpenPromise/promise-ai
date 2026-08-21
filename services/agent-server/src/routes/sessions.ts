@@ -233,11 +233,20 @@ export function registerSessionRoutes(app: FastifyInstance, deps: SessionRouteDe
         throw error;
       }
 
-      const resolved = deps.approvals.respond(body.requestId, {
-        approved: body.approved,
-        ...(body.reason?.trim() ? { reason: body.reason.trim() } : {}),
-      });
-      if (!resolved) {
+      // 归属校验（N-P0-3）：requestId 必须属于本会话，否则 403；
+      // 未知/已过期仍是 404（区分"不是你的"与"没有这个"）。
+      const resolved = deps.approvals.respond(
+        body.requestId,
+        {
+          approved: body.approved,
+          ...(body.reason?.trim() ? { reason: body.reason.trim() } : {}),
+        },
+        params.id,
+      );
+      if (resolved === 'forbidden') {
+        return reply.code(403).send({ error: 'Permission request does not belong to this session' });
+      }
+      if (resolved === 'not_found') {
         return reply.code(404).send({ error: 'Permission request not found or expired' });
       }
       return reply.send({ resolved: true });
