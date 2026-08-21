@@ -36,3 +36,15 @@ describe('ApprovalRequest.expiresAt', () => {
     registry.clearForSession('s1');
   });
 });
+
+describe('ApprovalRegistry 有界指纹记忆', () => {
+  it('每会话指纹数与会话总数封顶，最旧记录被驱逐', () => {
+    const registry = new ApprovalRegistry({ timeoutMs: 30_000 });
+    // 同一会话超过单会话指纹上限：最早记住的指纹被驱逐
+    for (let i = 0; i < 105; i += 1) {
+      registry.rememberApproval('s-fp', `tool.${i}`);
+    }
+    expect(registry.isApproved('s-fp', 'tool.0')).toBe(false);
+    expect(registry.isApproved('s-fp', 'tool.104')).toBe(true);
+  });
+});

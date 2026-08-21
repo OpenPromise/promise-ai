@@ -429,7 +429,7 @@ const app = buildApp({
   subscribeHookEvents: (listener) => hookService.onRun(listener),
   subscribeEngineerEvents: (listener) => engineerTaskRunner.onEvent(listener),
   hooks: hookService,
-  hookSecret: process.env.HOOK_SECRET,
+  hookSecret: config.hookSecret,
   processStartedAt,
   hostBootedRecently,
   createVoice,

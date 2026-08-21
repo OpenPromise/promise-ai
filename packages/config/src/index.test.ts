@@ -16,6 +16,20 @@ describe('config', () => {
     expect(config.dashscope.configured).toBe(false);
   });
 
+  it('DATABASE_URL 非法时回退为 undefined（不启动失败）；合法时保留', () => {
+    const invalid = loadConfig(
+      { ...baseEnv, DATABASE_URL: 'not a url' },
+      { loadDotenv: false },
+    );
+    expect(invalid.databaseUrl).toBeUndefined();
+
+    const valid = loadConfig(
+      { ...baseEnv, DATABASE_URL: 'postgres://user:pass@host:5432/db' },
+      { loadDotenv: false },
+    );
+    expect(valid.databaseUrl).toBe('postgres://user:pass@host:5432/db');
+  });
+
   it('supports openrouter as the LLM provider', () => {
     const config = loadConfig(
       {

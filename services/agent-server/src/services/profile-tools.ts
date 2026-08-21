@@ -48,7 +48,7 @@ export function createProfileTools(options: ProfileToolOptions): Tool[] {
         required: ['key', 'value'],
       },
       permissionLevel: 1 as PermissionLevel,
-      async execute(input: unknown): Promise<ToolResult> {
+      async execute(input: unknown, context: { userId?: string }): Promise<ToolResult> {
         const { key, value, category } = (input ?? {}) as {
           key?: string;
           value?: string;
@@ -63,7 +63,7 @@ export function createProfileTools(options: ProfileToolOptions): Tool[] {
           return { ok: false, error: 'key 最长 64 字符，value 最长 500 字符' };
         }
         const resolvedCategory = category && CATEGORIES.includes(category) ? category : 'fact';
-        const profile = await store.upsertEntry(resolveProfileUserId(), {
+        const profile = await store.upsertEntry(resolveProfileUserId(context.userId), {
           key: trimmedKey,
           value: trimmedValue,
           category: resolvedCategory,
@@ -88,8 +88,8 @@ export function createProfileTools(options: ProfileToolOptions): Tool[] {
         required: [],
       },
       permissionLevel: 0,
-      async execute(): Promise<ToolResult> {
-        const profile = await store.getProfile(resolveProfileUserId());
+      async execute(_input: unknown, context: { userId?: string }): Promise<ToolResult> {
+        const profile = await store.getProfile(resolveProfileUserId(context.userId));
         const entries = profile?.entries ?? [];
         return {
           ok: true,
@@ -113,11 +113,11 @@ export function createProfileTools(options: ProfileToolOptions): Tool[] {
         required: ['key'],
       },
       permissionLevel: 1 as PermissionLevel,
-      async execute(input: unknown): Promise<ToolResult> {
+      async execute(input: unknown, context: { userId?: string }): Promise<ToolResult> {
         const { key } = (input ?? {}) as { key?: string };
         const trimmedKey = key?.trim();
         if (!trimmedKey) return { ok: false, error: '缺少 key 参数' };
-        const profile = await store.removeEntry(resolveProfileUserId(), trimmedKey);
+        const profile = await store.removeEntry(resolveProfileUserId(context.userId), trimmedKey);
         return {
           ok: true,
           data: {
@@ -140,11 +140,12 @@ export function createProfileTools(options: ProfileToolOptions): Tool[] {
         required: [],
       },
       permissionLevel: 1 as PermissionLevel,
-      async execute(): Promise<ToolResult> {
+      async execute(_input: unknown, context: { userId?: string }): Promise<ToolResult> {
+        const userId = resolveProfileUserId(context.userId);
         try {
-          const result = await compactProfile(store, llm, resolveProfileUserId());
+          const result = await compactProfile(store, llm, userId);
           if (!result) {
-            const profile = await store.getProfile(resolveProfileUserId());
+            const profile = await store.getProfile(userId);
             return {
               ok: true,
               data: {
@@ -191,9 +192,9 @@ export function createProfileTools(options: ProfileToolOptions): Tool[] {
         required: [],
       },
       permissionLevel: 0,
-      async execute(input: unknown): Promise<ToolResult> {
+      async execute(input: unknown, context: { userId?: string }): Promise<ToolResult> {
         const { key, limit } = (input ?? {}) as { key?: string; limit?: number };
-        const events = await store.listHistory(resolveProfileUserId(), {
+        const events = await store.listHistory(resolveProfileUserId(context.userId), {
           ...(key?.trim() ? { key: key.trim() } : {}),
           limit: Math.min(Math.max(1, Math.floor(limit ?? 20)), 100),
         });
@@ -225,12 +226,12 @@ export function createProfileTools(options: ProfileToolOptions): Tool[] {
         required: ['key'],
       },
       permissionLevel: 1 as PermissionLevel,
-      async execute(input: unknown): Promise<ToolResult> {
+      async execute(input: unknown, context: { userId?: string }): Promise<ToolResult> {
         const { key, toEventId } = (input ?? {}) as { key?: string; toEventId?: string };
         const trimmedKey = key?.trim();
         if (!trimmedKey) return { ok: false, error: '缺少 key 参数' };
         try {
-          const profile = await store.rollbackEntry(resolveProfileUserId(), trimmedKey, {
+          const profile = await store.rollbackEntry(resolveProfileUserId(context.userId), trimmedKey, {
             ...(toEventId?.trim() ? { toEventId: toEventId.trim() } : {}),
           });
           const current = profile.entries.find((entry) => entry.key === trimmedKey);

@@ -119,6 +119,9 @@ export function createBuiltinTools(options: BuiltinToolOptions = {}): BuiltinToo
     calendar: new InMemoryCalendarStore(),
     notifications: new InMemoryNotificationStore(),
   };
+  // memory.* 与 goal.* 必须共用同一个存储：goal 就写在长期记忆里（[goal] 前缀 +
+  // goal tag），各自 new 一个会让目标对 memory.list 不可见。
+  const memoryStore = options.memoryStore ?? new InMemoryMemoryStore();
   const tools: Tool[] = [
     createTimeTool(),
     createWeatherTool(options.fetchImpl),
@@ -129,8 +132,8 @@ export function createBuiltinTools(options: BuiltinToolOptions = {}): BuiltinToo
     createFilesystemSearchTool({ allowedRoots: options.allowedSearchRoots }),
     createFilesystemDeleteTool({ allowedRoots: options.allowedSearchRoots }),
     createNotificationSendTool(stores.notifications),
-    ...createMemoryTools(options.memoryStore ?? new InMemoryMemoryStore()),
-    ...createGoalTools(options.memoryStore ?? new InMemoryMemoryStore()),
+    ...createMemoryTools(memoryStore),
+    ...createGoalTools(memoryStore),
     ...(options.tasks ? createTaskTools(options.tasks) : []),
     ...createReminderTools(stores.reminders),
     ...createCalendarTools(stores.calendar),

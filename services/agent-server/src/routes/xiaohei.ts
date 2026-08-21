@@ -13,7 +13,13 @@ const xiaoheiHtmlPath = fileURLToPath(new URL('../../../../xiaohei/index.html', 
 let cachedHtml: Promise<string> | null = null;
 
 function loadXiaoheiHtml(): Promise<string> {
-  cachedHtml ??= readFile(xiaoheiHtmlPath, 'utf8');
+  if (!cachedHtml) {
+    cachedHtml = readFile(xiaoheiHtmlPath, 'utf8').catch((error) => {
+      // 失败不缓存：下次请求重试，避免一次读文件失败导致永久 500
+      cachedHtml = null;
+      throw error;
+    });
+  }
   return cachedHtml;
 }
 

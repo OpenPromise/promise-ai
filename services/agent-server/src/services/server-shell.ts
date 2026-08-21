@@ -83,16 +83,24 @@ function defaultRunner(
   });
 }
 
+/** 低于该长度的取值不脱敏：替换后会大面积污染无关输出（如 "ab" 出现在任意单词里）。 */
+const MIN_SECRET_LENGTH = 4;
+/** 开关/占位类取值（密钥名下也常见），脱敏它们只会让输出无法阅读。 */
+const NON_SECRET_VALUES = new Set(['true', 'false', 'none', 'null', 'test', 'auto']);
+
 /**
  * 收集环境变量中的敏感值（API Key / Secret / Token / 密码），用于命令输出脱敏。
  * 防止 bot 执行 `env` / `cat .env` 后把密钥回显进会话历史（OpenClaw 输出脱敏思路）。
+ * 短密钥（如 4 字符密码）同样纳入，只排除过短与开关型取值。
  */
 export function collectSecrets(env: NodeJS.ProcessEnv = process.env): string[] {
   const values = new Set<string>();
   for (const [key, value] of Object.entries(env)) {
-    if (!value || value.length < 8) continue;
+    const trimmed = value?.trim();
+    if (!trimmed || trimmed.length < MIN_SECRET_LENGTH) continue;
+    if (NON_SECRET_VALUES.has(trimmed.toLowerCase())) continue;
     if (/(API_?KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL)/i.test(key)) {
-      values.add(value);
+      values.add(trimmed);
     }
   }
   // 长的先替换，避免短值先替换破坏长值匹配
@@ -103,7 +111,7 @@ export function collectSecrets(env: NodeJS.ProcessEnv = process.env): string[] {
 export function redactOutput(output: string, secrets: string[]): string {
   let result = output;
   for (const secret of secrets) {
-    if (secret.length >= 8) {
+    if (secret.length >= MIN_SECRET_LENGTH) {
       result = result.split(secret).join('[REDACTED]');
     }
   }

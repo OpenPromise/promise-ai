@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
 
+/** #approved 指纹记忆的上限：会话数与每会话指纹数都封顶，防止长期运行无界增长。 */
+const MAX_APPROVED_SESSIONS = 200;
+const MAX_APPROVED_FINGERPRINTS = 100;
+
 export interface ApprovalRequest {
   requestId: string;
   sessionId: string;
@@ -153,10 +157,19 @@ export class ApprovalRegistry {
   /** Remembers an approved call so an identical one can auto-run. */
   rememberApproval(sessionId: string, fingerprint: string): void {
     if (!this.#rememberApprovals) return;
+    // 有界驱逐：防止长期运行中 #approved 无限增长（每会话指纹数、会话总数都封顶）
+    if (this.#approved.size >= MAX_APPROVED_SESSIONS) {
+      const oldestSession = this.#approved.keys().next().value;
+      if (oldestSession !== undefined) this.#approved.delete(oldestSession);
+    }
     let fingerprints = this.#approved.get(sessionId);
     if (!fingerprints) {
       fingerprints = new Set();
       this.#approved.set(sessionId, fingerprints);
+    }
+    if (fingerprints.size >= MAX_APPROVED_FINGERPRINTS) {
+      const oldestFingerprint = fingerprints.keys().next().value;
+      if (oldestFingerprint !== undefined) fingerprints.delete(oldestFingerprint);
     }
     fingerprints.add(fingerprint);
   }

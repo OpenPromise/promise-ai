@@ -58,13 +58,19 @@ describe('library file IO', () => {
     expect(await readFile(path.join(dir, 'evil.txt'), 'utf8')).toBe('x');
   });
 
-  it('deletes a file by fuzzy name', async () => {
+  it('deletes only on an exact file name, and lists candidates otherwise', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'wxfiles-del-'));
     await saveLibraryFile(dir, '到底丢失了几只羊.pptx', Buffer.from('x'));
+    await saveLibraryFile(dir, '到底丢失了几只羊-v2.pptx', Buffer.from('x'));
 
-    const deleted = await deleteLibraryFile(dir, '到底丢失了几只羊');
+    // 模糊词不删：永久删除必须给出完整文件名，错误信息里带候选
+    await expect(deleteLibraryFile(dir, '到底丢失了几只羊')).rejects.toThrow(/完整文件名/);
+    await expect(deleteLibraryFile(dir, '到底丢失了几只羊')).rejects.toThrow(/-v2\.pptx/);
+    expect(await listLibraryFiles(dir)).toHaveLength(2);
+
+    const deleted = await deleteLibraryFile(dir, '到底丢失了几只羊.pptx');
     expect(deleted).toBe('到底丢失了几只羊.pptx');
-    expect(await listLibraryFiles(dir)).toHaveLength(0);
+    expect(await listLibraryFiles(dir)).toHaveLength(1);
 
     await expect(deleteLibraryFile(dir, '不存在的')).rejects.toThrow(/找不到/);
   });

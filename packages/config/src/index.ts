@@ -90,7 +90,23 @@ const envSchema = z.object({
     z.string().trim().min(1).default('longanqian'),
   ),
   QWEN_TTS_VOICE: z.preprocess(emptyToUndefined, z.string().trim().min(1).default('Cherry')),
-  DATABASE_URL: optionalString,
+  // URL 校验前置：非法值回退为 undefined（走内存后端），不等到 pg 连接才炸。
+  // 保持向后兼容——不因配置格式问题导致服务无法启动。
+  DATABASE_URL: z.preprocess((value) => {
+    const resolved = emptyToUndefined(value);
+    if (resolved === undefined) return undefined;
+    try {
+      new URL(String(resolved));
+      return resolved;
+    } catch {
+      return undefined;
+    }
+  }, optionalString),
+  DASHSCOPE_BASE_URL: z.preprocess(
+    emptyToUndefined,
+    z.string().url().default('https://dashscope.aliyuncs.com/compatible-mode/v1'),
+  ),
+  HOOK_SECRET: optionalString,
   HOME_ASSISTANT_URL: optionalUrl,
   HOME_ASSISTANT_TOKEN: optionalString,
   TENCENT_SECRET_ID: optionalString,
@@ -167,6 +183,8 @@ export interface AppConfig {
     configured: boolean;
   };
   databaseUrl?: string;
+  /** webhook 共享密钥（HOOK_SECRET）；未配置时 hook 端点拒绝所有请求。 */
+  hookSecret?: string;
   homeAssistant: {
     url?: string;
     token?: string;
@@ -235,7 +253,7 @@ export function loadConfig(
     dashscope: {
       apiKey: v.DASHSCOPE_API_KEY,
       model: v.DASHSCOPE_LLM_MODEL,
-      baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      baseUrl: v.DASHSCOPE_BASE_URL,
       configured: Boolean(v.DASHSCOPE_API_KEY),
     },
     deepseek: {
@@ -246,6 +264,7 @@ export function loadConfig(
     },
     voiceEnabled: v.VOICE_ENABLED === 'true',
     voiceTtsEnabled: v.VOICE_TTS_ENABLED === 'true',
+    hookSecret: v.HOOK_SECRET,
     autoApproveAll: v.AUTO_APPROVE_ALL === 'true',
     elevenlabs: {
       apiKey: v.ELEVENLABS_API_KEY,

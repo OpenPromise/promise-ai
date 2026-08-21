@@ -13,6 +13,8 @@ import type {
 } from '@personal-ai/elevenlabs';
 import type { ChatChunk, ChatInput, GenerateResult, LLMProvider } from '@personal-ai/llm';
 import { InMemoryMemoryStore, InMemorySessionStore, type MemoryStore } from '@personal-ai/memory';
+import type { AddMessageInput, SessionStore } from '@personal-ai/memory';
+import type { Session } from '@personal-ai/types';
 import type { QwenRealtimeClient } from '@personal-ai/qwen-realtime';
 import { ToolRegistry } from '@personal-ai/tools';
 import { buildApp } from './app.js';
@@ -111,10 +113,11 @@ function build(
   memory: MemoryStore = new InMemoryMemoryStore(),
   createQwen?: (model: string) => QwenRealtimeClient,
   createTTS: () => TTSProvider = () => stubTTS,
+  store: SessionStore = new InMemorySessionStore(),
 ) {
   return buildApp({
     config,
-    store: new InMemorySessionStore(),
+    store,
     llm,
     persona: stubPersona,
     tools,
@@ -139,6 +142,68 @@ function recordingTTS(
         if (options?.signal?.aborted) return;
         yield chunk;
       }
+    },
+  };
+}
+
+/**
+ * Session store whose selected writes are slow: exposes ordering bugs where a
+ * fire-and-forget assistant write lands after a later user message (P2-23).
+ */
+class DelayedWriteSessionStore implements SessionStore {
+  readonly #inner = new InMemorySessionStore();
+  #writes = 0;
+
+  constructor(
+    private readonly delayFor: (input: AddMessageInput, index: number) => number,
+  ) {}
+
+  createSession(input?: Parameters<SessionStore['createSession']>[0]): Promise<Session> {
+    return this.#inner.createSession(input);
+  }
+
+  getSession(sessionId: string): Promise<Session> {
+    return this.#inner.getSession(sessionId);
+  }
+
+  async addMessage(sessionId: string, input: AddMessageInput): Promise<Session> {
+    const delay = this.delayFor(input, this.#writes);
+    this.#writes += 1;
+    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+    return this.#inner.addMessage(sessionId, input);
+  }
+
+  updateSession(
+    sessionId: string,
+    input: Parameters<SessionStore['updateSession']>[1],
+  ): Promise<Session> {
+    return this.#inner.updateSession(sessionId, input);
+  }
+
+  listSessions(): Promise<Session[]> {
+    return this.#inner.listSessions();
+  }
+}
+
+/** LLM that streams one sentence, then throws once the request is aborted. */
+function abortAwareLLM(firstDelta: string): LLMProvider {
+  return {
+    name: 'fake',
+    model: 'qwen-test',
+    configured: true,
+    async *chat(input: ChatInput): AsyncIterable<ChatChunk> {
+      yield { delta: firstDelta };
+      await new Promise<void>((resolve) => {
+        if (input.signal?.aborted) {
+          resolve();
+          return;
+        }
+        input.signal?.addEventListener('abort', () => resolve(), { once: true });
+      });
+      throw new Error('aborted');
+    },
+    async generate(): Promise<GenerateResult> {
+      return { text: firstDelta };
     },
   };
 }
@@ -929,6 +994,114 @@ describe('agent-server', () => {
     }
   });
 
+  it('Qwen 级联语音每轮使用新的 requestId（"仅本次允许"不跨轮）', async () => {
+    const fakes = new Map<string, FakeQwenClient>();
+    const app = build(
+      qwenConfig,
+      fakeLLM(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      (model) => {
+        const fake = new FakeQwenClient();
+        fakes.set(model, fake);
+        return fake as unknown as QwenRealtimeClient;
+      },
+      () => recordingTTS([]),
+    );
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    const { port } = app.server.address() as AddressInfo;
+
+    try {
+      const sessionId = await createSession(app);
+      const received: string[] = [];
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/voice/${sessionId}`);
+      ws.on('message', (data) => received.push(data.toString()));
+      await new Promise<void>((resolve, reject) => {
+        ws.once('open', () => resolve());
+        ws.once('error', reject);
+      });
+      await waitFor(() => received.some((m) => m.includes('voice.ready')));
+      const asr = fakes.get(qwenConfig.qwenRealtime.asrModel);
+
+      const doneRequestIds = (): string[] =>
+        received
+          .map((raw) => JSON.parse(raw) as { type: string; requestId?: string })
+          .filter((message) => message.type === 'chat.done')
+          .map((message) => message.requestId ?? '');
+
+      asr?.emitUserFinal('第一句');
+      await waitFor(() => doneRequestIds().length === 1);
+      asr?.emitUserFinal('第二句');
+      await waitFor(() => doneRequestIds().length === 2);
+
+      const [first, second] = doneRequestIds();
+      expect(first).toBeTruthy();
+      expect(second).toBeTruthy();
+      expect(second).not.toBe(first);
+
+      ws.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('Qwen 级联语音打断：部分回复先落库，再写下一轮用户消息', async () => {
+    const store = new DelayedWriteSessionStore((input) =>
+      input.role === 'assistant' && input.content === '好的。' ? 150 : 0,
+    );
+    const fakes = new Map<string, FakeQwenClient>();
+    const app = build(
+      qwenConfig,
+      abortAwareLLM('好的。'),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      (model) => {
+        const fake = new FakeQwenClient();
+        fakes.set(model, fake);
+        return fake as unknown as QwenRealtimeClient;
+      },
+      () => recordingTTS([]),
+      store,
+    );
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    const { port } = app.server.address() as AddressInfo;
+
+    try {
+      const session = await store.createSession({ systemPrompt: '测试' });
+      const received: string[] = [];
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/voice/${session.id}`);
+      ws.on('message', (data) => received.push(data.toString()));
+      await new Promise<void>((resolve, reject) => {
+        ws.once('open', () => resolve());
+        ws.once('error', reject);
+      });
+      await waitFor(() => received.some((m) => m.includes('voice.ready')));
+      const asr = fakes.get(qwenConfig.qwenRealtime.asrModel);
+
+      asr?.emitUserFinal('第一句');
+      await waitFor(() => received.some((m) => m.includes('tts.sentence')));
+      // 打断并立刻开始下一轮
+      asr?.emitUserFinal('第二句');
+      await waitFor(async () =>
+        (await store.getSession(session.id)).messages.some((m) => m.content === '第二句'),
+      );
+      // 给未串行化的写入留出落库时间（修复前它会排在第二句之后）
+      await new Promise((resolve) => setTimeout(resolve, 250));
+
+      const roles = (await store.getSession(session.id)).messages.map((m) => m.role);
+      const lastUser = roles.lastIndexOf('user');
+      expect(roles.slice(lastUser).every((role) => role === 'user')).toBe(true);
+
+      ws.close();
+    } finally {
+      await app.close();
+    }
+  });
+
   it('routes voice over WebSocket through Qwen S2S (PCM bridge)', async () => {
     const fake = new FakeQwenClient();
     const app = build(
@@ -1110,6 +1283,129 @@ describe('agent-server', () => {
       await waitFor(() => received.some((m) => m.includes('agent.tool_result')));
       expect(executed).toBe(1);
       expect(fake.sent.some((entry) => entry.startsWith('output:call_2:'))).toBe(true);
+
+      ws.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('S2S 语音的"仅本次允许"不跨轮生效（每轮新 requestId）', async () => {
+    const registry = new ToolRegistry();
+    let executed = 0;
+    registry.register({
+      name: 'notification.send',
+      description: '发送通知',
+      inputSchema: { type: 'object', properties: {}, required: [] },
+      permissionLevel: 2,
+      async execute() {
+        executed += 1;
+        return { ok: true, data: { sent: true } };
+      },
+    });
+
+    const fake = new FakeQwenClient();
+    const app = build(
+      s2sConfig,
+      fakeLLM(),
+      undefined,
+      registry,
+      undefined,
+      undefined,
+      () => fake as unknown as QwenRealtimeClient,
+    );
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    const { port } = app.server.address() as AddressInfo;
+
+    try {
+      const sessionId = await createSession(app);
+      const received: string[] = [];
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/voice/${sessionId}`);
+      ws.on('message', (data) => received.push(data.toString()));
+      await new Promise<void>((resolve, reject) => {
+        ws.once('open', () => resolve());
+        ws.once('error', reject);
+      });
+      await waitFor(() => received.some((m) => m.includes('voice.ready')));
+
+      const approveNext = async (): Promise<void> => {
+        await waitFor(() => received.some((m) => m.includes('permission.request')));
+        const request = received
+          .map(
+            (raw) =>
+              JSON.parse(raw) as { type: string; payload: { request: { requestId: string } } },
+          )
+          .filter((message) => message.type === 'permission.request')
+          .at(-1);
+        ws.send(
+          JSON.stringify({
+            type: 'permission.response',
+            requestId: request?.payload.request.requestId,
+            approved: true,
+          }),
+        );
+      };
+
+      // 第 1 轮：批准一次（参数 A）
+      fake.emitFunctionCall('call_a', 'notification.send', '{"text":"first"}');
+      await approveNext();
+      await waitFor(() => executed === 1);
+      // 轮次结束：工具结果回喂后模型给出最终回复（真实流程里会先 response.created）
+      fake.emitResponseCreated();
+      fake.emitResponseDone('completed', '已发送。');
+      await waitFor(() => received.some((m) => m.includes('agent.done')));
+
+      // 第 2 轮：不同参数 —— 必须重新征求同意，不能沿用上一轮的"仅本次允许"
+      received.length = 0;
+      fake.emitFunctionCall('call_b', 'notification.send', '{"text":"second"}');
+      await waitFor(() => received.some((m) => m.includes('permission.request')));
+      expect(executed).toBe(1);
+
+      ws.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('S2S 打断时先落库部分回复，再写入下一轮用户消息（顺序不错乱）', async () => {
+    const store = new DelayedWriteSessionStore((input) =>
+      input.role === 'assistant' ? 80 : 0,
+    );
+    const fake = new FakeQwenClient();
+    const app = build(
+      s2sConfig,
+      fakeLLM(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => fake as unknown as QwenRealtimeClient,
+      undefined,
+      store,
+    );
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    const { port } = app.server.address() as AddressInfo;
+
+    try {
+      const session = await store.createSession({ systemPrompt: '测试' });
+      const received: string[] = [];
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/voice/${session.id}`);
+      ws.on('message', (data) => received.push(data.toString()));
+      await new Promise<void>((resolve, reject) => {
+        ws.once('open', () => resolve());
+        ws.once('error', reject);
+      });
+      await waitFor(() => received.some((m) => m.includes('voice.ready')));
+
+      // 打断：部分助手回复入库（写入慢）；紧接着用户说下一句（写入快）
+      fake.emitResponseDone('cancelled', '我正在说……');
+      fake.emitUserFinal('等一下');
+
+      await waitFor(async () => (await store.getSession(session.id)).messages.length === 2);
+      const messages = (await store.getSession(session.id)).messages;
+      expect(messages[0]?.role).toBe('assistant');
+      expect(messages[0]?.content).toBe('我正在说……');
+      expect(messages[1]?.role).toBe('user');
 
       ws.close();
     } finally {

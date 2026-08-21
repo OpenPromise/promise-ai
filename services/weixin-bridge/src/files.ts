@@ -77,9 +77,20 @@ export async function saveLibraryFile(dir: string, name: string, bytes: Buffer):
 /** 按文件名（精确/前缀/包含）删除文件库中的文件，返回实际删除的文件名。 */
 export async function deleteLibraryFile(dir: string, query: string): Promise<string> {
   const files = await listLibraryFiles(dir);
-  const matched = resolveFileByName(files, query);
-  if (!matched) throw new Error(`文件库中找不到「${query}」`);
-  const safe = sanitizeFileName(matched.name);
+  const normalized = query.trim().toLowerCase();
+  // 永久删除只允许精确文件名匹配：模糊（前缀/包含）匹配"一删一大片"风险太高
+  const exact = files.find((file) => file.name.toLowerCase() === normalized);
+  if (!exact) {
+    const candidates = files.filter((file) => file.name.toLowerCase().includes(normalized));
+    const hint =
+      candidates.length > 0
+        ? `；相近文件名：${candidates.map((file) => file.name).join('、')}`
+        : '';
+    throw new Error(
+      `文件库中找不到「${query.trim()}」${hint ? `（永久删除需完整文件名${hint}）` : ''}`,
+    );
+  }
+  const safe = sanitizeFileName(exact.name);
   await unlink(path.join(dir, safe));
   return safe;
 }

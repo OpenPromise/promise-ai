@@ -86,13 +86,16 @@ export function createFilesystemDeleteTool(options: CreateSensitiveToolsOptions 
 }
 
 /**
- * Level 2 tool: sends a notification (stored in memory for now; a delivery
- * transport can consume the notification store in a later phase).
+ * 通知工具：当前只记录到内存 store，没有任何主动投递通道（无桌面端，
+ * 微信推送走 reminder.due / engineer.task.done 等事件链路，不走这里）。
+ * 因此按"仅记录"语义降为 L1——保持 L2 却只写内存是误导：既拦用户又没效果。
+ * 若未来接入真实投递通道，再回到 L2 并接审批。
  */
 export function createNotificationSendTool(store = new InMemoryNotificationStore()): Tool {
   return {
     name: 'notification.send',
-    description: '发送一条通知给用户（L2：需要用户确认）。',
+    description: '记录一条通知（仅保存在本机内存，不会主动推送）。L1：' +
+      '如需真正提醒用户请用 reminder.create（会按时通过微信推送）。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -100,7 +103,7 @@ export function createNotificationSendTool(store = new InMemoryNotificationStore
       },
       required: ['text'],
     },
-    permissionLevel: 2,
+    permissionLevel: 1,
     async execute(input: unknown) {
       const { text } = (input ?? {}) as { text?: string };
       if (!text?.trim()) {

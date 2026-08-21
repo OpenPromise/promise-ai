@@ -109,9 +109,21 @@ export class OpenRouterProvider implements LLMProvider {
       number,
       { index: number; id?: string; name?: string; arguments?: string }
     >();
+    /** 已把工具调用作为完整结果 yield 过（避免流尾重复 yield）。 */
+    let toolCallsYielded = false;
 
     for await (const data of iterSsePayloads(response)) {
-      if (data === '[DONE]') return;
+      if (data === '[DONE]') {
+        // 部分后端流结束时不带 finish_reason='tool_calls'：把已累积的工具调用
+        // 收尾 yield，避免静默丢弃（调用方会当成纯文本回复处理）。
+        if (!toolCallsYielded && toolCallAccumulator.size > 0) {
+          const toolCalls = finalizeToolCalls([...toolCallAccumulator.values()]);
+          if (toolCalls.length > 0) {
+            yield { delta: '', finishReason: 'tool_calls', toolCalls };
+          }
+        }
+        return;
+      }
       const chunk = parseChatCompletionStreamData(data);
       if (!chunk) continue;
       if (chunk.toolCallDeltas) {
@@ -131,6 +143,7 @@ export class OpenRouterProvider implements LLMProvider {
         }
       }
       if (chunk.finishReason === 'tool_calls') {
+        toolCallsYielded = true;
         const toolCalls = finalizeToolCalls([...toolCallAccumulator.values()]);
         yield {
           delta: chunk.delta,

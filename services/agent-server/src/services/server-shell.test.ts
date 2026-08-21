@@ -203,6 +203,19 @@ describe('collectSecrets / redactOutput', () => {
     expect(secrets[0]).toBe('sk-long-secret-1234567890');
   });
 
+  it('短密钥（<8 字符）也纳入脱敏', () => {
+    const secrets = collectSecrets({
+      DB_PASSWORD: 'p@ss',
+      WEIXIN_TOKEN: 'ab',
+      USE_TOKEN: 'true',
+    });
+    expect(secrets).toContain('p@ss');
+    // 1–3 字符与开关型取值不脱敏：替换后会大面积污染无关输出
+    expect(secrets).not.toContain('ab');
+    expect(secrets).not.toContain('true');
+    expect(redactOutput('psql: password=p@ss', secrets)).toBe('psql: password=[REDACTED]');
+  });
+
   it('输出中的敏感值全部替换为 [REDACTED]', () => {
     const out = redactOutput('key=sk-abc-1234567890 and again sk-abc-1234567890', [
       'sk-abc-1234567890',

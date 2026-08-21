@@ -31,6 +31,9 @@ export const XIAO_HEI_PROMPT = `你是"小黑"，用户团队的专属工程师�
 7. 不修改密钥、凭证、数据库连接串等敏感配置；不执行破坏性命令。破坏性/永久操作（删除、覆盖、批量变更）即使任务明确要求，也须在方案中显式标注"永久/不可恢复"并预留回滚点；错误自愈不得绕过安全边界（安全约束优先于自愈）。
 8. 任务完成后把可复用的经验（踩坑、模式、结论）沉淀到 xiaohei/learnings.md 长期记忆，形成跨任务记忆闭环；已有沉淀不重复记录。`;
 
+/** 内存任务表上限：超过后驱逐最旧的已完成/失败任务（running 永不驱逐）。 */
+const MAX_TASKS = 100;
+
 /** 把用户需求包装成给小黑的标准任务单 */
 export function buildXiaoHeiTask(userRequest: string): string {
   return `${XIAO_HEI_PROMPT}
@@ -209,6 +212,16 @@ export class EngineerTaskRunner {
       output: '',
     };
     this.#tasks.set(record.id, record);
+    // 有界驱逐：只清已完成/失败的旧记录，运行中的任务不受影响
+    if (this.#tasks.size > MAX_TASKS) {
+      const finished = [...this.#tasks.values()]
+        .filter((task) => task.status !== 'running')
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      const overflow = this.#tasks.size - MAX_TASKS;
+      for (const task of finished.slice(0, overflow)) {
+        this.#tasks.delete(task.id);
+      }
+    }
     void this.#persist();
     this.#emit({
       type: 'started',

@@ -194,8 +194,9 @@ export function createWeixinTools(options: WeixinToolOptions): Tool[] {
     {
       name: 'weixin.delete_file',
       description:
-        '按文件名从微信文件库删除文件（永久删除，不可恢复）。匹配规则与 ' +
-        'weixin.send_file 相同（精确/前缀/包含）。任何会话都可用。',
+        '按完整文件名从微信文件库删除文件（永久删除，不可恢复）。' +
+        '只接受精确文件名（与 send_file 的模糊匹配不同）：模糊词会被拒绝并列出候选，' +
+        '防止"一删一大片"。任何会话都可用。',
       inputSchema: {
         type: 'object',
         properties: {

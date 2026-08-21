@@ -1,6 +1,6 @@
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
-import type { Tool } from './index.js';
+import type { Tool, ToolContext } from './index.js';
 
 interface FilesystemSearchInput {
   query: string;
@@ -9,6 +9,8 @@ interface FilesystemSearchInput {
 }
 
 const SKIPPED_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', '.cache']);
+/** 递归搜索最大深度：防止意外深层目录树把搜索拖到超时。 */
+const MAX_DEPTH = 8;
 
 export interface CreateFilesystemSearchOptions {
   /** Directories tools are allowed to search. Defaults to the workspace root. */
@@ -44,7 +46,7 @@ export function createFilesystemSearchTool(options: CreateFilesystemSearchOption
       required: ['query'],
     },
     permissionLevel: 0,
-    async execute(input: unknown) {
+    async execute(input: unknown, context: ToolContext) {
       const { query, root, limit = 20 } = (input ?? {}) as FilesystemSearchInput;
       if (!query?.trim()) {
         return { ok: false, error: '缺少 query 参数' };
@@ -66,7 +68,7 @@ export function createFilesystemSearchTool(options: CreateFilesystemSearchOption
       const matches: string[] = [];
 
       try {
-        await walk(base, pattern, matches, capped, base);
+        await walk(base, pattern, matches, capped, base, 0, context.signal);
         return {
           ok: true,
           data: {
@@ -105,8 +107,12 @@ async function walk(
   matches: string[],
   limit: number,
   base: string,
+  depth: number,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (matches.length >= limit) return;
+  if (signal?.aborted) throw new Error('搜索已取消');
+  if (depth > MAX_DEPTH) return;
 
   let entries;
   try {
@@ -119,7 +125,7 @@ async function walk(
     if (matches.length >= limit) return;
     if (entry.isDirectory()) {
       if (SKIPPED_DIRS.has(entry.name)) continue;
-      await walk(path.join(dir, entry.name), pattern, matches, limit, base);
+      await walk(path.join(dir, entry.name), pattern, matches, limit, base, depth + 1, signal);
       continue;
     }
     if (entry.isFile() && pattern.test(entry.name)) {

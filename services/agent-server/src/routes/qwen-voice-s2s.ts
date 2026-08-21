@@ -51,7 +51,8 @@ export function registerQwenS2SVoiceRoutes(
 ): void {
   app.get('/ws/voice/:sessionId', { websocket: true }, (socket, request) => {
     const { sessionId } = (request.params ?? {}) as VoiceParams;
-    const requestId = randomUUID();
+    // 连接级 id：只用于与具体对话轮无关的信封（voice.ready / 错误 / transcript）。
+    const connectionId = randomUUID();
     const sendJson = (payload: unknown): void => {
       if (socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify(payload));
@@ -63,7 +64,34 @@ export function registerQwenS2SVoiceRoutes(
       .getSession(sessionId)
       .then(async (session) => {
         const qwen = deps.createQwen();
-        const toolContext: ToolContext = { sessionId, requestId };
+        /**
+         * 每轮对话一个 requestId：审批记忆以它为作用域（approval.ts 的
+         * #requestApproved），按连接生成会把"仅本次允许"放大成"整通电话允许"。
+         */
+        let turnRequestId = randomUUID();
+        let toolContext: ToolContext = { sessionId, requestId: turnRequestId };
+        /** 一轮结束：清掉本轮的任务级授权并换新 requestId。 */
+        const endTurn = (): void => {
+          deps.approvals.clearForRequest(turnRequestId);
+          turnRequestId = randomUUID();
+          toolContext = { sessionId, requestId: turnRequestId };
+        };
+        /**
+         * 会话写入串行队列：打断时的部分回复若 fire-and-forget，可能排到下一轮
+         * user 消息之后落库，历史里出现"助手先答后问"。
+         */
+        let writeChain: Promise<unknown> = Promise.resolve();
+        const enqueueWrite = (
+          input: { role: 'user' | 'assistant'; content: string },
+          failureMessage: string,
+        ): Promise<void> => {
+          writeChain = writeChain
+            .then(() => deps.store.addMessage(sessionId, input))
+            .catch((error: unknown) => {
+              request.log.error({ err: error, sessionId }, failureMessage);
+            });
+          return writeChain as Promise<void>;
+        };
         let toolRunning = false;
         // True from the moment the model emits a function call until its
         // result has been fed back and the follow-up response was requested.
@@ -81,7 +109,7 @@ export function registerQwenS2SVoiceRoutes(
               createEnvelope({
                 type: 'transcript.partial',
                 sessionId,
-                requestId,
+                requestId: connectionId,
                 payload: { text: event.text },
               }),
             );
@@ -91,17 +119,16 @@ export function registerQwenS2SVoiceRoutes(
             createEnvelope({
               type: 'transcript.final',
               sessionId,
-              requestId,
+              requestId: connectionId,
               payload: { text: event.text },
             }),
           );
           const text = event.text.trim();
           if (text) {
-            void deps.store
-              .addMessage(sessionId, { role: 'user', content: text })
-              .catch((error) => {
-                request.log.error({ err: error, sessionId }, 'failed to persist user transcript');
-              });
+            void enqueueWrite(
+              { role: 'user', content: text },
+              'failed to persist user transcript',
+            );
           }
         });
 
@@ -112,7 +139,7 @@ export function registerQwenS2SVoiceRoutes(
             createEnvelope({
               type: 'transcript.partial',
               sessionId,
-              requestId,
+              requestId: turnRequestId,
               payload: { text: delta, role: 'assistant' },
             }),
           );
@@ -125,7 +152,7 @@ export function registerQwenS2SVoiceRoutes(
               createEnvelope({
                 type: 'agent.state',
                 sessionId,
-                requestId,
+                requestId: turnRequestId,
                 payload: { state: 'speaking' },
               }),
             );
@@ -134,7 +161,7 @@ export function registerQwenS2SVoiceRoutes(
             type: 'audio.chunk',
             timestamp: new Date().toISOString(),
             sessionId,
-            requestId,
+            requestId: turnRequestId,
             payload: {
               data: event.data.toString('base64'),
               format: event.format,
@@ -151,7 +178,7 @@ export function registerQwenS2SVoiceRoutes(
             createEnvelope({
               type: 'agent.thinking',
               sessionId,
-              requestId,
+              requestId: turnRequestId,
               payload: {},
             }),
           );
@@ -159,7 +186,7 @@ export function registerQwenS2SVoiceRoutes(
             createEnvelope({
               type: 'agent.state',
               sessionId,
-              requestId,
+              requestId: turnRequestId,
               payload: { state: 'thinking' },
             }),
           );
@@ -167,6 +194,7 @@ export function registerQwenS2SVoiceRoutes(
 
         qwen.onResponseDone((event) => {
           const text = event.text.trim();
+          const requestIdForTurn = turnRequestId;
           // A response that only carried a function call is not the final
           // reply: the tool still has to run and the model then produces a
           // second response. Ending the turn here closes the voice session on
@@ -175,17 +203,16 @@ export function registerQwenS2SVoiceRoutes(
           if ((event.id && toolResponseIds.delete(event.id)) || toolPending) return;
           if (event.status === 'completed') {
             if (text) {
-              void deps.store
-                .addMessage(sessionId, { role: 'assistant', content: text })
-                .catch((error) => {
-                  request.log.error({ err: error, sessionId }, 'failed to persist assistant reply');
-                });
+              void enqueueWrite(
+                { role: 'assistant', content: text },
+                'failed to persist assistant reply',
+              );
             }
             sendJson(
               createEnvelope({
                 type: 'tts.end',
                 sessionId,
-                requestId,
+                requestId: requestIdForTurn,
                 payload: { text },
               }),
             );
@@ -193,7 +220,7 @@ export function registerQwenS2SVoiceRoutes(
               createEnvelope({
                 type: 'agent.done',
                 sessionId,
-                requestId,
+                requestId: requestIdForTurn,
                 payload: { text },
               }),
             );
@@ -201,24 +228,24 @@ export function registerQwenS2SVoiceRoutes(
               createEnvelope({
                 type: 'agent.state',
                 sessionId,
-                requestId,
+                requestId: requestIdForTurn,
                 payload: { state: 'listening' },
               }),
             );
+            endTurn();
           } else if (event.status === 'cancelled') {
             // Barge-in: keep the partial reply for context, clear playback.
             if (text) {
-              void deps.store
-                .addMessage(sessionId, { role: 'assistant', content: text })
-                .catch((error) => {
-                  request.log.error({ err: error, sessionId }, 'failed to persist partial reply');
-                });
+              void enqueueWrite(
+                { role: 'assistant', content: text },
+                'failed to persist partial reply',
+              );
             }
             sendJson(
               createEnvelope({
                 type: 'tts.interrupted',
                 sessionId,
-                requestId,
+                requestId: requestIdForTurn,
                 payload: { reason: 'barge_in' },
               }),
             );
@@ -226,19 +253,21 @@ export function registerQwenS2SVoiceRoutes(
               createEnvelope({
                 type: 'agent.state',
                 sessionId,
-                requestId,
+                requestId: requestIdForTurn,
                 payload: { state: 'listening' },
               }),
             );
+            endTurn();
           } else {
             sendJson(
               createEnvelope({
                 type: 'voice.error',
                 sessionId,
-                requestId,
+                requestId: requestIdForTurn,
                 payload: { error: `Qwen response failed (${event.status})` },
               }),
             );
+            endTurn();
           }
         });
 
@@ -248,7 +277,7 @@ export function registerQwenS2SVoiceRoutes(
             createEnvelope({
               type: 'tts.interrupted',
               sessionId,
-              requestId,
+              requestId: turnRequestId,
               payload: { reason: 'user_speech' },
             }),
           );
@@ -256,7 +285,7 @@ export function registerQwenS2SVoiceRoutes(
             createEnvelope({
               type: 'agent.state',
               sessionId,
-              requestId,
+              requestId: turnRequestId,
               payload: { state: 'listening' },
             }),
           );
@@ -288,7 +317,7 @@ export function registerQwenS2SVoiceRoutes(
             createEnvelope({
               type: 'voice.error',
               sessionId,
-              requestId,
+              requestId: connectionId,
               payload: { error: error.message },
             }),
           );
@@ -302,7 +331,7 @@ export function registerQwenS2SVoiceRoutes(
             createEnvelope({
               type: 'voice.error',
               sessionId,
-              requestId,
+              requestId: connectionId,
               payload: { error: '语音服务连接已断开' },
             }),
           );
@@ -324,7 +353,7 @@ export function registerQwenS2SVoiceRoutes(
             createEnvelope({
               type: 'voice.ready',
               sessionId,
-              requestId,
+              requestId: connectionId,
               payload: { audioFormat: 'pcm_16000', outputFormat: 'pcm_24000' },
             }),
           );
@@ -334,7 +363,7 @@ export function registerQwenS2SVoiceRoutes(
             createEnvelope({
               type: 'voice.error',
               sessionId,
-              requestId,
+              requestId: connectionId,
               payload: {
                 error: error instanceof Error ? error.message : 'Qwen realtime 启动失败',
               },
@@ -354,7 +383,7 @@ export function registerQwenS2SVoiceRoutes(
                 createEnvelope({
                   type: 'voice.error',
                   sessionId,
-                  requestId,
+                  requestId: connectionId,
                   payload: { error: '语音会话不可用，请重新唤醒' },
                 }),
               );
@@ -372,7 +401,7 @@ export function registerQwenS2SVoiceRoutes(
                 createEnvelope({
                   type: 'tts.interrupted',
                   sessionId,
-                  requestId,
+                  requestId: turnRequestId,
                   payload: { reason: 'client' },
                 }),
               );
@@ -408,7 +437,7 @@ export function registerQwenS2SVoiceRoutes(
               createEnvelope({
                 type: 'agent.tool_call',
                 sessionId,
-                requestId,
+                requestId: turnRequestId,
                 payload: { toolCalls: [call] },
               }),
             );
@@ -465,7 +494,7 @@ export function registerQwenS2SVoiceRoutes(
                 createEnvelope({
                   type: 'agent.tool_result',
                   sessionId,
-                  requestId,
+                  requestId: turnRequestId,
                   payload: { callId: call.callId, name: call.name, result },
                 }),
               );
@@ -498,7 +527,7 @@ export function registerQwenS2SVoiceRoutes(
               createEnvelope({
                 type: 'agent.tool_result',
                 sessionId,
-                requestId,
+                requestId: turnRequestId,
                 payload: { callId: call.callId, name: call.name, result },
               }),
             );
@@ -511,7 +540,7 @@ export function registerQwenS2SVoiceRoutes(
               createEnvelope({
                 type: 'voice.error',
                 sessionId,
-                requestId,
+                requestId: turnRequestId,
                 payload: {
                   error: error instanceof Error ? error.message : '工具执行失败',
                 },
@@ -526,7 +555,7 @@ export function registerQwenS2SVoiceRoutes(
           createEnvelope({
             type: 'voice.error',
             sessionId,
-            requestId,
+            requestId: connectionId,
             payload: { error: 'Session not found' },
           }),
         );

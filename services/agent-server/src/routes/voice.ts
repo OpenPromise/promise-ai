@@ -21,13 +21,20 @@ export interface VoiceRouteDeps {
 
 interface VoiceTask {
   controller: AbortController;
+  /**
+   * 本轮对话的请求 id。审批记忆以 requestId 为作用域（approval.ts 的
+   * #requestApproved），按连接生成会把"仅本次允许"放大成"整通电话允许"，
+   * 因此每轮新建一个。
+   */
+  requestId: string;
   synthesized: string[];
 }
 
 export function registerVoiceRoutes(app: FastifyInstance, deps: VoiceRouteDeps): void {
   app.get('/ws/voice/:sessionId', { websocket: true }, (socket, request) => {
     const { sessionId } = (request.params ?? {}) as VoiceParams;
-    const requestId = randomUUID();
+    // 连接级 id：只用于与具体对话轮无关的信封（voice.ready / transcript / 错误）。
+    const connectionId = randomUUID();
     const voice = deps.createVoice();
     const sendJson = (payload: unknown): void => {
       if (socket.readyState === WebSocket.OPEN) {
@@ -37,30 +44,32 @@ export function registerVoiceRoutes(app: FastifyInstance, deps: VoiceRouteDeps):
 
     let activeTask: VoiceTask | undefined;
 
-    const interrupt = (reason: string): void => {
+    /**
+     * 打断：等部分回复真正落库后再发 tts.interrupted。fire-and-forget 写入
+     * 可能排到下一轮 user 消息之后，导致历史顺序错乱（助手先答后问）。
+     */
+    const interrupt = async (reason: string): Promise<void> => {
       const task = activeTask;
       if (!task) return;
       activeTask = undefined;
       task.controller.abort();
       request.log.info({ sessionId, reason }, 'voice task interrupted');
-      void (async () => {
-        const partialText = task.synthesized.join('').trim();
-        if (partialText) {
-          try {
-            await deps.store.addMessage(sessionId, {
-              role: 'assistant',
-              content: partialText,
-            });
-          } catch (error) {
-            request.log.error({ err: error, sessionId }, 'failed to persist partial reply');
-          }
+      const partialText = task.synthesized.join('').trim();
+      if (partialText) {
+        try {
+          await deps.store.addMessage(sessionId, {
+            role: 'assistant',
+            content: partialText,
+          });
+        } catch (error) {
+          request.log.error({ err: error, sessionId }, 'failed to persist partial reply');
         }
-      })();
+      }
       sendJson(
         createEnvelope({
           type: 'tts.interrupted',
           sessionId,
-          requestId,
+          requestId: task.requestId,
           payload: { reason },
         }),
       );
@@ -73,7 +82,7 @@ export function registerVoiceRoutes(app: FastifyInstance, deps: VoiceRouteDeps):
           type: 'audio.chunk',
           timestamp: new Date().toISOString(),
           sessionId,
-          requestId,
+          requestId: task.requestId,
           payload: { data: chunk.data.toString('base64'), format: chunk.format },
         });
       }
@@ -85,7 +94,12 @@ export function registerVoiceRoutes(app: FastifyInstance, deps: VoiceRouteDeps):
         return;
       }
 
-      const task: VoiceTask = { controller: new AbortController(), synthesized: [] };
+      const task: VoiceTask = {
+        controller: new AbortController(),
+        requestId: randomUUID(),
+        synthesized: [],
+      };
+      const requestId = task.requestId;
       activeTask = task;
 
       sendJson(
@@ -105,6 +119,7 @@ export function registerVoiceRoutes(app: FastifyInstance, deps: VoiceRouteDeps):
         for await (const envelope of deps.conversation.runChat({
           sessionId,
           userMessage: userText,
+          requestId,
           signal: task.controller.signal,
         })) {
           if (envelope.type !== 'chat.token') {
@@ -234,7 +249,7 @@ export function registerVoiceRoutes(app: FastifyInstance, deps: VoiceRouteDeps):
             createEnvelope({
               type: 'voice.error',
               sessionId,
-              requestId,
+              requestId: connectionId,
               payload: { error: 'ElevenLabs is not configured' },
             }),
           );
@@ -244,18 +259,19 @@ export function registerVoiceRoutes(app: FastifyInstance, deps: VoiceRouteDeps):
 
         voice.stt.onTranscript((event) => {
           if (event.isFinal) {
-            if (activeTask) interrupt('new_final_transcript');
             sendJson(
               createEnvelope({
                 type: 'transcript.final',
                 sessionId,
-                requestId,
+                requestId: connectionId,
                 payload: { text: event.text },
               }),
             );
-            if (event.text.trim()) {
-              void runVoiceTask(event.text);
-            }
+            const text = event.text.trim();
+            // 先等打断的部分回复落库，再开新一轮：否则新一轮的 user 消息可能
+            // 先入库，历史里出现"助手先答后问"。
+            const pending = activeTask ? interrupt('new_final_transcript') : Promise.resolve();
+            void pending.then(() => (text ? runVoiceTask(event.text) : undefined));
             return;
           }
 
@@ -263,13 +279,13 @@ export function registerVoiceRoutes(app: FastifyInstance, deps: VoiceRouteDeps):
             createEnvelope({
               type: 'transcript.partial',
               sessionId,
-              requestId,
+              requestId: connectionId,
               payload: { text: event.text },
             }),
           );
           // Barge-in: the user started speaking while the agent was talking.
           if (event.text.trim().length > 0 && activeTask) {
-            interrupt('user_speech');
+            void interrupt('user_speech');
           }
         });
 
@@ -279,7 +295,7 @@ export function registerVoiceRoutes(app: FastifyInstance, deps: VoiceRouteDeps):
             createEnvelope({
               type: 'voice.error',
               sessionId,
-              requestId,
+              requestId: connectionId,
               payload: { error: error.message },
             }),
           );
@@ -293,7 +309,7 @@ export function registerVoiceRoutes(app: FastifyInstance, deps: VoiceRouteDeps):
                 createEnvelope({
                   type: 'voice.error',
                   sessionId,
-                  requestId,
+                  requestId: connectionId,
                   payload: { error: 'STT 会话不可用，请重新唤醒' },
                 }),
               );
@@ -306,7 +322,7 @@ export function registerVoiceRoutes(app: FastifyInstance, deps: VoiceRouteDeps):
             if (message.type === 'end') {
               void voice.stt.stop();
             } else if (message.type === 'interrupt') {
-              interrupt('client');
+              void interrupt('client');
             } else if (message.type === 'permission.response') {
               const payload = message as {
                 requestId?: string;
@@ -339,7 +355,7 @@ export function registerVoiceRoutes(app: FastifyInstance, deps: VoiceRouteDeps):
             createEnvelope({
               type: 'voice.ready',
               sessionId,
-              requestId,
+              requestId: connectionId,
               payload: { audioFormat: voice.stt.audioFormat },
             }),
           );
@@ -349,7 +365,7 @@ export function registerVoiceRoutes(app: FastifyInstance, deps: VoiceRouteDeps):
             createEnvelope({
               type: 'voice.error',
               sessionId,
-              requestId,
+              requestId: connectionId,
               payload: { error: error instanceof Error ? error.message : 'STT failed' },
             }),
           );
@@ -362,7 +378,7 @@ export function registerVoiceRoutes(app: FastifyInstance, deps: VoiceRouteDeps):
           createEnvelope({
             type: 'voice.error',
             sessionId,
-            requestId,
+            requestId: connectionId,
             payload: { error: 'Session not found' },
           }),
         );

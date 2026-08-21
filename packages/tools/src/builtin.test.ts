@@ -348,3 +348,16 @@ describe('task tools', () => {
     expect(data.runs[0]?.taskId).toBe(task.id);
   });
 });
+
+describe('createBuiltinTools 存储装配', () => {
+  it('未注入 memoryStore 时 memory.* 与 goal.* 共用同一个内存存储', async () => {
+    const { tools } = createBuiltinTools();
+    const goalSet = tools.find((tool) => tool.name === 'goal.set')!;
+    const memoryList = tools.find((tool) => tool.name === 'memory.list')!;
+
+    await goalSet.execute({ title: '减肥', description: '每周三次' }, { sessionId: 's1' });
+    const listed = await memoryList.execute({}, { sessionId: 's1' });
+    const data = listed.data as { memories: Array<{ content: string }> };
+    expect(data.memories.some((entry) => entry.content.includes('减肥'))).toBe(true);
+  });
+});
