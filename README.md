@@ -19,15 +19,15 @@
 - Phase 6（权限系统）：完成
 - Phase 7（Memory System）：完成
 - Phase 8（Task / Scheduler）：完成
-- Phase 9（Windows Desktop Agent）：第一步完成（UI + 工具桥）
-- 下一步：唤醒词、桌面端完善
+- Phase 9（微信 ClawBot 通道）：完成（桌面端已下线，只保留微信 bot 端）
+- 下一步：微信端体验完善
 
 ## 目录结构
 
 ```text
-├── apps/             # 桌面/Web/移动端（按计划后置，暂未实现）
 ├── services/
-│   └── agent-server/ # Agent Server：Session + Streaming Chat
+│   ├── agent-server/ # Agent Server：Session + Streaming Chat
+│   └── weixin-bridge/# 微信 ClawBot 桥（唯一客户端通道）
 ├── packages/
 │   ├── core/         # Agent Context / Persona 抽象
 │   ├── protocol/     # 统一消息协议
@@ -72,8 +72,7 @@ npm run dev            # 启动 Agent Server（默认 :3000）
   回复以文字显示（s2s 端到端语音需 TTS 开启才启用）
 
 仍在使用 Qwen 模型的位置：Qwen ASR（语音识别）、记忆嵌入
-`text-embedding-v4`、微信收图理解 `WEIXIN_VISION_MODEL`（qwen3.8-max）、
-桌面屏幕视觉 `qwen-vl-max` / `qwen3.8-max`。
+`text-embedding-v4`、微信收图理解 `WEIXIN_VISION_MODEL`（qwen3.8-max）。
 
 全权限模式：`AUTO_APPROVE_ALL=true` 时所有工具（含 L2/L3：终端、电源、
 删除等）自动执行，不弹确认；权限系统保留，随时可回退。
@@ -213,8 +212,8 @@ task.create({ name, schedule: "0 9 * * *", action: "检查杭州天气，如果�
 - 执行：到点后任务指令通过完整 Agent Loop 无人值守执行
   （只能使用 L0/L1 工具；需要确认的工具会被拒绝）
 - 运行记录：`task.list-runs` 查看每次执行的结果（成功/失败/输出）
-- 主动通知：任务执行完成/失败时，桌面端通过 `GET /api/events`（SSE）收到
-  `task.run` 事件并弹出系统通知（含任务名与结果摘要）
+- 主动通知：任务执行完成/失败时，微信桥通过 `GET /api/events`（SSE）收到
+  `task.run` 事件并主动推送到微信（含任务名与结果摘要）
 - 存储：内存或 PostgreSQL（`tasks` / `task_runs` 表）
 
 ## 提醒（一次性）
@@ -223,67 +222,6 @@ task.create({ name, schedule: "0 9 * * *", action: "检查杭州天气，如果�
 提醒存于内存，`ReminderService` 每 10 秒扫描一次到期提醒，到点通过
 `GET /api/events`（SSE）的 `reminder.due` 事件推送到桌面端弹系统通知。
 注意：提醒存储为内存实现，服务重启后未到期的提醒会丢失。
-
-## 桌面端（Phase 9 第一步）
-
-### 文件权限对齐
-
-读取/列目录为 **L0 自动执行**；日常文件操作（移动、复制、写入、新建目录、
-压缩、解压、删除、打开路径）均为 **L1 自动执行，无需确认**；删除会进回收站
-（可恢复），并拒绝磁盘根目录与系统关键目录。只有 `system.power`
-（关机/重启/睡眠）与 `terminal.run` 为 L3 二次确认，`process.kill` /
-`screen.click` / `screen.type` 等敏感操作为 L2 需确认。
-
-### Siri 式 UI（`apps/desktop-ui`）
-
-```bash
-npm run desktop:ui
-```
-
-常驻后台的极简光体界面（Electron）：
-
-- 中央**发光球体**：流动渐变 + 光晕 + 玻璃拟态面板 + Canvas 粒子
-- 麦克风音量实时驱动光球波动（音频响应可视化）
-- 全局热键唤醒（默认 `Ctrl+Alt+Space`）、托盘常驻
-- 点击光球开始语音对话；再点结束/打断
-- 视觉规范见 [desktop-ui/README.md](apps/desktop-ui/README.md)
-
-### 桌面工具桥（`apps/desktop-agent`）
-
-```bash
-npm run desktop:agent
-```
-
-桌面端连接 `/ws/desktop` 后，AI 可直接操作这台电脑（工具走既有权限确认）：
-
-| 工具                       | 权限 | 说明                         |
-| -------------------------- | ---- | ---------------------------- |
-| `terminal.run`             | L3   | 执行 PowerShell 命令         |
-| `app.launch`               | L1   | 启动应用 / 打开路径或 URL    |
-| `filesystem.move`          | L1   | 移动/重命名文件              |
-| `filesystem.copy`          | L1   | 复制文件                     |
-| `filesystem.delete`        | L1   | 删除到回收站（拒绝系统目录） |
-| `filesystem.write`         | L1   | 创建/覆写文本文件            |
-| `filesystem.read`          | L0   | 读取文本文件（大文件截断）   |
-| `filesystem.list`          | L0   | 列出目录内容                 |
-| `filesystem.create-folder` | L1   | 创建目录                     |
-| `filesystem.compress`      | L1   | 压缩为 zip                   |
-| `filesystem.extract`       | L1   | 解压 zip                     |
-| `system.power`             | L3   | 关机/重启/睡眠               |
-| `clipboard.read`           | L0   | 读取剪贴板                   |
-| `clipboard.write`          | L1   | 写入剪贴板                   |
-| `system.info`              | L0   | 系统/CPU/内存/磁盘信息       |
-| `system.volume`            | L1   | 调节音量                     |
-| `window.focus`             | L1   | 窗口置前                     |
-| `process.list`             | L0   | 列出进程                     |
-| `process.kill`             | L2   | 结束进程（需确认）           |
-| `screen.capture`           | L0   | 截取主屏幕保存 PNG           |
-| `window.list`              | L0   | 列出可见窗口                 |
-| `screen.analyze`           | L0   | 截屏 + 视觉模型分析          |
-| `screen.click`             | L2   | 点击屏幕坐标（需确认）       |
-| `screen.type`              | L2   | 向焦点窗口输入文本（需确认） |
-
-注意：`desktop:ui` 与 `desktop:agent` 是两个进程，可同时运行。
 
 开发架构约束见 [AGENTS.md](./AGENTS.md)（参考项目仅作架构参考）。
 
@@ -328,8 +266,8 @@ dsh plugin --profile headless add dsh-llm-newapi
 
 ## Docker 部署（Ubuntu 服务器）
 
-服务端（agent-server）已容器化，适合部署到 Ubuntu 服务器；桌面端
-（desktop-ui / desktop-agent）是 Windows 本地客户端，不在服务端镜像内。
+服务端（agent-server + weixin-bridge）已容器化，适合部署到 Ubuntu 服务器；
+客户端只有微信 bot（扫码登录，无需本地进程）。
 
 ```bash
 # 服务器上：先准备 .env（复制 .env.example 并填入 DASHSCOPE_API_KEY 等）
@@ -343,19 +281,14 @@ npm run server:up
 - 数据库：`docker compose` 里的 postgres（pgvector）服务自动先启动并等待健康
 - 环境变量：`env_file` 读取仓库根 `.env`；容器内 `DATABASE_URL` 自动指向
   compose 网络中的 postgres（无需手动改）
-- 桌面客户端直连：把 `.env` 的 `AGENT_URL` / `AGENT_WS_URL` 指向服务器地址即可
-  （桌面工具仍在本机执行，通过 WS 注册到远端 server）
-- coding.run 在服务端执行（服务器上跑 dsh），不依赖桌面客户端；语音/文本/
-  任务/提醒全部在服务端，树莓派、车机等客户端只做麦克风采集、音频播放与
-  轻量 UI，走同一套 `/ws/voice` 与 `/api/events` 协议
+- coding.run 在服务端执行（服务器上跑 dsh）；语音/文本/任务/提醒全部在服务端，
+  微信 bot 通过 weixin-bridge 接入
 
 注意：服务器对外暴露前请设置防火墙并只开放必要端口；语音链路为 WebSocket，
 如有反代需开启 WebSocket 支持。
 
 国内网络服务器（如腾讯云 Ubuntu）可用 `scripts/deploy/install-docker.sh`
 一键安装 Docker + 镜像加速；部署完成后 `APP_PORT=3000 npm run server:up`。
-已实测：客户端把 `AGENT_URL` 指向 `http://<服务器IP>:3000`、
-`AGENT_WS_URL` 指向 `ws://<服务器IP>:3000/ws/desktop` 即可接入远端大脑。
 
 **bot 自我开发改动的同步**（永久保留）：bot 在服务器上写的代码先由
 `scripts/deploy/sync-bot-changes.sh` 提交到服务器 git 仓库，再用
@@ -378,7 +311,7 @@ http://<服务器IP>:3100/weixin/login
 
 - 扫码登录（手机微信扫一扫 → 确认），登录态/同步游标持久化，重启自动续接
 - 语音消息自动转文字处理；长回复自动分段；Markdown 转纯文本
-- L2/L3 敏感操作在微信里默认拒绝并提示到桌面端授权（群聊暂不支持）
+- L2/L3 敏感操作在微信里默认拒绝（群聊暂不支持）
 - 重新登录：`POST /api/weixin/logout` 后再次扫码，或直接用
   `npm run weixin:bridge` 本地起桥调试
 

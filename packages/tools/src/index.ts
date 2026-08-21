@@ -3,15 +3,15 @@ import { createFilesystemSearchTool } from './filesystem.js';
 import { createGoalTools } from './goal-tools.js';
 import { createMemoryTools } from './memory-tools.js';
 import { createGithubSearchTool, createGithubTools } from './github.js';
-import { createReminderTools, InMemoryReminderStore } from './reminders.js';
+import { createReminderTools } from './reminders.js';
 import { createTaskTools, type TaskToolDeps } from './task-tools.js';
 import {
   createFilesystemDeleteTool,
   createNotificationSendTool,
   InMemoryNotificationStore,
 } from './sensitive.js';
-import type { MemoryStore } from '@personal-ai/memory';
-import { InMemoryMemoryStore } from '@personal-ai/memory';
+import type { MemoryStore, ReminderStore } from '@personal-ai/memory';
+import { InMemoryMemoryStore, InMemoryReminderStore } from '@personal-ai/memory';
 import { createTimeTool } from './time.js';
 import { createWeatherTool } from './weather.js';
 import { createWebSearchTool } from './web-search.js';
@@ -51,15 +51,6 @@ export interface Tool {
   execute(input: unknown, context: ToolContext): Promise<ToolResult>;
 }
 
-/** Tool declaration a desktop agent sends over /ws/desktop when connecting. */
-export interface DesktopToolDeclaration {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-  permissionLevel: PermissionLevel;
-  timeoutMs?: number;
-}
-
 export class ToolRegistry {
   readonly #tools = new Map<string, Tool>();
 
@@ -96,10 +87,12 @@ export interface BuiltinToolOptions {
   memoryStore?: MemoryStore;
   /** Task store + session factory used by task.* tools. */
   tasks?: TaskToolDeps;
+  /** Reminder store used by reminder.* tools (defaults to in-memory). */
+  reminders?: ReminderStore;
 }
 
 export interface BuiltinToolStores {
-  reminders: InMemoryReminderStore;
+  reminders: ReminderStore;
   calendar: InMemoryCalendarStore;
   notifications: InMemoryNotificationStore;
 }
@@ -112,7 +105,7 @@ export interface BuiltinToolSet {
 /** Creates the first batch of built-in tools (Phase 5). */
 export function createBuiltinTools(options: BuiltinToolOptions = {}): BuiltinToolSet {
   const stores: BuiltinToolStores = {
-    reminders: new InMemoryReminderStore(),
+    reminders: options.reminders ?? new InMemoryReminderStore(),
     calendar: new InMemoryCalendarStore(),
     notifications: new InMemoryNotificationStore(),
   };
@@ -139,7 +132,7 @@ export { createTimeTool } from './time.js';
 export { createWeatherTool } from './weather.js';
 export { createWebSearchTool } from './web-search.js';
 export { createFilesystemSearchTool, type CreateFilesystemSearchOptions } from './filesystem.js';
-export { createReminderTools, InMemoryReminderStore, type Reminder } from './reminders.js';
+export { createReminderTools } from './reminders.js';
 export { createCalendarTools, InMemoryCalendarStore, type CalendarEvent } from './calendar.js';
 export {
   createFilesystemDeleteTool,

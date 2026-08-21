@@ -11,9 +11,12 @@ import {
   createReminderTools,
   InMemoryNotificationStore,
   InMemoryCalendarStore,
-  InMemoryReminderStore,
 } from './index.js';
-import { InMemoryMemoryStore, InMemoryTaskStore } from '@personal-ai/memory';
+import {
+  InMemoryMemoryStore,
+  InMemoryReminderStore,
+  InMemoryTaskStore,
+} from '@personal-ai/memory';
 import type { TaskToolDeps } from './task-tools.js';
 
 describe('time.get', () => {

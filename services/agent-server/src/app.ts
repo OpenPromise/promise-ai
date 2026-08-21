@@ -19,7 +19,6 @@ import { registerSessionRoutes } from './routes/sessions.js';
 import { registerVoiceRoutes } from './routes/voice.js';
 import { registerQwenVoiceRoutes } from './routes/qwen-voice.js';
 import { registerQwenS2SVoiceRoutes } from './routes/qwen-voice-s2s.js';
-import { registerDesktopRoutes } from './routes/desktop.js';
 import { registerEventRoutes } from './routes/events.js';
 import { registerHookRoutes } from './routes/hooks.js';
 import { ApprovalRegistry } from './services/approval.js';
@@ -45,16 +44,14 @@ export interface AppDeps {
   timeline?: TimelineStore;
   /** 对话正常结束后异步抽取画像（Mem0 两阶段思路）。 */
   profileIngest?: (userMessage: string) => void;
-  memoryBackend: string;
-  sessionBackend: string;
   createVoice: () => VoiceGateway;
   /** ElevenLabs TTS used by the Qwen ASR -> LLM -> TTS cascade. */
   createTTS?: () => TTSProvider;
   /** Creates a Qwen realtime client for the given model (ASR or TTS). */
   createQwen?: (model: string) => QwenRealtimeClient;
-  /** 任务运行事件订阅（桌面端通知闭环）。 */
+  /** 任务运行事件订阅（微信通知闭环）。 */
   subscribeTaskEvents?: (listener: (event: TaskRunEvent) => void) => () => void;
-  /** 提醒到期事件订阅（桌面端通知闭环）。 */
+  /** 提醒到期事件订阅（微信通知闭环）。 */
   subscribeReminderEvents?: (listener: (event: ReminderDueEvent) => void) => () => void;
   /** 外部事件（webhook）处理结果订阅。 */
   subscribeHookEvents?: (listener: (event: HookRunEvent) => void) => () => void;
@@ -64,11 +61,6 @@ export interface AppDeps {
   hooks?: HookService;
   /** webhook 共享密钥（可选）。 */
   hookSecret?: string;
-  /**
-   * 桌面端共享密钥（DESKTOP_TOKEN）：/ws/desktop 握手校验，同时作为
-   * /health/detail 的访问令牌。未配置时桌面桥接拒绝所有连接。
-   */
-  desktopToken?: string;
   /** 进程启动时间戳：用于重启完成通知（开机自启闭环）。 */
   processStartedAt?: number;
   /** 宿主机是否刚开机（< 10 分钟）；区分真重启与部署/容器重启。 */
@@ -102,12 +94,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     autoApproveAll: deps.config.autoApproveAll,
   });
 
-  registerHealthRoutes(app, {
-    config: deps.config,
-    llm: deps.llm,
-    memoryBackend: deps.memoryBackend,
-    ...(deps.desktopToken ? { detailToken: deps.desktopToken } : {}),
-  });
+  registerHealthRoutes(app, { llm: deps.llm });
   // 小黑欢迎界面：http://<host>:3000/xiaohei
   registerXiaoheiRoutes(app);
   if (deps.subscribeTaskEvents || deps.subscribeReminderEvents || deps.subscribeEngineerEvents) {
@@ -135,11 +122,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   // websocket routes so its `onRoute` hook rewrites the handlers.
   app.register(async (instance) => {
     await instance.register(websocket, { options: { maxPayload: 1024 * 1024 } });
-    registerDesktopRoutes(instance, {
-      registry: deps.tools,
-      ...(deps.desktopToken ? { token: deps.desktopToken } : {}),
-    });
-    // 语音总开关：VOICE_ENABLED=false 时只保留文字聊天（桌面端语音会断开）
+    // 语音总开关：VOICE_ENABLED=false 时只保留文字聊天
     if (deps.config.voiceEnabled) {
       if (deps.config.qwenRealtime.configured && deps.createQwen) {
         if (deps.config.qwenRealtime.voiceMode === 's2s' && deps.config.voiceTtsEnabled) {

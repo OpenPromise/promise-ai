@@ -141,7 +141,7 @@ describe('EngineerTaskRunner 异步派单', () => {
 });
 
 describe('EngineerTaskRunner 崩溃恢复与并发上限', () => {
-  it('loadPersisted 把残留 running 标记为 failed 并补发 done 事件', async () => {
+  it('loadPersisted 把残留 running 标记 failed 并返回中断列表，emitTaskDone 补发事件', async () => {
     const persistDir = await mkdtemp(path.join(tmpdir(), 'engineer-tasks-'));
     try {
       const events: EngineerTaskEvent[] = [];
@@ -161,11 +161,16 @@ describe('EngineerTaskRunner 崩溃恢复与并发上限', () => {
         },
       });
       restarted.onEvent((event) => events.push(event));
-      await restarted.loadPersisted();
+      const interrupted = await restarted.loadPersisted();
 
       const restored = restarted.get(running.id);
       expect(restored?.status).toBe('failed');
       expect(restored?.error).toBe('进程重启，任务中断');
+      expect(interrupted.map((t) => t.id)).toEqual([running.id]);
+      // 事件通道就绪前不 emit（启动早期补发会发进虚空）
+      expect(events).toHaveLength(0);
+      // 通道就绪后由调用方补发
+      restarted.emitTaskDone(running.id);
       expect(events.filter((event) => event.type === 'done')).toEqual([
         expect.objectContaining({
           type: 'done',

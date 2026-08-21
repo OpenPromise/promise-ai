@@ -1,4 +1,4 @@
-import type { InMemoryReminderStore } from '@personal-ai/tools';
+import type { ReminderStore } from '@personal-ai/memory';
 
 export interface ReminderDueEvent {
   id: string;
@@ -7,7 +7,7 @@ export interface ReminderDueEvent {
 }
 
 export interface ReminderServiceDeps {
-  reminders: InMemoryReminderStore;
+  reminders: ReminderStore;
   intervalMs?: number;
 }
 
@@ -19,7 +19,7 @@ export const REMINDER_TICK_MS = 10_000;
  * 补上 reminder.create 只存不送的缺口。
  */
 export class ReminderService {
-  readonly #reminders: InMemoryReminderStore;
+  readonly #reminders: ReminderStore;
   readonly #intervalMs: number;
   readonly #listeners = new Set<(event: ReminderDueEvent) => void>();
   #timer: NodeJS.Timeout | undefined;
@@ -49,11 +49,12 @@ export class ReminderService {
   }
 
   /** 扫描一次到期提醒（公开便于测试确定性触发）。 */
-  checkNow(): void {
+  async checkNow(): Promise<void> {
     const now = Date.now();
-    for (const reminder of this.#reminders.list(false)) {
+    const reminders = await this.#reminders.list(false);
+    for (const reminder of reminders) {
       if (reminder.dueAt === undefined || Date.parse(reminder.dueAt) > now) continue;
-      this.#reminders.markDone(reminder.id);
+      await this.#reminders.markDone(reminder.id);
       this.#emit({
         id: reminder.id,
         text: reminder.text,

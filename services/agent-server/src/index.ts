@@ -16,8 +16,10 @@ import {
   InMemorySessionStore,
   InMemoryTaskStore,
   InMemoryProfileStore,
+  InMemoryReminderStore,
   PostgresMemoryStore,
   PostgresProfileStore,
+  PostgresReminderStore,
   PostgresSessionStore,
   PostgresTaskStore,
   PostgresTimelineStore,
@@ -117,6 +119,7 @@ let memoryBackend = 'memory';
 let taskStore: InMemoryTaskStore | PostgresTaskStore = new InMemoryTaskStore();
 let profileStore: InMemoryProfileStore | PostgresProfileStore = new InMemoryProfileStore();
 let timelineStore: InMemoryTimelineStore | PostgresTimelineStore = new InMemoryTimelineStore();
+let reminderStore: InMemoryReminderStore | PostgresReminderStore = new InMemoryReminderStore();
 if (config.databaseUrl) {
   const postgresMemory = new PostgresMemoryStore({
     connectionString: config.databaseUrl,
@@ -125,15 +128,18 @@ if (config.databaseUrl) {
   const postgresTasks = new PostgresTaskStore({ connectionString: config.databaseUrl });
   const postgresProfiles = new PostgresProfileStore({ connectionString: config.databaseUrl });
   const postgresTimeline = new PostgresTimelineStore({ connectionString: config.databaseUrl });
+  const postgresReminders = new PostgresReminderStore({ connectionString: config.databaseUrl });
   try {
     await postgresMemory.init();
     await postgresTasks.init();
     await postgresProfiles.init();
     await postgresTimeline.init();
+    await postgresReminders.init();
     memory = postgresMemory;
     taskStore = postgresTasks;
     profileStore = postgresProfiles;
     timelineStore = postgresTimeline;
+    reminderStore = postgresReminders;
     memoryBackend = 'postgres';
     console.log(`[memory] embedding: dashscope/${memoryEmbedder.dimensions ?? 'local'}`);
     console.log(`[memory] using postgres (${config.databaseUrl.split('@')[1] ?? ''})`);
@@ -318,6 +324,7 @@ const taskService = new TaskService({
 const { tools, stores } = createBuiltinTools({
   allowedSearchRoots: searchRoots,
   memoryStore: memory,
+  reminders: reminderStore,
   tasks: {
     tasks: taskStore,
     createTaskSession: (action) => taskService.createTaskSession(action),
@@ -335,7 +342,8 @@ const engineerTaskRunner = new EngineerTaskRunner({
   timeline: timelineStore,
   persistDir: process.env.ENGINEER_TASK_DIR ?? './data/engineer-tasks',
 });
-await engineerTaskRunner.loadPersisted();
+// 返回中断任务列表（进程重启时被杀的 running 任务），事件通道就绪后补发通知
+const interruptedEngineerTasks = await engineerTaskRunner.loadPersisted();
 toolRegistry.register(createEngineerTool(engineerTaskRunner));
 toolRegistry.register(createEngineerStatusTool(engineerTaskRunner));
 // server.shell：容器内终端（L3）——"云服务器即她的世界"的自主操作入口。
@@ -373,8 +381,8 @@ if (config.tencent.configured) {
 } else {
   console.warn('[cloud-tools] TENCENT_SECRET_ID/TENCENT_SECRET_KEY 未配置，cloud.* 工具未注册');
 }
-// 删除工具由桌面端提供（filesystem.delete，L1 自动执行、不限制路径）；内置版
-// 限定工作区且需要二次确认，容易让模型误报"不在工作区"，因此不注册。
+// 内置 filesystem.delete 限定工作区且需要二次确认，容易让模型误报"不在工作区"，
+// 因此不注册；微信侧的文件删除走 weixin.delete_file。
 toolRegistry.unregister('filesystem.delete');
 taskService.start();
 const reminderService = new ReminderService({ reminders: stores.reminders });
@@ -408,21 +416,24 @@ const app = buildApp({
   profile: profileStore,
   timeline: timelineStore,
   profileIngest: (message) => void profileIngestor.ingest(message),
-  memoryBackend,
-  sessionBackend,
   subscribeTaskEvents: (listener) => taskService.onRun(listener),
   subscribeReminderEvents: (listener) => reminderService.onDue(listener),
   subscribeHookEvents: (listener) => hookService.onRun(listener),
   subscribeEngineerEvents: (listener) => engineerTaskRunner.onEvent(listener),
   hooks: hookService,
   hookSecret: process.env.HOOK_SECRET,
-  desktopToken: process.env.DESKTOP_TOKEN,
   processStartedAt,
   hostBootedRecently,
   createVoice,
   createTTS,
   createQwen,
 });
+
+// 事件订阅（registerEventRoutes）已建立：补发重启中断的小黑任务完成通知，
+// 这些事件会进 SSE 缓冲，晚连接的 weixin event-pusher 也能靠 Last-Event-ID 拉到。
+for (const task of interruptedEngineerTasks) {
+  engineerTaskRunner.emitTaskDone(task.id);
+}
 
 try {
   await app.listen({ port: config.port, host: '0.0.0.0' });
@@ -460,7 +471,7 @@ const shutdown = async (signal: string): Promise<void> => {
 process.on('SIGINT', () => void shutdown('SIGINT'));
 process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
-// A long-running desktop assistant must not die from a single connection error.
+// A long-running server must not die from a single connection error.
 process.on('unhandledRejection', (reason) => {
   console.error('[server] unhandledRejection:', reason);
 });

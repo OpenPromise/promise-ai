@@ -11,7 +11,6 @@ export default tseslint.config(
       '**/coverage/**',
       'package-lock.json',
       'infrastructure/**',
-      'apps/desktop-ui/**',
       'public/**',
     ],
   },

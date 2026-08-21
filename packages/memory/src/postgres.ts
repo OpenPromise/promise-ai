@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import {
   createLocalEmbedder,
+  embedForSearch,
   extractKeywords,
   rrfMerge,
   type Embedder,
@@ -78,6 +79,8 @@ export class PostgresMemoryStore implements MemoryStore {
   /**
    * pgvector 列维度固定；当嵌入器维度变化（如本地 384 → 云嵌入 1024）时，
    * 重建 embedding 列并用当前嵌入器重新嵌入存量内容，保留记忆数据。
+   * 迁移必须落在同一连接上才是真事务（pool.query 每次可能换连接），
+   * 失败时回滚并抛错阻止启动——绝不能留下"已 DROP 又未回填"的空向量列。
    */
   async #ensureDimensionMatches(): Promise<void> {
     const dimResult = await this.#pool.query<{ atttypmod: number | null }>(
@@ -92,23 +95,32 @@ export class PostgresMemoryStore implements MemoryStore {
     const rows = await this.#pool.query<MemoryRow>(
       'SELECT id, kind, content FROM memories ORDER BY created_at',
     );
-    await this.#pool.query('BEGIN');
+    const client = await this.#pool.connect();
     try {
-      await this.#pool.query('ALTER TABLE memories DROP COLUMN embedding');
-      await this.#pool.query(
-        `ALTER TABLE memories ADD COLUMN embedding vector(${this.#dimensions})`,
-      );
+      await client.query('BEGIN');
+      await client.query('ALTER TABLE memories DROP COLUMN embedding');
+      await client.query(`ALTER TABLE memories ADD COLUMN embedding vector(${this.#dimensions})`);
       for (const row of rows.rows) {
         const vector = await this.#embedder.embed(row.content);
-        await this.#pool.query('UPDATE memories SET embedding = $2::vector WHERE id = $1', [
+        await client.query('UPDATE memories SET embedding = $2::vector WHERE id = $1', [
           row.id,
           JSON.stringify(vector),
         ]);
       }
-      await this.#pool.query('COMMIT');
+      await client.query('COMMIT');
     } catch (error) {
-      await this.#pool.query('ROLLBACK');
-      throw error;
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // 连接已失效时 ROLLBACK 会失败；原始错误更重要，继续抛它。
+      }
+      throw new Error(
+        `记忆向量维度迁移失败（${currentDim} → ${this.#dimensions}），已回滚：` +
+          `${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
+    } finally {
+      client.release();
     }
   }
 
@@ -136,20 +148,26 @@ export class PostgresMemoryStore implements MemoryStore {
   }
 
   async search(query: string, limit = 5): Promise<MemorySearchResult[]> {
-    const embedding = await this.#embedder.embed(query);
-    const vectorResult = await this.#pool.query<MemoryRow>(
-      `SELECT id, kind, content, tag, created_at, updated_at,
-              1 - (embedding <=> $1::vector) AS score
-       FROM memories
-       WHERE embedding IS NOT NULL
-       ORDER BY embedding <=> $1::vector
-       LIMIT $2`,
-      [JSON.stringify(embedding), limit * 2],
-    );
-    // 向量路：保留低阈值候选，排名由 RRF 决定。
-    const vectorRows: MemorySearchResult[] = vectorResult.rows
-      .filter((row) => (row.score ?? 0) > 0.08)
-      .map((row) => ({ entry: toEntry(row), score: row.score ?? 0 }));
+    // 检索侧嵌入失败不应让整轮对话失败：退化为纯关键词路（见 embedForSearch）。
+    const embedding = await embedForSearch(this.#embedder, query);
+    const vectorRows: MemorySearchResult[] = [];
+    if (embedding) {
+      const vectorResult = await this.#pool.query<MemoryRow>(
+        `SELECT id, kind, content, tag, created_at, updated_at,
+                1 - (embedding <=> $1::vector) AS score
+         FROM memories
+         WHERE embedding IS NOT NULL
+         ORDER BY embedding <=> $1::vector
+         LIMIT $2`,
+        [JSON.stringify(embedding), limit * 2],
+      );
+      // 向量路：保留低阈值候选，排名由 RRF 决定。
+      vectorRows.push(
+        ...vectorResult.rows
+          .filter((row) => (row.score ?? 0) > 0.08)
+          .map((row) => ({ entry: toEntry(row), score: row.score ?? 0 })),
+      );
+    }
 
     // 关键词路：与向量路独立召回，再经 RRF 融合。
     const keywords = extractKeywords(query);

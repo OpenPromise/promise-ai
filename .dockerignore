@@ -10,7 +10,5 @@ out
 coverage
 infrastructure/postgres-data
 weixin-files
-apps/desktop-ui/renderer/app.bundle.js
-apps/desktop-ui/renderer/*.map
 .claude
 .dsh

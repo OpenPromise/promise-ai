@@ -41,7 +41,7 @@ function toSession(row: SessionRow): Session {
 
 /**
  * PostgreSQL-backed SessionStore: sessions survive agent-server restarts, so a
- * desktop client can resume the same conversation after a crash. Messages are
+ * client can resume the same conversation after a crash. Messages are
  * stored as one JSONB column per session, which keeps the store simple at this
  * stage (no per-message tables or joins) and matches the Session shape used by
  * the in-memory implementation. Writes are single-statement (jsonb `||` append /

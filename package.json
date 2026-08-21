@@ -6,8 +6,7 @@
   "description": "Personal AI Assistant monorepo - Qwen brain, Agent Core",
   "workspaces": [
     "packages/*",
-    "services/*",
-    "apps/*"
+    "services/*"
   ],
   "engines": {
     "node": ">=20"
@@ -24,9 +23,6 @@
     "test:watch": "vitest",
     "voice:smoke": "tsx scripts/voice-smoke.ts",
     "voice:qwen-smoke": "tsx scripts/qwen-smoke.ts",
-    "desktop:ui": "npm run start -w @personal-ai/desktop-ui",
-    "build:ui": "npm run build:renderer -w @personal-ai/desktop-ui",
-    "desktop:agent": "tsx apps/desktop-agent/src/index.ts",
     "weixin:bridge": "tsx services/weixin-bridge/src/index.ts",
     "infra:up": "docker compose -f infrastructure/docker-compose.yml up -d",
     "infra:down": "docker compose -f infrastructure/docker-compose.yml down",

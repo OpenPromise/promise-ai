@@ -2,7 +2,7 @@ import { access } from 'node:fs/promises';
 import { accessSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
-import type { PermissionLevel, Tool, ToolResult } from '@personal-ai/tools';
+import type { PermissionLevel, Tool, ToolContext, ToolResult } from '@personal-ai/tools';
 
 /**
  * coding.run 服务端实现：在服务器（容器）上直接驱动 dsh（DeepSeek Harness）。
@@ -53,6 +53,8 @@ export interface RunDshOptions {
   permissionMode: 'workspace-write' | 'danger-full-access';
   /** 可选：逐段实时接收子进程输出，不等待进程结束。 */
   onData?: DshOutputCallback;
+  /** 可选：外部取消（上层 abort）时终止整个进程组。 */
+  signal?: AbortSignal;
 }
 
 export interface DshRunResult {
@@ -71,7 +73,13 @@ const TIMEOUT_EXIT_CODE = 124;
 function runChild(
   executable: string,
   args: string[],
-  options: { cwd: string; timeoutMs: number; env?: NodeJS.ProcessEnv; onData?: DshOutputCallback },
+  options: {
+    cwd: string;
+    timeoutMs: number;
+    env?: NodeJS.ProcessEnv;
+    onData?: DshOutputCallback;
+    signal?: AbortSignal;
+  },
 ): Promise<DshRunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, {
@@ -79,6 +87,9 @@ function runChild(
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: options.env,
+      // detached=true：dsh 自成进程组，超时/取消时对整个进程组发信号，
+      // 避免 npm/tsc/vitest 等孙进程在 dsh 被杀后继续跑成孤儿（kill-tree 思路）。
+      detached: process.platform !== 'win32',
     });
     let stdout = '';
     let stderr = '';
@@ -94,18 +105,40 @@ function runChild(
       options.onData?.(text, 'stderr');
     });
     child.on('error', (error) => reject(error));
+    // 对整个进程组发信号（Linux 负 PID；Windows 退回直杀子进程）。
+    const killTree = (signal: NodeJS.Signals): void => {
+      if (!child.pid) return;
+      try {
+        if (process.platform === 'win32') {
+          child.kill(signal);
+        } else {
+          process.kill(-child.pid, signal);
+        }
+      } catch {
+        child.kill(signal);
+      }
+    };
+    const onAbort = (): void => {
+      killTree('SIGTERM');
+      // 5 秒宽限后仍存活则强杀（与超时路径同一套清理）
+      const killer = setTimeout(() => killTree('SIGKILL'), SIGKILL_GRACE_MS);
+      killer.unref?.();
+    };
+    if (options.signal?.aborted) onAbort();
+    else options.signal?.addEventListener('abort', onAbort, { once: true });
     let killTimer: NodeJS.Timeout | undefined;
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGTERM');
-      // dsh 可能忽略 SIGTERM：5s 宽限后强杀，避免子进程泄漏、任务挂到超时之外。
-      killTimer = setTimeout(() => child.kill('SIGKILL'), SIGKILL_GRACE_MS);
+      killTree('SIGTERM');
+      // dsh 可能忽略 SIGTERM：5s 宽限后强杀整个进程组。
+      killTimer = setTimeout(() => killTree('SIGKILL'), SIGKILL_GRACE_MS);
       killTimer.unref?.();
     }, options.timeoutMs);
     timer.unref?.();
     child.on('close', (code) => {
       clearTimeout(timer);
       if (killTimer) clearTimeout(killTimer);
+      options.signal?.removeEventListener('abort', onAbort);
       resolve({
         stdout,
         stderr,
@@ -135,6 +168,7 @@ export async function runDshHeadless(
     timeoutMs: options.timeoutMs,
     env: { ...process.env, DSH_PERMISSION_MODE: options.permissionMode },
     onData: options.onData,
+    signal: options.signal,
   });
 }
 
@@ -181,7 +215,7 @@ export function createCodingTool(): Tool {
     },
     permissionLevel: 1 as PermissionLevel,
     timeoutMs: 60 * 60 * 1000,
-    async execute(input: unknown): Promise<ToolResult> {
+    async execute(input: unknown, context: ToolContext): Promise<ToolResult> {
       const {
         directory,
         task,
@@ -212,6 +246,7 @@ export function createCodingTool(): Tool {
         timeoutMs,
         permissionMode:
           mode === 'bypassPermissions' ? 'danger-full-access' : 'workspace-write',
+        signal: context.signal,
       });
       if (timedOut) {
         return {

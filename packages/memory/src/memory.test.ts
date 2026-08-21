@@ -4,6 +4,7 @@ import {
   createDashScopeEmbedder,
   createLocalEmbedder,
   createResilientEmbedder,
+  embedForSearch,
   extractKeywords,
   InMemoryMemoryStore,
   rrfMerge,
@@ -163,18 +164,44 @@ describe('createDashScopeEmbedder', () => {
 });
 
 describe('createResilientEmbedder', () => {
-  it('falls back to the local embedder and pads to the primary dimension', async () => {
+  it('falls back to the local embedder when dimensions match', async () => {
+    const failing = {
+      dimensions: 8,
+      async embed(): Promise<number[]> {
+        throw new Error('api down');
+      },
+    };
+    const resilient = createResilientEmbedder(failing, createLocalEmbedder(8));
+    const vector = await resilient.embed('回退测试');
+    expect(vector).toHaveLength(8);
+    expect(vector.some((value) => value !== 0)).toBe(true);
+  });
+
+  it('拒绝零填充：备用维度不匹配时抛错而不是写坏向量', async () => {
     const failing = {
       dimensions: 1024,
       async embed(): Promise<number[]> {
         throw new Error('api down');
       },
     };
-    const local = createLocalEmbedder(8);
-    const resilient = createResilientEmbedder(failing, local);
-    const vector = await resilient.embed('回退测试');
-    expect(vector).toHaveLength(1024);
-    expect(vector.slice(8)).toEqual(new Array<number>(1016).fill(0));
+    const resilient = createResilientEmbedder(failing, createLocalEmbedder(8));
+    await expect(resilient.embed('回退测试')).rejects.toThrow('维度不匹配');
+  });
+});
+
+describe('embedForSearch', () => {
+  it('嵌入失败时返回 null，让检索退化为关键词路', async () => {
+    const failing = {
+      dimensions: 1024,
+      async embed(): Promise<number[]> {
+        throw new Error('api down');
+      },
+    };
+    await expect(embedForSearch(failing, '查询')).resolves.toBeNull();
+  });
+
+  it('嵌入成功时直接返回向量', async () => {
+    await expect(embedForSearch(createLocalEmbedder(8), '查询')).resolves.toHaveLength(8);
   });
 });
 

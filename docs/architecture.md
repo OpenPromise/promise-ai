@@ -60,7 +60,7 @@
 | `packages/memory`        | SessionStore / Memory 抽象               | 内存实现（Phase 1） |
 | `packages/tools`         | Tool 接口、注册表、内置工具              | Phase 5             |
 | `services/agent-server`  | Session、Agent Loop、HTTP/SSE、语音 WS   | Phase 5             |
-| `apps/*`                 | 桌面/Web/移动端                          | 未开始（计划后置）  |
+| `services/weixin-bridge` | 微信 ClawBot 桥（唯一客户端通道）        | Phase 9             |
 | `infrastructure`         | PostgreSQL（pgvector）、Docker Compose   | Phase 0             |
 
 ## 4. 关键设计决策
@@ -187,19 +187,6 @@ PostgreSQL + pgvector 用于语义检索；只保存有长期价值的信息，
   L2/L3 工具直接拒绝（不能无人确认地执行敏感操作），结果写入 `task_runs`
 - **入口**：`task.*` 工具让 AI 自己维护任务；未来桌面端可轮询运行记录
 
-### 4.13 Windows Desktop Agent（Phase 9）
-
-- **Agent Server 仍是唯一核心**；桌面端只提供"行动"能力
-- **远端工具桥**：桌面端连 `/ws/desktop` 声明本地工具（terminal /
-  app.launch / filesystem / screen / window），桥接器动态注册进
-  ToolRegistry，Agent Loop 经 WS 执行并等待结果；断线自动卸载
-- **Siri 式 UI**（Electron）：透明无边框窗口，发光球体 + 玻璃拟态 +
-  粒子 + 音频响应可视化；全局热键 / 托盘常驻；语音链路复用
-  `/ws/voice`（16k PCM 上行、逐句 mp3 下行）
-- **安全**：桌面工具沿用四级权限（terminal.run / system.power L3 二次确认，
-  文件操作与 app.launch L1 自动执行），禁止默认无限制执行
-- **唤醒词**：待接入（中文自定义唤醒词需训练模型）
-
 ### 4.14 Qwen 实时语音（Phase 4，双模式）
 
 - **模式开关**：`QWEN_VOICE_MODE`（`s2s` 默认 / `cascade`）切换两条语音链路
@@ -243,7 +230,7 @@ PostgreSQL + pgvector 用于语义检索；只保存有长期价值的信息，
 - ✅ Phase 6：权限系统
 - ✅ Phase 7：Memory System
 - ✅ Phase 8：Task / Scheduler
-- 🚧 Phase 9：Windows Desktop Agent（第一步：UI + 工具桥）
+- 🚧 Phase 9：微信 ClawBot 通道（桌面端已下线，只保留微信 bot 端）
 - ⬜ Phase 10：Home Assistant
 - ⬜ Phase 11：移动端 / 车机
 - ⬜ Phase 12：电话 / SIP

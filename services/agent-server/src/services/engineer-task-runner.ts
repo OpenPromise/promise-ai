@@ -131,9 +131,14 @@ export class EngineerTaskRunner {
     }
   }
 
-  /** 启动时加载已持久化的任务记录；残留 running（进程重启被杀）标记失败并补发 done。 */
-  async loadPersisted(): Promise<void> {
-    if (!this.#persistFile) return;
+  /**
+   * 启动时加载已持久化的任务记录；残留 running（进程重启被杀）标记失败。
+   * 返回中断任务列表，由调用方在事件通道（SSE 订阅）就绪后再补发 done——
+   * 启动早期直接 emit 会发进虚空（监听器还没注册），中断通知将永久丢失。
+   */
+  async loadPersisted(): Promise<EngineerTask[]> {
+    const interrupted: EngineerTask[] = [];
+    if (!this.#persistFile) return interrupted;
     try {
       const raw = await readFile(this.#persistFile, 'utf8');
       const records = JSON.parse(raw) as EngineerTask[];
@@ -147,18 +152,29 @@ export class EngineerTaskRunner {
           record.finishedAt = new Date().toISOString();
           record.error = '进程重启，任务中断';
           changed = true;
+          interrupted.push(record);
         }
         this.#tasks.set(record.id, record);
       }
-      for (const record of records) {
-        if (record?.status === 'failed' && record.error === '进程重启，任务中断') {
-          this.#emit({ type: 'done', taskId: record.id, status: 'failed', error: record.error });
-        }
-      }
       if (changed) void this.#persist();
+      return interrupted;
     } catch {
       // 文件不存在或损坏：从空任务表开始，不阻塞启动
+      return interrupted;
     }
+  }
+
+  /** 补发一次任务完成事件（供启动恢复：事件订阅就绪后调用）。 */
+  emitTaskDone(taskId: string): void {
+    const task = this.#tasks.get(taskId);
+    if (!task || task.status === 'running') return;
+    this.#emit({
+      type: 'done',
+      taskId,
+      status: task.status,
+      ...(task.result ? { result: task.result } : {}),
+      ...(task.error ? { error: task.error } : {}),
+    });
   }
 
   onEvent(listener: (event: EngineerTaskEvent) => void): () => void {

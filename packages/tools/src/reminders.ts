@@ -1,54 +1,12 @@
-import { randomUUID } from 'node:crypto';
 import type { Tool } from './index.js';
-
-export interface Reminder {
-  id: string;
-  text: string;
-  dueAt?: string;
-  createdAt: string;
-  done: boolean;
-}
-
-interface CreateReminderInput {
-  text: string;
-  dueAt?: string;
-}
+import type { CreateReminderInput, ReminderStore } from '@personal-ai/memory';
+import { InMemoryReminderStore } from '@personal-ai/memory';
 
 interface ListRemindersInput {
   includeDone?: boolean;
 }
 
-export class InMemoryReminderStore {
-  readonly #items: Reminder[] = [];
-
-  add(input: CreateReminderInput): Reminder {
-    const reminder: Reminder = {
-      id: randomUUID(),
-      text: input.text,
-      ...(input.dueAt ? { dueAt: input.dueAt } : {}),
-      createdAt: new Date().toISOString(),
-      done: false,
-    };
-    this.#items.push(reminder);
-    return reminder;
-  }
-
-  list(includeDone = false): Reminder[] {
-    return this.#items
-      .filter((item) => includeDone || !item.done)
-      .sort((a, b) => (a.dueAt ?? '9999').localeCompare(b.dueAt ?? '9999'));
-  }
-
-  /** 标记提醒已完成；返回被标记的提醒，不存在时返回 undefined。 */
-  markDone(id: string): Reminder | undefined {
-    const item = this.#items.find((r) => r.id === id);
-    if (!item) return undefined;
-    item.done = true;
-    return { ...item };
-  }
-}
-
-export function createReminderTools(store = new InMemoryReminderStore()): Tool[] {
+export function createReminderTools(store: ReminderStore = new InMemoryReminderStore()): Tool[] {
   return [
     {
       name: 'reminder.create',
@@ -73,7 +31,7 @@ export function createReminderTools(store = new InMemoryReminderStore()): Tool[]
         if (dueAt !== undefined && Number.isNaN(Date.parse(dueAt))) {
           return { ok: false, error: 'dueAt 不是有效的 ISO 8601 时间' };
         }
-        const reminder = store.add({ text: text.trim(), ...(dueAt ? { dueAt } : {}) });
+        const reminder = await store.add({ text: text.trim(), ...(dueAt ? { dueAt } : {}) });
         return { ok: true, data: { reminder } };
       },
     },
@@ -90,7 +48,7 @@ export function createReminderTools(store = new InMemoryReminderStore()): Tool[]
       permissionLevel: 0,
       async execute(input: unknown) {
         const { includeDone = false } = (input ?? {}) as ListRemindersInput;
-        return { ok: true, data: { reminders: store.list(includeDone) } };
+        return { ok: true, data: { reminders: await store.list(includeDone) } };
       },
     },
   ];

@@ -86,7 +86,7 @@ export function createFilesystemDeleteTool(options: CreateSensitiveToolsOptions 
 }
 
 /**
- * Level 2 tool: sends a notification (stored in memory for now; a desktop
+ * Level 2 tool: sends a notification (stored in memory for now; a delivery
  * transport can consume the notification store in a later phase).
  */
 export function createNotificationSendTool(store = new InMemoryNotificationStore()): Tool {

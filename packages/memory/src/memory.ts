@@ -74,6 +74,8 @@ export interface DashScopeEmbedderOptions {
   apiKey: string;
   model?: string;
   baseUrl?: string;
+  /** 单次请求超时（毫秒），默认 30s：云接口挂起时不能拖死整条对话链路。 */
+  timeoutMs?: number;
   /** 可注入的 fetch（测试用）；默认全局 fetch。 */
   fetchImpl?: typeof fetch;
 }
@@ -89,20 +91,29 @@ export function createDashScopeEmbedder(options: DashScopeEmbedderOptions): Embe
     '',
   );
   const fetchImpl = options.fetchImpl ?? fetch;
+  const timeoutMs = options.timeoutMs ?? 30_000;
   return {
     dimensions: 1024,
     async embed(text: string): Promise<number[]> {
       if (!options.apiKey) {
         throw new Error('DASHSCOPE_API_KEY 未配置，无法使用云嵌入');
       }
-      const response = await fetchImpl(`${baseUrl}/embeddings`, {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${options.apiKey}`,
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({ model, input: [text] }),
-      });
+      let response: Response;
+      try {
+        response = await fetchImpl(`${baseUrl}/embeddings`, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${options.apiKey}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ model, input: [text] }),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (error) {
+        // AbortSignal.timeout 触发时是 TimeoutError；统一成可读错误交给上层降级。
+        const reason = error instanceof Error ? error.message : String(error);
+        throw new Error(`DashScope embeddings 请求失败（超时 ${timeoutMs}ms 或网络错误）：${reason}`);
+      }
       const data = (await response.json()) as {
         data?: Array<{ embedding?: number[] }>;
         error?: { message?: string };
@@ -122,8 +133,10 @@ export function createDashScopeEmbedder(options: DashScopeEmbedderOptions): Embe
 }
 
 /**
- * 主嵌入器失败时自动回退到备用嵌入器；为保持维度一致（pgvector 列固定维度），
- * 回退向量会补零/截断到主嵌入器的维度。
+ * 主嵌入器失败时回退到备用嵌入器——仅当备用维度与主维度一致时才可回退。
+ * 维度不一致时**必须抛错**：过去的"补零到主维度"会把语义空间完全不同的
+ * 假向量写进同一个 pgvector 列，检索结果静默失真且只能靠重嵌入修复。
+ * 写入失败要显式失败，检索侧由 store 退化为关键词路兜底。
  */
 export function createResilientEmbedder(primary: Embedder, fallback: Embedder): Embedder {
   const dimensions = primary.dimensions ?? fallback.dimensions ?? 384;
@@ -132,14 +145,32 @@ export function createResilientEmbedder(primary: Embedder, fallback: Embedder): 
     async embed(text: string): Promise<number[]> {
       try {
         return await primary.embed(text);
-      } catch {
+      } catch (error) {
         const vector = await fallback.embed(text);
         if (vector.length === dimensions) return vector;
-        if (vector.length > dimensions) return vector.slice(0, dimensions);
-        return [...vector, ...new Array<number>(dimensions - vector.length).fill(0)];
+        throw new Error(
+          `云嵌入失败且备用嵌入器维度不匹配（${vector.length} ≠ ${dimensions}），` +
+            `拒绝写入以避免污染向量库：${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        );
       }
     },
   };
+}
+
+/**
+ * 检索用嵌入：失败时返回 null，让 store 退化为关键词检索。
+ * 写入路径不使用本函数——写入失败必须显式抛错（见 createResilientEmbedder）。
+ */
+export async function embedForSearch(embedder: Embedder, query: string): Promise<number[] | null> {
+  try {
+    return await embedder.embed(query);
+  } catch (error) {
+    console.warn(
+      `[memory] 向量检索不可用，本次退化为关键词检索：${error instanceof Error ? error.message : String(error)}`,
+    );
+    return null;
+  }
 }
 
 /** 从查询里提取关键词（CJK 用二元组），供向量检索无结果时的关键词兜底。 */
@@ -245,17 +276,21 @@ export class InMemoryMemoryStore implements MemoryStore {
 
   async search(query: string, limit = 5): Promise<MemorySearchResult[]> {
     if (this.#items.length === 0) return [];
-    const queryVector = await this.#embedder.embed(query);
-    const results = await Promise.all(
-      this.#items.map(async (entry) => {
+    // 检索侧嵌入失败不应让整轮对话失败：退化为纯关键词路（见 embedForSearch）。
+    const queryVector = await embedForSearch(this.#embedder, query);
+    const results: MemorySearchResult[] = [];
+    if (queryVector) {
+      for (const entry of this.#items) {
         let vector = this.#vectors.get(entry.id);
         if (!vector) {
-          vector = await this.#embedder.embed(entry.content);
+          const embedded = await embedForSearch(this.#embedder, entry.content);
+          if (!embedded) continue;
+          vector = embedded;
           this.#vectors.set(entry.id, vector);
         }
-        return { entry, score: cosineSimilarity(queryVector, vector) };
-      }),
-    );
+        results.push({ entry, score: cosineSimilarity(queryVector, vector) });
+      }
+    }
     // 向量路：保留低阈值候选，排名由 RRF 决定。
     const vectorResults: MemorySearchResult[] = results
       .filter((result) => result.score > 0.08)
@@ -266,7 +301,7 @@ export class InMemoryMemoryStore implements MemoryStore {
     const keywords = extractKeywords(query);
     const keywordHits: MemorySearchResult[] = [];
     if (keywords.length > 0) {
-      for (const { entry } of results) {
+      for (const entry of this.#items) {
         if (keywordHits.length >= limit * 2) break;
         if (containsKeyword(entry.content, keywords)) {
           keywordHits.push({ entry, score: 0.1 });

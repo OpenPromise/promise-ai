@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
 #
 # 服务端镜像（Ubuntu 24.04 + Node 24）：
-# 只打包 agent-server（Fastify + Qwen 语音/文本 + 任务/提醒 + Postgres）。
-# 桌面端（desktop-ui / desktop-agent）是 Windows 本地客户端，不进入服务端镜像。
+# 只打包 agent-server（Fastify + Qwen 语音/文本 + 任务/提醒 + Postgres）
+# 与微信桥（weixin-bridge）。
 
 FROM ubuntu:24.04
 
@@ -41,7 +41,6 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY packages ./packages
 COPY services ./services
-COPY apps ./apps
 COPY persona ./persona
 # coding.run（dsh）读取的仓库规则
 COPY AGENTS.md ./
