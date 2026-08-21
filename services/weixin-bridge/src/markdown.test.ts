@@ -36,4 +36,17 @@ describe('splitLongText', () => {
   it('returns empty array for empty text', () => {
     expect(splitLongText('')).toEqual([]);
   });
+
+  it('硬切分支不拆开 emoji（UTF-16 代理对保护）', () => {
+    // 无换行可切 → 走硬切；切点正好落在 emoji 中间
+    const text = 'a'.repeat(99) + '😀' + 'b'.repeat(60);
+    const parts = splitLongText(text, 100);
+    expect(parts.length).toBeGreaterThan(1);
+    // 任何一段都不能以孤立高代理结尾、或以孤立低代理开头
+    for (const part of parts) {
+      expect(/[\uD800-\uDBFF]$/.test(part)).toBe(false);
+      expect(/^[\uDC00-\uDFFF]/.test(part)).toBe(false);
+    }
+    expect(parts.join('')).toBe(text);
+  });
 });

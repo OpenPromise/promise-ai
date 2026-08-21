@@ -235,9 +235,11 @@ export interface FallbackLLMProviderOptions {
 }
 
 /**
- * OpenCrabs 式多后端故障转移：主模型在产出任何内容之前失败时，透明切换到
- * 备用提供方。流式输出一旦已经开始（已向客户端吐过内容），中途失败无法
- * 回滚，直接抛给上层按既有错误路径处理。
+ * OpenCrabs 式多后端故障转移：主模型在产出任何**可见文本**之前失败时，透明切换到
+ * 备用提供方。判定基于"是否已 yield 过非空 delta"而不是"是否 yield 过 chunk"——
+ * 首个 chunk 常是不含文本的 role/usage/tool_calls chunk，用它置位会让"实质上还没
+ * 输出任何内容就失败"的情况失去切换机会，用户直接看到聊天失败。
+ * 已经吐过内容之后中途失败无法回滚，直接抛给上层按既有错误路径处理。
  */
 export class FallbackLLMProvider implements LLMProvider {
   readonly name = 'fallback';
@@ -257,25 +259,27 @@ export class FallbackLLMProvider implements LLMProvider {
 
   async *chat(input: ChatInput): AsyncIterable<ChatChunk> {
     const iterator = this.#primary.chat(input)[Symbol.asyncIterator]();
-    let started = false;
+    /** 是否已向上游产出过可见文本（空 delta 的 chunk 不算）。 */
+    let producedText = false;
     try {
       while (true) {
         const { done, value } = await iterator.next();
         if (done) break;
-        started = true;
+        if (value.delta.length > 0) producedText = true;
         yield value;
       }
     } catch (error) {
-      if (!started && this.#fallback) {
+      if (!producedText && this.#fallback) {
         this.#onFailover?.(this.#primary, this.#fallback, error);
         yield* this.#fallback.chat(input);
         return;
       }
       throw error;
     } finally {
-      if (!started && typeof iterator.return === 'function') {
-        await iterator.return();
-      }
+      // 无条件释放主流：消费方提前 break（工具轮次、超时、abort）时不关闭迭代器
+      // 会让底层 reader 与 HTTP 连接悬挂到 GC/服务端超时。已完成的迭代器上
+      // return() 是幂等无害操作。
+      await iterator.return?.();
     }
   }
 

@@ -31,4 +31,27 @@ describe('StateStore', () => {
     const store = await StateStore.open(path.join(dir, 'missing.json'));
     expect(store.account).toBeUndefined();
   });
+
+  it('并发 save 串行化：共用的 .tmp 不再互相覆盖，文件始终是完整 JSON', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'wxstate-'));
+    const file = path.join(dir, 'state.json');
+    const store = await StateStore.open(file);
+
+    // 20 次并发写（真实场景：多个微信对端同时建会话 -> setAccount -> save）
+    const saves = Array.from({ length: 20 }, (_, i) =>
+      store.setAccount({
+        token: `tok-${i}`,
+        baseUrl: 'https://ilinkai.weixin.qq.com',
+        accountId: 'bot-1',
+        peerSessions: { [`peer_${i}`]: `session-${i}` },
+        savedAt: new Date().toISOString(),
+      }),
+    );
+    await Promise.all(saves);
+
+    const raw = await readFile(file, 'utf8');
+    // 未串行化时 rename 会撞在一起（ENOENT/EPERM）或写出被截断的半成品
+    expect(() => JSON.parse(raw)).not.toThrow();
+    expect(JSON.parse(raw).account.token).toBe(store.account?.token);
+  });
 });

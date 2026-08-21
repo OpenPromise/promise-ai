@@ -215,6 +215,69 @@ describe('chatOnce', () => {
     });
     expect(started).toEqual(['engineer.delegate']);
   });
+
+  it('preflushedChars 按原始字符数记账：多段提前发送后补发既不重复也不丢字', async () => {
+    const segments: string[] = [];
+    const fetchImpl = vi.fn(async (_url: unknown) =>
+      sseResponse([
+        JSON.stringify({ type: 'chat.token', payload: { delta: '收到，已派给小黑。\n\n' } }),
+        JSON.stringify({ type: 'chat.token', payload: { delta: '第二段开始了。\n\n' } }),
+        JSON.stringify({ type: 'chat.token', payload: { delta: '第三段还没完' } }),
+      ]),
+    );
+
+    const reply = await chatOnce('http://agent:3000', 's1', '查一下', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      onSegment: async (segmentText) => {
+        segments.push(segmentText);
+      },
+    });
+
+    expect(segments).toEqual(['收到，已派给小黑。', '第二段开始了。']);
+    // 每段都被 trim 掉了尾部的 \n\n：按 send 拼接长度记账会少算 4 个字符，
+    // 补发就会把已发过的尾部再发一遍。按原始消费长度记账才对得上。
+    expect(reply.preflushedChars).toBe('收到，已派给小黑。\n\n第二段开始了。\n\n'.length);
+    expect(reply.text.slice(reply.preflushedChars ?? 0)).toBe('第三段还没完');
+  });
+
+  it('提前发送失败后停止分段：失败及之后的内容整段留给最终补发', async () => {
+    const segments: string[] = [];
+    const fetchImpl = vi.fn(async (_url: unknown) =>
+      sseResponse([
+        JSON.stringify({ type: 'chat.token', payload: { delta: '第一段已经送达。\n\n' } }),
+        JSON.stringify({ type: 'chat.token', payload: { delta: '第二段发送会失败。\n\n' } }),
+        JSON.stringify({ type: 'chat.token', payload: { delta: '第三段也留到最后。' } }),
+      ]),
+    );
+
+    const reply = await chatOnce('http://agent:3000', 's1', '查一下', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      log: () => {},
+      onSegment: async (segmentText) => {
+        segments.push(segmentText);
+        if (segments.length >= 2) throw new Error('simulated send failure');
+      },
+    });
+
+    expect(segments).toEqual(['第一段已经送达。', '第二段发送会失败。']);
+    expect(reply.preflushedChars).toBe('第一段已经送达。\n\n'.length);
+    // 失败的第二段没有被消费，和第三段一起完整留在补发内容里（不重复、不丢失）
+    expect(reply.text.slice(reply.preflushedChars ?? 0)).toBe('第二段发送会失败。\n\n第三段也留到最后。');
+  });
+
+  it('未提供 onSegment 时不记账，全文都留给调用方一次性发送', async () => {
+    const fetchImpl = vi.fn(async (_url: unknown) =>
+      sseResponse([
+        JSON.stringify({ type: 'chat.token', payload: { delta: '第一段已经写完。\n\n' } }),
+        JSON.stringify({ type: 'chat.token', payload: { delta: '第二段也写完了。' } }),
+      ]),
+    );
+    const reply = await chatOnce('http://agent:3000', 's1', '查一下', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(reply.preflushedChars).toBe(0);
+    expect(reply.text.slice(reply.preflushedChars ?? 0)).toBe(reply.text);
+  });
 });
 
 describe('parseApprovalText', () => {

@@ -67,8 +67,13 @@ const TOOL_START_HINTS: Record<string, string> = {
 export interface ChatReply {
   text: string;
   error?: string;
-  /** 已通过 onSegment 提前发送的原始文本前缀（最终发送时需减去，避免重复）。 */
-  preflushed?: string;
+  /**
+   * 已通过 onSegment 成功提前发送的**原始文本前缀长度**（含随分段一起被消费的空白）。
+   * 最终补发用 `text.slice(preflushedChars)`。
+   * 不能用"已发片段拼起来的长度"——片段都经过 trim，拼接长度短于实际消费的原始长度，
+   * 用它做偏移会把已发过的尾部再发一遍（多段落回复必然踩到）。
+   */
+  preflushedChars?: number;
 }
 
 /**
@@ -291,7 +296,18 @@ async function chatOnceInner(
   }
 
   let text = '';
-  let preflushed = '';
+  /**
+   * 已成功提前发送的原始文本前缀长度。只在 onSegment 成功后推进，
+   * 取值恒为 `text.length - earlyBuffer.length`（earlyBuffer 始终是 text 的后缀），
+   * 这样 `text.slice(preflushedChars)` 精确等于"还没发过的部分"。
+   */
+  let preflushedChars = 0;
+  /**
+   * 提前发送一旦失败，后续片段不再提前发：失败片段必须留给最终补发，
+   * 而补发是按前缀切的（slice(preflushedChars)），中间缺一段就无法表达。
+   * 直接停掉提前发送，剩余内容全部随 chat.done 一次性发出——不重复也不丢。
+   */
+  let earlySendBroken = false;
   let error: string | undefined;
   let lastRequestId: string | undefined;
   /** 尚未提前发送的原始文本缓冲（始终是 text 的后缀）。 */
@@ -320,22 +336,32 @@ async function chatOnceInner(
         case 'chat.token': {
           text += envelope.payload?.delta ?? '';
           earlyBuffer += envelope.payload?.delta ?? '';
+          // 没有提前推送回调、或提前推送已失败过：不再分段，全部随 chat.done 发出。
+          if (!options.onSegment || earlySendBroken) break;
           // 段落感知提前推送：完整段落/句子即时发出，避免整段回复攒到最后。
           while (true) {
             const seg = takeEarlySegment(earlyBuffer, alreadySentFirst);
             if (!seg) break;
-            alreadySentFirst = true;
-            earlyBuffer = seg.keep;
-            if (!seg.send) continue;
-            try {
-              await options.onSegment?.(seg.send);
-              preflushed += seg.send;
-            } catch (err) {
-              // 提前发送失败不阻塞回复：吞掉错误，内容保留到 chat.done 一次性补发。
-              options.log?.(
-                `[weixin] 提前分段发送失败：${err instanceof Error ? err.message : String(err)}`,
-              );
+            // keep 恒为 earlyBuffer 的后缀，两者长度差即本段消费掉的**原始**字符数
+            // （含被 trim 掉的空白）。用它记账才能让 text.slice(preflushedChars)
+            // 精确等于"未发送部分"；用 send.length 会因 trim 而少算，导致重复发送。
+            const consumed = earlyBuffer.length - seg.keep.length;
+            if (seg.send) {
+              try {
+                await options.onSegment(seg.send);
+              } catch (err) {
+                // 提前发送失败：本段不消费（留给 chat.done 补发），并停止后续提前推送——
+                // 补发是按前缀 slice 的，中间缺一段无法表达，只能整段留到最后。
+                options.log?.(
+                  `[weixin] 提前分段发送失败：${err instanceof Error ? err.message : String(err)}`,
+                );
+                earlySendBroken = true;
+                break;
+              }
             }
+            earlyBuffer = seg.keep;
+            preflushedChars += consumed;
+            alreadySentFirst = true;
           }
           break;
         }
@@ -413,7 +439,7 @@ async function chatOnceInner(
     }
   }
 
-  return { text, preflushed, error };
+  return { text, preflushedChars, error };
 }
 
 /** 逐行消费 SSE 响应（跨 chunk 处理半行；onLine 可为异步，逐行 await 保证顺序）。 */
@@ -686,8 +712,8 @@ async function handleInboundMessage(msg: WeixinMessage, options: RelayOptions): 
         },
       });
       const replyParts: string[] = [];
-      // 已提前发送的前缀不再重复发送，只补发剩余部分。
-      const remaining = reply.text.slice(reply.preflushed?.length ?? 0);
+      // 已提前发送的前缀不再重复发送，只补发剩余部分（按原始字符数切，与提前发送记账一致）。
+      const remaining = reply.text.slice(reply.preflushedChars ?? 0);
       if (remaining.trim()) replyParts.push(markdownToPlain(remaining));
       if (reply.error) replyParts.push(`❌ ${reply.error}`);
       if (replyParts.length === 0) return;

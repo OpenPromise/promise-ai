@@ -99,6 +99,60 @@ describe('FallbackLLMProvider', () => {
     expect(chunks).toEqual(['partial ']);
   });
 
+  it('首个 chunk 无可见文本时仍然切换备用（实质还没输出任何内容）', async () => {
+    // 常见场景：首 chunk 只带 role/usage/tool_calls（delta 为空），随后主模型限流失败
+    const primary: LLMProvider = {
+      name: 'primary',
+      model: 'primary-model',
+      configured: true,
+      async *chat() {
+        yield { delta: '' };
+        throw new Error('rate limited');
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+    const fallback = stubProvider('fallback', { chatChunks: ['备用回答'] });
+    const failovers: string[] = [];
+    const provider = new FallbackLLMProvider({
+      primary,
+      fallback,
+      onFailover: (from, to) => failovers.push(`${from.name}->${to.name}`),
+    });
+
+    const chunks: string[] = [];
+    for await (const chunk of provider.chat({ messages: [] })) chunks.push(chunk.delta);
+    expect(chunks).toEqual(['', '备用回答']);
+    expect(failovers).toEqual(['primary->fallback']);
+  });
+
+  it('消费方提前 break 时释放主流迭代器（不再悬挂 reader）', async () => {
+    let released = false;
+    const primary: LLMProvider = {
+      name: 'primary',
+      model: 'primary-model',
+      configured: true,
+      async *chat() {
+        try {
+          yield { delta: 'a' };
+          yield { delta: 'b' };
+        } finally {
+          released = true;
+        }
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+    const provider = new FallbackLLMProvider({ primary });
+    for await (const chunk of provider.chat({ messages: [] })) {
+      expect(chunk.delta).toBe('a');
+      break;
+    }
+    expect(released).toBe(true);
+  });
+
   it('falls back in generate() and rethrows when no fallback is configured', async () => {
     const primary = stubProvider('primary', { generateError: new Error('down') });
     const fallback = stubProvider('fallback', { generateText: 'recovered' });

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import type { Tool, ToolResult } from '@personal-ai/tools';
+import type { Tool, ToolContext, ToolResult } from '@personal-ai/tools';
 
 /**
  * system.status：服务器健康巡检（L0 只读）。
@@ -7,19 +7,47 @@ import type { Tool, ToolResult } from '@personal-ai/tools';
  * 供定时任务自主巡检与"看看服务器状态"类问题使用（JARVIS 主动监控第一步）。
  */
 
-export interface StatusRunner {
-  (script: string): Promise<{ stdout: string; stderr: string; exitCode: number }>;
-}
-
-export function defaultStatusRunner(script: string): Promise<{
+export interface StatusRunResult {
   stdout: string;
   stderr: string;
   exitCode: number;
-}> {
+  /** 超时或被取消时终止了整个进程组。 */
+  timedOut?: boolean;
+}
+
+export interface StatusRunner {
+  (script: string, options: { timeoutMs: number; signal: AbortSignal }): Promise<StatusRunResult>;
+}
+
+/** 巡检脚本自身的超时（小于工具 timeoutMs，留出返回可读结果的余量）。 */
+export const STATUS_SCRIPT_TIMEOUT_MS = 25_000;
+
+/**
+ * 交给巡检脚本的最小环境变量集合。
+ * 不透传 process.env：那会把 OPENROUTER_API_KEY / DATABASE_URL / HOOK_SECRET
+ * 等全部交给 `/bin/bash -lc` 及其所有子命令，脚本一旦被改动即成为密钥外泄面。
+ * 巡检只需要 df/free/cat/docker，PATH + 语言/HOME 足够。
+ */
+export function minimalStatusEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return {
+    PATH: env.PATH ?? '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+    ...(env.HOME !== undefined ? { HOME: env.HOME } : {}),
+    ...(env.LANG !== undefined ? { LANG: env.LANG } : {}),
+    ...(env.TZ !== undefined ? { TZ: env.TZ } : {}),
+  };
+}
+
+export function defaultStatusRunner(
+  script: string,
+  options: { timeoutMs: number; signal: AbortSignal },
+): Promise<StatusRunResult> {
   return new Promise((resolve, reject) => {
+    // detached=true：bash 自成进程组，超时/取消时对整个进程组发信号，
+    // 保证 docker ps 等子命令不会成为孤儿继续跑（同 server-shell.ts 的 kill-tree）。
     const child = spawn('/bin/bash', ['-lc', script], {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: process.env,
+      env: minimalStatusEnv(),
+      detached: process.platform !== 'win32',
     });
     let stdout = '';
     let stderr = '';
@@ -29,9 +57,35 @@ export function defaultStatusRunner(script: string): Promise<{
     child.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk.toString('utf8');
     });
+    const killTree = (signal: NodeJS.Signals): void => {
+      if (!child.pid) return;
+      try {
+        if (process.platform === 'win32') {
+          child.kill(signal);
+        } else {
+          // 负 PID = 整个进程组（Linux/容器）
+          process.kill(-child.pid, signal);
+        }
+      } catch {
+        child.kill(signal);
+      }
+    };
+    const onAbort = (): void => {
+      killTree('SIGTERM');
+      // 2 秒宽限后强杀，避免个别进程不响应 SIGTERM
+      const killer = setTimeout(() => killTree('SIGKILL'), 2000);
+      killer.unref?.();
+    };
+    if (options.signal.aborted) onAbort();
+    else options.signal.addEventListener('abort', onAbort, { once: true });
     child.on('error', reject);
-    child.on('close', (code) => {
-      resolve({ stdout, stderr, exitCode: code ?? 1 });
+    const timer = setTimeout(onAbort, options.timeoutMs);
+    timer.unref?.();
+    child.on('close', (code, signal) => {
+      clearTimeout(timer);
+      options.signal.removeEventListener('abort', onAbort);
+      const timedOut = signal === 'SIGTERM' || signal === 'SIGKILL';
+      resolve({ stdout, stderr, exitCode: timedOut ? 124 : (code ?? 1), timedOut });
     });
   });
 }
@@ -152,9 +206,24 @@ export function createSystemStatusTool(options: SystemStatusToolOptions = {}): T
     },
     permissionLevel: 0,
     timeoutMs: 30_000,
-    async execute(): Promise<ToolResult> {
+    async execute(_input: unknown, context: ToolContext): Promise<ToolResult> {
+      // 上层 runToolWithTimeout 的 signal 必须传下去：不消费 signal 的话
+      // "超时/取消"只是上层放弃等待，bash 进程仍在跑（P1-5）。
+      const controller = new AbortController();
+      const onParentAbort = (): void => controller.abort();
+      if (context.signal?.aborted) onParentAbort();
+      else context.signal?.addEventListener('abort', onParentAbort, { once: true });
       try {
-        const { stdout, stderr } = await runner(STATUS_SCRIPT);
+        const { stdout, stderr, timedOut } = await runner(STATUS_SCRIPT, {
+          timeoutMs: STATUS_SCRIPT_TIMEOUT_MS,
+          signal: controller.signal,
+        });
+        if (timedOut && !stdout.trim()) {
+          return {
+            ok: false,
+            error: `system.status 巡检超过 ${Math.round(STATUS_SCRIPT_TIMEOUT_MS / 1000)} 秒未完成，已终止进程树`,
+          };
+        }
         const status = parseSystemStatus(stdout || stderr);
         return { ok: true, data: status };
       } catch (error) {
@@ -162,6 +231,10 @@ export function createSystemStatusTool(options: SystemStatusToolOptions = {}): T
           ok: false,
           error: `system.status 执行失败：${error instanceof Error ? error.message : String(error)}`,
         };
+      } finally {
+        context.signal?.removeEventListener('abort', onParentAbort);
+        // 无论如何都终止子进程组（正常结束时 close 已清理，abort 幂等）。
+        controller.abort();
       }
     },
   };

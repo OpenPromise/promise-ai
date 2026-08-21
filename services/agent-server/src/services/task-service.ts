@@ -16,6 +16,8 @@ export interface TaskServiceDeps {
   /** 事件时间线：任务完成/失败留痕。 */
   timeline?: TimelineStore;
   tickIntervalMs?: number;
+  /** 同一 tick 内并发执行的到期任务上限（默认 2）；其余排队。 */
+  maxConcurrentRuns?: number;
 }
 
 /** 任务一次运行的结果，用于推送给桌面端（通知闭环）。 */
@@ -34,6 +36,34 @@ export interface TaskRunEvent {
 export const TICK_INTERVAL_MS = 30_000;
 /** 无人值守任务的工具调用预算（防跑飞，OpenClaw tool_budget_exceeded 思路）。 */
 export const TASK_TOOL_BUDGET = 10;
+/**
+ * 同一 tick 内并发执行的到期任务上限（其余排队）。
+ * 之前是串行 await：一个跑十分钟的任务（server.shell 长命令 / coding.run）会把
+ * 同 tick 内其它到期任务全部推迟——队头阻塞。上限 2 与 engineer-task-runner 一致，
+ * 既消除队头阻塞，又不至于让若干个重任务同时抢服务器资源。
+ */
+export const MAX_CONCURRENT_TASK_RUNS = 2;
+
+/**
+ * 有界并发执行：最多 limit 个 worker 从同一份列表取任务，其余排队。
+ * 单项抛错不影响其它项（run 内部自行兜底）。
+ */
+async function runWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  run: (item: T) => Promise<void>,
+): Promise<void> {
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    while (cursor < items.length) {
+      const item = items[cursor]!;
+      cursor += 1;
+      await run(item);
+    }
+  };
+  const workers = Array.from({ length: Math.min(Math.max(1, limit), items.length) }, worker);
+  await Promise.all(workers);
+}
 
 /**
  * A task is due when the next occurrence after its creation (or last run) has
@@ -67,6 +97,7 @@ export class TaskService {
   readonly #systemPrompt: () => Promise<string>;
   readonly #timeline?: TimelineStore;
   readonly #tickIntervalMs: number;
+  readonly #maxConcurrentRuns: number;
   readonly #listeners = new Set<(event: TaskRunEvent) => void>();
   #timer: NodeJS.Timeout | undefined;
   #ticking = false;
@@ -78,6 +109,10 @@ export class TaskService {
     this.#systemPrompt = deps.systemPrompt;
     this.#timeline = deps.timeline;
     this.#tickIntervalMs = deps.tickIntervalMs ?? TICK_INTERVAL_MS;
+    this.#maxConcurrentRuns = Math.max(
+      1,
+      Math.floor(deps.maxConcurrentRuns ?? MAX_CONCURRENT_TASK_RUNS),
+    );
   }
 
   start(): void {
@@ -113,11 +148,18 @@ export class TaskService {
     try {
       const tasks = await this.#tasks.listTasks();
       const now = new Date();
-      for (const task of tasks) {
-        if (task.enabled && isTaskDue(task, now)) {
+      const due = tasks.filter((task) => task.enabled && isTaskDue(task, now));
+      // 有界并发 + 单任务兜底：一个慢任务不再拖垮同 tick 的其它任务，
+      // 单任务抛错（含 getSession 的数据库抖动）也不会终止整个 tick。
+      await runWithConcurrency(due, this.#maxConcurrentRuns, async (task) => {
+        try {
           await this.#runTask(task);
+        } catch (error) {
+          console.error(
+            `[tasks] task ${task.id}（${task.name}）run failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
         }
-      }
+      });
     } catch (error) {
       console.error(
         `[tasks] scheduler tick failed: ${error instanceof Error ? error.message : String(error)}`,

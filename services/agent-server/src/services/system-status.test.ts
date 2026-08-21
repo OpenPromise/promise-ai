@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createSystemStatusTool, parseSystemStatus } from './system-status.js';
+import { createSystemStatusTool, minimalStatusEnv, parseSystemStatus } from './system-status.js';
 
 const HEALTHY_OUTPUT = [
   'DISK_START',
@@ -68,5 +68,65 @@ describe('system.status 工具', () => {
     const result = await tool.execute({}, { sessionId: 's1' });
     expect(result.ok).toBe(false);
     expect(result.error).toContain('bash not found');
+  });
+
+  it('把 context.signal 透传给 runner，上层取消能真正中断子进程', async () => {
+    let observed: AbortSignal | undefined;
+    const runner = vi.fn(
+      async (_script: string, options: { timeoutMs: number; signal: AbortSignal }) => {
+        observed = options.signal;
+        return { stdout: HEALTHY_OUTPUT, stderr: '', exitCode: 0 };
+      },
+    );
+    const tool = createSystemStatusTool({ runner });
+    const parent = new AbortController();
+    const result = await tool.execute({}, { sessionId: 's1', signal: parent.signal });
+    expect(result.ok).toBe(true);
+    expect(observed).toBeDefined();
+    expect(runner.mock.calls[0]?.[1]?.timeoutMs).toBeGreaterThan(0);
+    // execute 返回后子进程 signal 已 abort（幂等清理，不留孤儿）
+    expect(observed?.aborted).toBe(true);
+  });
+
+  it('execute 前父 signal 已取消时，runner 收到的 signal 也是已取消的', async () => {
+    let aborted: boolean | undefined;
+    const runner = vi.fn(
+      async (_script: string, options: { timeoutMs: number; signal: AbortSignal }) => {
+        aborted = options.signal.aborted;
+        return { stdout: '', stderr: '', exitCode: 124, timedOut: true };
+      },
+    );
+    const tool = createSystemStatusTool({ runner });
+    const parent = new AbortController();
+    parent.abort();
+    const result = await tool.execute({}, { sessionId: 's1', signal: parent.signal });
+    expect(aborted).toBe(true);
+    // 无任何输出 + timedOut：报告终止而不是解析出一份全 0 的假状态
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('终止进程树');
+  });
+});
+
+describe('minimalStatusEnv', () => {
+  it('只保留 PATH/HOME/LANG/TZ，不透传密钥与数据库连接串', () => {
+    const env = minimalStatusEnv({
+      PATH: '/usr/bin',
+      HOME: '/root',
+      LANG: 'C.UTF-8',
+      TZ: 'Asia/Shanghai',
+      DATABASE_URL: 'postgres://user:pass@db/app',
+      OPENROUTER_API_KEY: 'sk-secret',
+      HOOK_SECRET: 'hook-secret',
+    });
+    expect(env).toEqual({
+      PATH: '/usr/bin',
+      HOME: '/root',
+      LANG: 'C.UTF-8',
+      TZ: 'Asia/Shanghai',
+    });
+  });
+
+  it('缺少 PATH 时给出可用默认值', () => {
+    expect(minimalStatusEnv({}).PATH).toContain('/usr/bin');
   });
 });

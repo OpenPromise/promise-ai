@@ -300,6 +300,128 @@ describe('TaskService', () => {
     expect(runs[0]?.error).toContain('boom');
   });
 
+  it('慢任务不阻塞同 tick 的其它到期任务（有界并发，不再队头阻塞）', async () => {
+    const tasks = new InMemoryTaskStore();
+    const sessions = new InMemorySessionStore();
+    const slowSession = await sessions.createSession({ systemPrompt: 'test' });
+    const fastSessionA = await sessions.createSession({ systemPrompt: 'test' });
+    const fastSessionB = await sessions.createSession({ systemPrompt: 'test' });
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    for (const [name, sessionId] of [
+      ['slow', slowSession.id],
+      ['fast-a', fastSessionA.id],
+      ['fast-b', fastSessionB.id],
+    ] as const) {
+      await tasks.createTask({ name, schedule: '*/1 * * * *', action: name, sessionId });
+    }
+    for (const task of await tasks.listTasks()) {
+      await tasks.updateTask(task.id, {
+        lastRunAt: new Date(Date.now() - 60_000).toISOString(),
+      });
+    }
+
+    const runChat = vi.fn(function ({ sessionId }: { sessionId: string }) {
+      return (async function* () {
+        if (sessionId === slowSession.id) await gate;
+        yield {
+          type: 'chat.done',
+          timestamp: new Date().toISOString(),
+          sessionId,
+          requestId: 'r1',
+          payload: { text: 'ok' },
+        };
+      })();
+    });
+    const service = new TaskService({
+      tasks,
+      sessions,
+      conversation: { runChat } as unknown as ConversationService,
+      systemPrompt: async () => 'test prompt',
+      tickIntervalMs: 30,
+    });
+
+    const tick = service.checkNow();
+    // 慢任务仍卡在 gate 上，但并发上限允许后续任务先跑完（串行实现下这里会超时）
+    const deadline = Date.now() + 3000;
+    while ((await tasks.listRuns()).length < 2 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const finishedEarly = await tasks.listRuns();
+    expect(finishedEarly.length).toBeGreaterThanOrEqual(2);
+
+    release?.();
+    await tick;
+    service.stop();
+
+    const runs = await tasks.listRuns();
+    expect(runs).toHaveLength(3);
+    expect(runs.every((run) => run.status === 'success')).toBe(true);
+  });
+
+  it('单任务抛错（数据库抖动等）不再终止整个 tick', async () => {
+    const tasks = new InMemoryTaskStore();
+    const inner = new InMemorySessionStore();
+    const healthy = await inner.createSession({ systemPrompt: 'test' });
+    // 第一个任务的会话读取抛非 SessionNotFoundError（模拟数据库临时故障）
+    const sessions = {
+      createSession: (init: Parameters<InMemorySessionStore['createSession']>[0]) =>
+        inner.createSession(init),
+      getSession: async (id: string) => {
+        if (id === 'flaky-session') throw new Error('connection terminated unexpectedly');
+        return inner.getSession(id);
+      },
+    } as unknown as InMemorySessionStore;
+
+    await tasks.createTask({
+      name: 'broken',
+      schedule: '*/1 * * * *',
+      action: '会抛错',
+      sessionId: 'flaky-session',
+    });
+    await tasks.createTask({
+      name: 'healthy',
+      schedule: '*/1 * * * *',
+      action: '正常任务',
+      sessionId: healthy.id,
+    });
+    for (const task of await tasks.listTasks()) {
+      await tasks.updateTask(task.id, {
+        lastRunAt: new Date(Date.now() - 60_000).toISOString(),
+      });
+    }
+
+    const runChat = vi.fn(async function* ({ sessionId }: { sessionId: string }) {
+      yield {
+        type: 'chat.done',
+        timestamp: new Date().toISOString(),
+        sessionId,
+        requestId: 'r1',
+        payload: { text: '正常完成' },
+      };
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const service = new TaskService({
+      tasks,
+      sessions,
+      conversation: { runChat } as unknown as ConversationService,
+      systemPrompt: async () => 'test prompt',
+      tickIntervalMs: 30,
+      // 并发 1：确保测的是"单任务失败被就地兜住"，而不是靠并发绕过
+      maxConcurrentRuns: 1,
+    });
+    await service.checkNow();
+    service.stop();
+
+    const runs = await tasks.listRuns();
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.status).toBe('success');
+    expect(runs[0]?.output).toBe('正常完成');
+  });
+
   it('denies L2 tools in headless mode without prompting', async () => {
     const registry = new ToolRegistry();
     let executed = 0;

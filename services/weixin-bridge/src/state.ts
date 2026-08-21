@@ -21,6 +21,13 @@ export interface BridgeState {
 export class StateStore {
   readonly #file: string;
   #state: BridgeState;
+  /**
+   * 写入串行化队列：save() 之间共用同一个 `.tmp` 文件，两次并发写会互相覆盖
+   * 半成品，先 rename 的那次可能把另一次尚未写完的内容改成正式文件（状态损坏，
+   * 严重时 token 丢失需重新扫码）。用一条 promise 链把写入排成队即可，
+   * 无需引入锁库。
+   */
+  #writeQueue: Promise<void> = Promise.resolve();
 
   constructor(file: string) {
     this.#file = file;
@@ -58,6 +65,16 @@ export class StateStore {
   }
 
   async save(): Promise<void> {
+    // 排到队尾：前一次写入（含 rename）完成后才开始，失败也不阻塞后续写入。
+    const run = this.#writeQueue.then(
+      () => this.#writeNow(),
+      () => this.#writeNow(),
+    );
+    this.#writeQueue = run.catch(() => {});
+    await run;
+  }
+
+  async #writeNow(): Promise<void> {
     await mkdir(path.dirname(this.#file), { recursive: true });
     const tmp = `${this.#file}.tmp`;
     await writeFile(tmp, JSON.stringify(this.#state, null, 2), 'utf8');

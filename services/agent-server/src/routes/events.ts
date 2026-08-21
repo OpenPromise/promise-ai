@@ -77,6 +77,12 @@ export function registerEventRoutes(app: FastifyInstance, deps: EventRouteDeps):
   // 再广播到所有连接——避免"每个连接各自订阅"导致同一事件被重复入缓冲、id 发散。
   const eventBuffer = new SseEventBuffer();
   const connections = new Set<import('node:http').ServerResponse>();
+  /**
+   * 重启完成通知只广播一次。必须放在路由回调外层：放在回调内是每连接一份局部变量，
+   * 永远是 false，于是每个新连接都会再广播一次 boot，已在线的客户端收到 N 份
+   * "云服务器重启完成"（微信侧直接转成文字推送）。晚连接的客户端靠 Last-Event-ID 重放补收。
+   */
+  let bootSent = false;
 
   const broadcast = (event: string, data: unknown, buffered: boolean): void => {
     const base = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -132,7 +138,6 @@ export function registerEventRoutes(app: FastifyInstance, deps: EventRouteDeps):
 
     // 重启完成通知：只有"宿主机真重启"（开机自启）才推送 system.boot，
     // 普通部署/容器重启（宿主机 uptime 很大）不推送。只广播一次，重连客户端靠重放补收。
-    let bootSent = false;
     if (
       !bootSent &&
       shouldEmitBootNotice(deps.processStartedAt, Date.now(), deps.hostBootedRecently)
