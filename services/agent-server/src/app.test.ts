@@ -102,6 +102,9 @@ function makeStubSTT(handlers: TranscriptHandler[] = []): STTProvider {
   };
 }
 
+/** 测试用桌面端 token：/ws/desktop 现在强制鉴权，未配置一律拒绝握手。 */
+const TEST_DESKTOP_TOKEN = 'test-desktop-token';
+
 function build(
   config: AppConfig = testConfig,
   llm: LLMProvider = fakeLLM(),
@@ -111,6 +114,8 @@ function build(
   memory: MemoryStore = new InMemoryMemoryStore(),
   createQwen?: (model: string) => QwenRealtimeClient,
   createTTS: () => TTSProvider = () => stubTTS,
+  /** 传空串模拟"未配置 DESKTOP_TOKEN"。 */
+  desktopToken: string = TEST_DESKTOP_TOKEN,
 ) {
   return buildApp({
     config,
@@ -125,6 +130,7 @@ function build(
     createVoice,
     createTTS,
     createQwen,
+    desktopToken,
   });
 }
 
@@ -313,6 +319,33 @@ describe('agent-server', () => {
       model: 'qwen-test',
       configured: true,
     });
+    // 敏感配置不再出现在无鉴权的 /health（P1-18）
+    expect(body.autoApproveAll).toBeUndefined();
+    expect(body.voiceEnabled).toBeUndefined();
+    expect(body.memory).toBeUndefined();
+  });
+
+  it('/health/detail 需要 token，通过后才返回敏感配置', async () => {
+    const app = build();
+    const denied = await app.inject({ method: 'GET', url: '/health/detail' });
+    expect(denied.statusCode).toBe(401);
+
+    const wrong = await app.inject({
+      method: 'GET',
+      url: '/health/detail',
+      headers: { 'x-health-token': 'nope' },
+    });
+    expect(wrong.statusCode).toBe(401);
+
+    const ok = await app.inject({
+      method: 'GET',
+      url: '/health/detail',
+      headers: { 'x-health-token': TEST_DESKTOP_TOKEN },
+    });
+    expect(ok.statusCode).toBe(200);
+    const body = ok.json();
+    expect(body.autoApproveAll).toBe(false);
+    expect(body.memory).toEqual({ backend: 'memory' });
   });
 
   it('serves the xiaohei welcome page', async () => {
@@ -1785,8 +1818,9 @@ describe('agent-server', () => {
             finishReason: 'tool_calls',
             toolCalls: [
               {
+                // 桌面工具注册名带 desktop. 前缀；线上模型看到的是 sanitize 后的下划线形式
                 id: 'call_move',
-                name: 'filesystem.move',
+                name: 'desktop_filesystem_move',
                 arguments: '{"source":"a.txt","destination":"b.txt"}',
               },
             ],
@@ -1806,7 +1840,9 @@ describe('agent-server', () => {
     try {
       const sessionId = await createSession(app);
 
-      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/desktop`);
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/desktop`, {
+        headers: { 'x-desktop-token': TEST_DESKTOP_TOKEN },
+      });
       await new Promise<void>((resolve, reject) => {
         ws.once('open', () => resolve());
         ws.once('error', reject);
@@ -1845,16 +1881,122 @@ describe('agent-server', () => {
       );
       await waitFor(() => received.some((m) => m.includes('tools.registered')));
 
+      // 桌面工具被服务端强制成 L2 → 需要用户确认后才执行
       const events = await streamChatAndResolve(
         `http://127.0.0.1:${port}/api/sessions/${sessionId}/chat`,
         '把 a.txt 移到 b.txt',
+        async (event) => {
+          if (event.type === 'permission.request') {
+            const request = (event.payload as { request: { requestId: string } }).request;
+            await fetch(`http://127.0.0.1:${port}/api/sessions/${sessionId}/permission`, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ requestId: request.requestId, approved: true }),
+            });
+          }
+        },
       );
+      expect(events.some((event) => event.type === 'permission.request')).toBe(true);
 
       const toolResult = events.find((event) => event.type === 'agent.tool_result');
       const result = (toolResult?.payload as { result: { data: { moved: string } } }).result;
       expect(result.data.moved).toBe('a.txt -> b.txt');
       // The tool result reached the second LLM turn.
       expect(recordedInputs[1]?.messages.at(-1)?.content).toContain('a.txt -> b.txt');
+      ws.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('/ws/desktop 拒绝无 token / 错误 token 的握手', async () => {
+    const app = build();
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    const { port } = app.server.address() as AddressInfo;
+
+    const expectRejected = async (headers: Record<string, string>): Promise<void> => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/desktop`, { headers });
+      const outcome = await new Promise<string>((resolve) => {
+        ws.once('open', () => resolve('open'));
+        ws.once('error', (error) => resolve(error.message));
+      });
+      expect(outcome).not.toBe('open');
+      ws.close();
+    };
+
+    try {
+      await expectRejected({});
+      await expectRejected({ 'x-desktop-token': 'wrong-token' });
+      // 长度不同也不能因为 timingSafeEqual 抛错，必须是普通拒绝
+      await expectRejected({ 'x-desktop-token': `${TEST_DESKTOP_TOKEN}extra` });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('未配置 DESKTOP_TOKEN 时 /ws/desktop 直接关闭（不裸奔）', async () => {
+    const app = build(
+      testConfig,
+      fakeLLM(),
+      undefined,
+      new ToolRegistry(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      '',
+    );
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    const { port } = app.server.address() as AddressInfo;
+
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/desktop`, {
+        headers: { 'x-desktop-token': TEST_DESKTOP_TOKEN },
+      });
+      const outcome = await new Promise<string>((resolve) => {
+        ws.once('open', () => resolve('open'));
+        ws.once('error', (error) => resolve(error.message));
+      });
+      expect(outcome).not.toBe('open');
+      ws.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('/ws/desktop 接受 ?token= 查询参数（无法加头的客户端）', async () => {
+    const registry = new ToolRegistry();
+    const app = build(testConfig, fakeLLM(), undefined, registry);
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    const { port } = app.server.address() as AddressInfo;
+
+    try {
+      const ws = new WebSocket(
+        `ws://127.0.0.1:${port}/ws/desktop?token=${TEST_DESKTOP_TOKEN}`,
+      );
+      const received: string[] = [];
+      ws.on('message', (data) => received.push(data.toString()));
+      await new Promise<void>((resolve, reject) => {
+        ws.once('open', () => resolve());
+        ws.once('error', reject);
+      });
+      ws.send(
+        JSON.stringify({
+          type: 'hello',
+          tools: [
+            {
+              name: 'filesystem.read',
+              description: '读取文件',
+              inputSchema: { type: 'object', properties: {} },
+              permissionLevel: 0,
+            },
+          ],
+        }),
+      );
+      await waitFor(() => received.some((m) => m.includes('tools.registered')));
+      // 命名空间前缀 + 服务端强制 L2（客户端自报 L0 被忽略）
+      expect(registry.has('desktop.filesystem.read')).toBe(true);
+      expect(registry.get('desktop.filesystem.read')?.permissionLevel).toBe(2);
       ws.close();
     } finally {
       await app.close();

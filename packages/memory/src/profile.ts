@@ -388,47 +388,56 @@ export class PostgresProfileStore implements ProfileStore {
     userId: string,
     entry: Omit<ProfileEntry, 'updatedAt'>,
   ): Promise<UserProfile> {
-    return this.#runExclusive(userId, async () => {
-      const now = new Date().toISOString();
-      const existing = await this.getProfile(userId);
-      const oldEntry = existing?.entries.find((item) => item.key === entry.key);
-      const entries = (existing?.entries ?? []).filter((item) => item.key !== entry.key);
-      entries.push({ ...entry, updatedAt: now });
-      entries.sort((a, b) => a.key.localeCompare(b.key));
-      await this.#pool.query(
-        `INSERT INTO user_profiles (user_id, entries, updated_at)
-         VALUES ($1, $2::jsonb, $3)
-         ON CONFLICT (user_id) DO UPDATE SET entries = $2::jsonb, updated_at = $3`,
-        [userId, JSON.stringify(entries), now],
-      );
-      await this.#recordDiff(userId, oldEntry, entry);
-      return { userId, entries, updatedAt: now };
-    });
+    return this.#runExclusive(userId, () => this.#upsertEntryInner(userId, entry));
   }
 
   async removeEntry(userId: string, key: string): Promise<UserProfile> {
-    return this.#runExclusive(userId, async () => {
-      const now = new Date().toISOString();
-      const existing = await this.getProfile(userId);
-      const oldEntry = existing?.entries.find((item) => item.key === key);
-      const entries = (existing?.entries ?? []).filter((item) => item.key !== key);
-      await this.#pool.query(
-        `INSERT INTO user_profiles (user_id, entries, updated_at)
-         VALUES ($1, $2::jsonb, $3)
-         ON CONFLICT (user_id) DO UPDATE SET entries = $2::jsonb, updated_at = $3`,
-        [userId, JSON.stringify(entries), now],
-      );
-      if (oldEntry) {
-        await this.#record(userId, {
-          userId,
-          key,
-          category: oldEntry.category,
-          event: 'DELETE',
-          oldValue: oldEntry.value,
-        });
-      }
-      return { userId, entries, updatedAt: now };
-    });
+    return this.#runExclusive(userId, () => this.#removeEntryInner(userId, key));
+  }
+
+  /** 无锁核心：只允许在 #runExclusive(userId) 临界区内调用。 */
+  async #upsertEntryInner(
+    userId: string,
+    entry: Omit<ProfileEntry, 'updatedAt'>,
+  ): Promise<UserProfile> {
+    const now = new Date().toISOString();
+    const existing = await this.getProfile(userId);
+    const oldEntry = existing?.entries.find((item) => item.key === entry.key);
+    const entries = (existing?.entries ?? []).filter((item) => item.key !== entry.key);
+    entries.push({ ...entry, updatedAt: now });
+    entries.sort((a, b) => a.key.localeCompare(b.key));
+    await this.#pool.query(
+      `INSERT INTO user_profiles (user_id, entries, updated_at)
+       VALUES ($1, $2::jsonb, $3)
+       ON CONFLICT (user_id) DO UPDATE SET entries = $2::jsonb, updated_at = $3`,
+      [userId, JSON.stringify(entries), now],
+    );
+    await this.#recordDiff(userId, oldEntry, entry);
+    return { userId, entries, updatedAt: now };
+  }
+
+  /** 无锁核心：只允许在 #runExclusive(userId) 临界区内调用。 */
+  async #removeEntryInner(userId: string, key: string): Promise<UserProfile> {
+    const now = new Date().toISOString();
+    const existing = await this.getProfile(userId);
+    const oldEntry = existing?.entries.find((item) => item.key === key);
+    const entries = (existing?.entries ?? []).filter((item) => item.key !== key);
+    await this.#pool.query(
+      `INSERT INTO user_profiles (user_id, entries, updated_at)
+       VALUES ($1, $2::jsonb, $3)
+       ON CONFLICT (user_id) DO UPDATE SET entries = $2::jsonb, updated_at = $3`,
+      [userId, JSON.stringify(entries), now],
+    );
+    if (oldEntry) {
+      await this.#record(userId, {
+        userId,
+        key,
+        category: oldEntry.category,
+        event: 'DELETE',
+        oldValue: oldEntry.value,
+      });
+    }
+    return { userId, entries, updatedAt: now };
   }
 
   async replaceAll(
@@ -499,24 +508,32 @@ export class PostgresProfileStore implements ProfileStore {
     key: string,
     options: { toEventId?: string } = {},
   ): Promise<UserProfile> {
-    const history = await this.listHistory(userId, { key });
-    const target = resolveRollbackTarget(history, options.toEventId);
-    if (!target) {
-      const profile = await this.getProfile(userId);
-      return profile ?? { userId, entries: [], updatedAt: new Date().toISOString() };
-    }
-    if ('deleted' in target) {
-      return this.removeEntry(userId, key);
-    }
-    return this.upsertEntry(userId, {
-      key,
-      value: target.value,
-      category: target.category,
+    // 读历史与写回必须与 upsertEntry/removeEntry 互斥（同一 userId 锁内完成），
+    // 否则回滚会基于过期历史把并发写入的新值覆盖掉（TOCTOU）。
+    return this.#runExclusive(userId, async () => {
+      const history = await this.listHistory(userId, { key });
+      const target = resolveRollbackTarget(history, options.toEventId);
+      if (!target) {
+        const profile = await this.getProfile(userId);
+        return profile ?? { userId, entries: [], updatedAt: new Date().toISOString() };
+      }
+      if ('deleted' in target) {
+        return this.#removeEntryInner(userId, key);
+      }
+      return this.#upsertEntryInner(userId, {
+        key,
+        value: target.value,
+        category: target.category,
+      });
     });
   }
 
   async clear(userId: string): Promise<void> {
-    await this.#pool.query('DELETE FROM user_profiles WHERE user_id = $1', [userId]);
+    // 与写路径互斥，且与 InMemoryProfileStore.clear 语义对齐：事件表一并清空
+    return this.#runExclusive(userId, async () => {
+      await this.#pool.query('DELETE FROM profile_events WHERE user_id = $1', [userId]);
+      await this.#pool.query('DELETE FROM user_profiles WHERE user_id = $1', [userId]);
+    });
   }
 
   async close(): Promise<void> {

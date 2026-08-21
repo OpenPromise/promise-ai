@@ -416,6 +416,7 @@ const app = buildApp({
   subscribeEngineerEvents: (listener) => engineerTaskRunner.onEvent(listener),
   hooks: hookService,
   hookSecret: process.env.HOOK_SECRET,
+  desktopToken: process.env.DESKTOP_TOKEN,
   processStartedAt,
   hostBootedRecently,
   createVoice,

@@ -57,6 +57,8 @@ const MEMORY_LIMIT = 3;
 const COMPACTION_THRESHOLD = 60;
 /** Most recent messages kept verbatim after compaction (must cover the last tool round). */
 const KEEP_RECENT_MESSAGES = 24;
+/** 两次压缩之间的冷却期：防止高频对话每轮都触发 LLM 摘要（长会话仍可持续压缩）。 */
+const COMPACTION_COOLDOWN_MS = 5 * 60 * 1000;
 
 const MEMORY_PROMPT_PREFIX = '以下是关于用户的长期记忆（可能过时，如有冲突以用户当前的说法为准）：';
 const GOAL_PROMPT_PREFIX = '以下是用户的长期目标（goal，请持续关注并在对话中主动推进）：';
@@ -815,7 +817,15 @@ export class ConversationService {
    */
   async #compactIfNeeded(session: Session, signal?: AbortSignal): Promise<Session> {
     if (session.messages.length <= COMPACTION_THRESHOLD) return session;
-    if (session.metadata?.compacted === true) return session;
+    // 冷却期防抖（替代旧的"每个会话只压一次"布尔标记）：超阈值且距上次
+    // 压缩超过冷却期就再次压缩；摘要可级联（上次摘要作为最早历史一起喂入）。
+    const lastCompactedAt =
+      typeof session.metadata?.compactedAt === 'string'
+        ? Date.parse(session.metadata.compactedAt)
+        : 0;
+    if (Number.isFinite(lastCompactedAt) && Date.now() - lastCompactedAt < COMPACTION_COOLDOWN_MS) {
+      return session;
+    }
 
     const oldMessages = session.messages.slice(0, -KEEP_RECENT_MESSAGES);
     const recentMessages = session.messages.slice(-KEEP_RECENT_MESSAGES);
@@ -843,11 +853,10 @@ export class ConversationService {
       };
       await this.#store.updateSession(session.id, {
         messages: [summaryMessage, ...recentMessages],
-        metadata: {
-          compacted: true,
-          compactedAt: new Date().toISOString(),
-          compactedCount: oldMessages.length,
-        },
+        // 条件替换护栏：压缩期间若有其它通道追加消息（消息数变化），
+        // 跳过本次写回、下轮再压，避免整列替换抹掉并发新增。
+        expectedMessageCount: session.messages.length,
+        metadata: { compactedAt: new Date().toISOString(), compactedCount: oldMessages.length },
       });
       return this.#store.getSession(session.id);
     } catch (error) {

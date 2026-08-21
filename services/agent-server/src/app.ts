@@ -64,6 +64,11 @@ export interface AppDeps {
   hooks?: HookService;
   /** webhook 共享密钥（可选）。 */
   hookSecret?: string;
+  /**
+   * 桌面端共享密钥（DESKTOP_TOKEN）：/ws/desktop 握手校验，同时作为
+   * /health/detail 的访问令牌。未配置时桌面桥接拒绝所有连接。
+   */
+  desktopToken?: string;
   /** 进程启动时间戳：用于重启完成通知（开机自启闭环）。 */
   processStartedAt?: number;
   /** 宿主机是否刚开机（< 10 分钟）；区分真重启与部署/容器重启。 */
@@ -101,6 +106,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     config: deps.config,
     llm: deps.llm,
     memoryBackend: deps.memoryBackend,
+    ...(deps.desktopToken ? { detailToken: deps.desktopToken } : {}),
   });
   // 小黑欢迎界面：http://<host>:3000/xiaohei
   registerXiaoheiRoutes(app);
@@ -129,7 +135,10 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   // websocket routes so its `onRoute` hook rewrites the handlers.
   app.register(async (instance) => {
     await instance.register(websocket, { options: { maxPayload: 1024 * 1024 } });
-    registerDesktopRoutes(instance, { registry: deps.tools });
+    registerDesktopRoutes(instance, {
+      registry: deps.tools,
+      ...(deps.desktopToken ? { token: deps.desktopToken } : {}),
+    });
     // 语音总开关：VOICE_ENABLED=false 时只保留文字聊天（桌面端语音会断开）
     if (deps.config.voiceEnabled) {
       if (deps.config.qwenRealtime.configured && deps.createQwen) {

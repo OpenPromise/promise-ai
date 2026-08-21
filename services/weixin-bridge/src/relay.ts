@@ -16,6 +16,8 @@ export interface RelayOptions {
   vision?: { apiKey?: string; model?: string; fetchImpl?: typeof fetch };
   /** 文件库目录：微信发来的文件自动保存到这里，供按名发送。 */
   filesDir?: string;
+  /** 单轮对话总上限（毫秒）；默认 5 分钟，可用 WEIXIN_CHAT_TIMEOUT_MS 覆盖。 */
+  chatTimeoutMs?: number;
   log?: (message: string) => void;
   fetchImpl?: typeof fetch;
 }
@@ -24,6 +26,18 @@ const LONG_POLL_TIMEOUT_MS = 35_000;
 const MAX_CONSECUTIVE_FAILURES = 3;
 const RETRY_DELAY_MS = 2_000;
 const BACKOFF_DELAY_MS = 30_000;
+
+/**
+ * SSE 单次读取的空闲上限：agent-server 的事件流每 15s 发一个 keep-alive 注释行，
+ * 聊天流则持续产出 token，所以 90s 无任何字节只可能是连接已死（TCP 半开 / 容器被杀）。
+ */
+const SSE_IDLE_TIMEOUT_MS = 90_000;
+/**
+ * 单轮微信对话的总上限。coding.run / engineer.delegate 这类长任务工具会跑几分钟
+ * （coding.run 自身上限 60 分钟，但派单已改异步立即返回），5 分钟足够覆盖同步部分；
+ * 超时后必须让 chatOnce 结束、inflightSessions 释放，否则该会话永久失联。
+ */
+const CHAT_TOTAL_TIMEOUT_MS = 5 * 60_000;
 
 /** 提前推送分段策略常量（见 takeEarlySegment）。 */
 const PARAGRAPH_SEPARATOR = '\n\n';
@@ -207,7 +221,59 @@ export async function chatOnce(
     onLongTaskStarted?: (toolName: string) => Promise<void>;
     /** 长任务工具执行完成时回调（进度节点：完成后随 chat.done 发完整报告）。 */
     onLongTaskFinished?: (toolName: string) => Promise<void>;
+    /** 单轮对话总上限（默认 5 分钟）；超时后中断 SSE 并返回错误。 */
+    totalTimeoutMs?: number;
   } = {},
+): Promise<ChatReply> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  // 真实超时：自己持有 AbortController 并透传给 fetch 与 consumeSse，
+  // 超时/外部取消都会真正断开 HTTP 连接，函数必定返回，
+  // 调用方的 inflightSessions 才能释放（否则该会话永久"处理中"）。
+  const totalTimeoutMs = options.totalTimeoutMs ?? CHAT_TOTAL_TIMEOUT_MS;
+  const controller = new AbortController();
+  let timedOut = false;
+  const totalTimer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, totalTimeoutMs);
+  totalTimer.unref?.();
+  const onExternalAbort = (): void => controller.abort();
+  options.signal?.addEventListener('abort', onExternalAbort, { once: true });
+  if (options.signal?.aborted) controller.abort();
+
+  try {
+    return await chatOnceInner(agentUrl, sessionId, userMessage, options, controller.signal);
+  } catch (error) {
+    if (timedOut) {
+      return { text: '', error: `对话超过 ${Math.round(totalTimeoutMs / 60_000)} 分钟未完成，已中断` };
+    }
+    if (controller.signal.aborted) return { text: '', error: '对话已取消' };
+    throw error;
+  } finally {
+    clearTimeout(totalTimer);
+    options.signal?.removeEventListener('abort', onExternalAbort);
+    // 无论正常结束还是异常，都清掉本会话的待授权登记，避免下条消息被误当审批答复。
+    const pending = pendingApprovals.get(sessionId);
+    if (pending) {
+      clearTimeout(pending.timer);
+      pendingApprovals.delete(sessionId);
+    }
+  }
+}
+
+async function chatOnceInner(
+  agentUrl: string,
+  sessionId: string,
+  userMessage: string,
+  options: {
+    fetchImpl?: typeof fetch;
+    log?: (message: string) => void;
+    onPermissionRequest?: (info: { requestId: string; toolName: string }) => void;
+    onSegment?: (segmentText: string) => Promise<void>;
+    onLongTaskStarted?: (toolName: string) => Promise<void>;
+    onLongTaskFinished?: (toolName: string) => Promise<void>;
+  },
+  signal: AbortSignal,
 ): Promise<ChatReply> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const response = await fetchImpl(
@@ -216,7 +282,7 @@ export async function chatOnce(
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ message: userMessage, requestId: randomUUID() }),
-      signal: options.signal,
+      signal,
     },
   );
   if (!response.ok) {
@@ -354,14 +420,29 @@ export async function chatOnce(
 export async function consumeSse(
   response: Response,
   onLine: (line: string) => void | Promise<void>,
+  options: {
+    /** 单次读取的空闲上限：超过该时长没有任何数据视为连接已死（默认 90s）。 */
+    idleTimeoutMs?: number;
+  } = {},
 ): Promise<void> {
   if (!response.body) return;
+  const idleTimeoutMs = options.idleTimeoutMs ?? SSE_IDLE_TIMEOUT_MS;
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      // 空闲护栏：TCP 半开（服务端进程被杀 / 网络中断）时 read() 可能永不 resolve，
+      // 之前会让微信侧永久失联。两端都会发心跳（chat/events 流每 15s 一个注释行），
+      // 所以正常连接不会触发。
+      const { done, value } = await withTimeout(
+        reader.read(),
+        idleTimeoutMs,
+        'SSE 连接空闲超时',
+      ).catch(async (error: unknown) => {
+        await reader.cancel().catch(() => {});
+        throw error;
+      });
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
@@ -369,7 +450,12 @@ export async function consumeSse(
       for (const line of lines) await onLine(line);
     }
   } finally {
-    reader.releaseLock();
+    // cancel 之后 releaseLock 可能因残留读请求抛错，清理不该掩盖真实错误。
+    try {
+      reader.releaseLock();
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -549,6 +635,7 @@ async function handleInboundMessage(msg: WeixinMessage, options: RelayOptions): 
       const reply = await chatOnce(agentUrl, sessionId, userMessage, {
         fetchImpl,
         log,
+        ...(options.chatTimeoutMs ? { totalTimeoutMs: options.chatTimeoutMs } : {}),
         onPermissionRequest: (info) => {
           void client
             .sendMessage(
@@ -730,14 +817,19 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+/**
+ * 超时护栏：`await Promise.race` 之后再清理定时器。
+ * 之前写成 `try { return Promise.race(...) } finally { clearTimeout(timer) }`，
+ * finally 在返回 Promise 的那一刻就同步执行，定时器立刻被清掉，超时永不触发。
+ */
+export async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => reject(new Error(`${label}（${ms}ms）`)), ms);
     timer.unref?.();
   });
   try {
-    return Promise.race([promise, timeout]);
+    return await Promise.race([promise, timeout]);
   } finally {
     if (timer) clearTimeout(timer);
   }

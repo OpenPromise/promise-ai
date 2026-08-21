@@ -35,6 +35,12 @@ export interface UpdateSessionInput {
   messages?: ChatMessage[];
   /** Merges into the existing metadata (used for compaction bookkeeping). */
   metadata?: Record<string, unknown>;
+  /**
+   * 条件替换护栏（压缩用）：只有当前 messages 数量等于该值时才会整列替换，
+   * 防止压缩的"读→LLM 摘要→写回"窗口里其它通道追加的消息被覆盖。
+   * 不匹配时静默跳过本次写回（保持现状），由调用方下一轮重试。
+   */
+  expectedMessageCount?: number;
 }
 
 export interface SessionStore {
@@ -88,6 +94,13 @@ export class InMemorySessionStore implements SessionStore {
 
   async updateSession(sessionId: string, input: UpdateSessionInput): Promise<Session> {
     const session = await this.getSession(sessionId);
+    // 条件替换护栏：期望消息数不匹配（并发新增/变更）时跳过写回，保持现状
+    if (
+      input.expectedMessageCount !== undefined &&
+      session.messages.length !== input.expectedMessageCount
+    ) {
+      return session;
+    }
     if (input.messages) {
       session.messages = input.messages;
     }

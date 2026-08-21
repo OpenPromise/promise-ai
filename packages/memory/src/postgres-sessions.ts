@@ -134,15 +134,23 @@ export class PostgresSessionStore implements SessionStore {
            metadata = CASE WHEN $3::jsonb IS NULL THEN metadata
                            ELSE COALESCE(metadata, '{}'::jsonb) || $3::jsonb END,
            updated_at = $4
-       WHERE id = $1`,
+       WHERE id = $1
+         AND ($5::int IS NULL OR jsonb_array_length(messages) = $5)`,
       [
         sessionId,
         input.messages ? JSON.stringify(input.messages) : null,
         metadataPatch,
         updatedAt,
+        input.expectedMessageCount ?? null,
       ],
     );
-    if (result.rowCount === 0) throw new SessionNotFoundError(sessionId);
+    if (result.rowCount === 0) {
+      // 0 行可能是"会话不存在"或"条件替换不匹配（并发追加了消息）"：
+      // 前者抛错，后者返回当前状态让调用方下轮重试，不能误报不存在。
+      const current = await this.getSession(sessionId).catch(() => undefined);
+      if (!current) throw new SessionNotFoundError(sessionId);
+      return current;
+    }
     return this.getSession(sessionId);
   }
 

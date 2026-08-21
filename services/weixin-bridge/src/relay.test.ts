@@ -9,6 +9,7 @@ import {
   parseApprovalText,
   runWeixinRelay,
   takeEarlySegment,
+  withTimeout,
 } from './relay.js';
 import type { AccountState } from './state.js';
 
@@ -36,6 +37,42 @@ describe('consumeSse', () => {
       'data: {"a":1}',
       'data: {"b":2}',
     ]);
+  });
+
+  it('空闲超时：长时间无数据视为断开并抛错（不再永久挂住）', async () => {
+    // 永不产出、永不关闭的流：模拟 TCP 半开
+    const stream = new ReadableStream<Uint8Array>({ start() {} });
+    await expect(
+      consumeSse(new Response(stream), () => {}, { idleTimeoutMs: 40 }),
+    ).rejects.toThrow('SSE 连接空闲超时');
+  });
+
+  it('心跳注释行会刷新空闲计时（长连接不被误杀）', async () => {
+    const enc = new TextEncoder();
+    let ticks = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        // 每 20ms 一个心跳，共 5 次，空闲阈值 60ms —— 不应超时
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        ticks += 1;
+        if (ticks > 5) {
+          controller.enqueue(enc.encode('data: {"done":1}\n\n'));
+          controller.close();
+          return;
+        }
+        controller.enqueue(enc.encode(': keep-alive\n\n'));
+      },
+    });
+    const lines: string[] = [];
+    await consumeSse(
+      new Response(stream),
+      (line) => {
+        if (line.trim()) lines.push(line.trim());
+      },
+      { idleTimeoutMs: 60 },
+    );
+    expect(lines.at(-1)).toBe('data: {"done":1}');
+    expect(lines.filter((line) => line.startsWith(': keep-alive')).length).toBeGreaterThan(2);
   });
 });
 
@@ -802,6 +839,15 @@ describe('runWeixinRelay', () => {
           return { ret: 0, get_updates_buf: 'buf-2', msgs: [msg('执行删除')] };
         }
         if (polls === 2) {
+          // 真实用户是"看到授权提示后"才回复；等提示发出再投递「允许」，
+          // 否则这条答复可能早于 permission.request 登记而丢失（与实现无关的竞态）。
+          const deadline = Date.now() + 5000;
+          while (
+            !sent.some((m) => m.text?.includes('需要你的授权')) &&
+            Date.now() < deadline
+          ) {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
           return { ret: 0, get_updates_buf: 'buf-3', msgs: [msg('允许')] };
         }
         await new Promise((resolve) => {
@@ -905,5 +951,139 @@ describe('runWeixinRelay', () => {
 
     controller.abort();
     await relayPromise;
+  });
+
+  it('对话卡死时 5 分钟护栏生效：会话释放，下一条消息仍能处理（不永久失联）', async () => {
+    const sent: Array<{ text?: string }> = [];
+    const controller = new AbortController();
+    let polls = 0;
+    let chatCalls = 0;
+    /** 第一路 /chat 的 signal：断言超时后 fetch 真的被 abort。 */
+    let firstChatSignal: AbortSignal | undefined;
+
+    const client = {
+      baseUrl: 'https://ilinkai.weixin.qq.com',
+      async notifyStart() {},
+      async notifyStop() {},
+      async getUpdates(_buf: string, options: { signal?: AbortSignal }) {
+        polls += 1;
+        const msg = (text: string) => ({
+          from_user_id: 'wx_peer',
+          message_type: 1,
+          message_state: 2,
+          context_token: 'ctx',
+          run_id: `r${polls}`,
+          item_list: [{ type: 1, text_item: { text } }],
+        });
+        if (polls === 1) return { ret: 0, get_updates_buf: 'b2', msgs: [msg('第一条')] };
+        if (polls === 2) {
+          // 等第一轮超时释放后再投递第二条（真实场景是用户过一会儿再发）
+          const deadline = Date.now() + 5000;
+          while (!sent.some((m) => m.text?.includes('已中断')) && Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+          return { ret: 0, get_updates_buf: 'b3', msgs: [msg('第二条')] };
+        }
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, 60_000);
+          options.signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            resolve(undefined);
+          });
+        });
+        throw new Error('aborted');
+      },
+      async getConfig() {
+        return { ret: 0, typing_ticket: 'ticket' };
+      },
+      async sendTyping() {},
+      async sendMessage(message: {
+        item_list?: Array<{ text_item?: { text?: string } }>;
+      }) {
+        sent.push({ text: message.item_list?.[0]?.text_item?.text });
+      },
+    } as unknown as ILinkClient;
+
+    const state: AccountState = {
+      token: 'tok',
+      baseUrl: 'https://ilinkai.weixin.qq.com',
+      accountId: 'bot-1',
+      peerSessions: {},
+      savedAt: new Date().toISOString(),
+    };
+
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith('/api/sessions')) {
+        return new Response(JSON.stringify({ id: 'session-timeout' }), { status: 201 });
+      }
+      if (u.endsWith('/chat')) {
+        chatCalls += 1;
+        if (chatCalls === 1) {
+          firstChatSignal = init.signal ?? undefined;
+          // 永不结束、永不产出数据的流：模拟 agent 卡死 / TCP 半开。
+          // 真实 fetch 在 signal abort 时会断开 body 流，这里必须模拟同样的行为，
+          // 否则 reader.read() 永远挂起，chatOnce 的超时分支无法返回。
+          const stream = new ReadableStream<Uint8Array>({
+            start(controller) {
+              init.signal?.addEventListener(
+                'abort',
+                () => controller.error(new DOMException('aborted', 'AbortError')),
+                { once: true },
+              );
+            },
+          });
+          return new Response(stream, {
+            status: 200,
+            headers: { 'content-type': 'text/event-stream' },
+          });
+        }
+        return new Response(
+          `data: ${JSON.stringify({ type: 'chat.token', payload: { delta: '第二轮回复' } })}\n\n`,
+          { status: 200, headers: { 'content-type': 'text/event-stream' } },
+        );
+      }
+      return new Response('{}', { status: 200 });
+    });
+
+    const relayPromise = runWeixinRelay(
+      {
+        agentUrl: 'http://agent:3000',
+        client,
+        state,
+        persist: vi.fn(async () => {}),
+        log: () => {},
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        chatTimeoutMs: 150,
+      },
+      controller.signal,
+    );
+
+    const deadline = Date.now() + 8000;
+    while (!sent.some((m) => m.text?.includes('第二轮回复')) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    // 第一轮超时后给出明确提示，而不是静默失联
+    expect(sent.some((m) => m.text?.includes('已中断'))).toBe(true);
+    // 超时真的断开了 HTTP 连接
+    expect(firstChatSignal?.aborted).toBe(true);
+    // inflightSessions 已释放：第二条消息没有被"上一条还在处理中"挡掉
+    expect(sent.some((m) => m.text?.includes('上一条还在处理中'))).toBe(false);
+    expect(sent.some((m) => m.text?.includes('第二轮回复'))).toBe(true);
+
+    controller.abort();
+    await relayPromise;
+  });
+});
+
+describe('withTimeout', () => {
+  it('超时真正触发（clearTimeout 不再在 race 决出前被同步调用）', async () => {
+    const never = new Promise<string>(() => {});
+    await expect(withTimeout(never, 30, '测试超时')).rejects.toThrow('测试超时');
+  });
+
+  it('先完成的 promise 正常返回，不受超时影响', async () => {
+    await expect(withTimeout(Promise.resolve('ok'), 1000, '测试超时')).resolves.toBe('ok');
   });
 });

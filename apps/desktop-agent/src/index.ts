@@ -2,6 +2,7 @@ import WebSocket from 'ws';
 import { createLocalTools } from './tools.js';
 
 const wsUrl = process.env.AGENT_WS_URL ?? 'ws://127.0.0.1:3000/ws/desktop';
+const desktopToken = process.env.DESKTOP_TOKEN ?? '';
 const localTools = createLocalTools();
 const toolByName = new Map(localTools.map((tool) => [tool.declaration.name, tool]));
 
@@ -12,6 +13,8 @@ let ws: WebSocket | null = null;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let reconnectAttempt = 0;
 let shutdownRequested = false;
+/** 服务端已取消的请求：结果回来时直接丢弃，不再往回发。 */
+const cancelledRequests = new Set<string>();
 
 function send(message: unknown): void {
   if (ws && ws.readyState === WebSocket.OPEN) {
@@ -35,7 +38,13 @@ function scheduleReconnect(): void {
 
 function connect(): void {
   if (shutdownRequested) return;
-  ws = new WebSocket(wsUrl);
+  if (!desktopToken) {
+    console.error('[desktop] DESKTOP_TOKEN 未配置，agent-server 会拒绝握手；请先配置后重启');
+  }
+  // /ws/desktop 需要 token：ws 客户端支持自定义头，服务端也接受 ?token=。
+  ws = new WebSocket(wsUrl, {
+    headers: desktopToken ? { 'x-desktop-token': desktopToken } : {},
+  });
 
   ws.on('open', () => {
     reconnectAttempt = 0;
@@ -82,28 +91,31 @@ async function handleMessage(raw: string): Promise<void> {
     return;
   }
 
+  // 服务端取消（会话中断/超时）：本地无法中止已启动的操作，但结果不再回传，
+  // 避免服务端把过期结果当成当前请求的答案。
+  if (message.type === 'tool.cancel') {
+    if (message.requestId) cancelledRequests.add(message.requestId);
+    console.log(`[desktop] cancelled ${message.name ?? ''} (${message.requestId ?? ''})`);
+    return;
+  }
+
   if (message.type === 'tool.execute') {
+    const requestId = message.requestId;
+    const reply = (payload: Record<string, unknown>): void => {
+      if (requestId && cancelledRequests.delete(requestId)) return;
+      send({ type: 'tool.result', requestId, ...payload });
+    };
     const name = message.name ?? '';
     const tool = toolByName.get(name);
     if (!tool) {
-      send({
-        type: 'tool.result',
-        requestId: message.requestId,
-        ok: false,
-        error: `未知的本地工具：${name}`,
-      });
+      reply({ ok: false, error: `未知的本地工具：${name}` });
       return;
     }
     try {
       const result = await tool.execute(message.arguments);
-      send({ type: 'tool.result', requestId: message.requestId, ...result });
+      reply({ ...result });
     } catch (error) {
-      send({
-        type: 'tool.result',
-        requestId: message.requestId,
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      reply({ ok: false, error: error instanceof Error ? error.message : String(error) });
     }
   }
 }

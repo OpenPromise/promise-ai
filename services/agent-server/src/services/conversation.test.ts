@@ -463,7 +463,7 @@ describe('ConversationService', () => {
     const refreshed = await store.getSession(session.id);
     expect(refreshed.messages.length).toBeLessThan(30);
     expect(refreshed.messages[0]?.content).toContain('[历史对话摘要]');
-    expect(refreshed.metadata?.compacted).toBe(true);
+    expect(typeof refreshed.metadata?.compactedAt).toBe('string');
     // Recent context and the current turn are preserved.
     expect(refreshed.messages.some((m) => m.content === '第 64 条回复')).toBe(true);
     expect(refreshed.messages.at(-2)?.content).toBe('继续');

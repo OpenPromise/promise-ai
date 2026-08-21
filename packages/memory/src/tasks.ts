@@ -253,28 +253,39 @@ export class PostgresTaskStore implements TaskStore {
   async updateTask(
     id: string,
     patch: Partial<
-      Pick<Task, 'name' | 'schedule' | 'action' | 'enabled' | 'lastRunAt' | 'sessionId'>
+      Pick<
+        Task,
+        'name' | 'schedule' | 'action' | 'enabled' | 'lastRunAt' | 'sessionId' | 'tools'
+      >
     >,
   ): Promise<Task | undefined> {
-    const current = await this.getTask(id);
-    if (!current) return undefined;
-    const next = { ...current, ...patch };
-    await this.#pool.query(
+    // 单条原子更新：只覆盖调用方提供的字段（COALESCE 兜底保留原值），
+    // 避免"先读整行再整列覆盖"在调度器写 lastRunAt 与用户改 schedule/enabled
+    // 并发时互相覆盖（丢失更新，P0-4 同族问题）。
+    const result = await this.#pool.query(
       `UPDATE tasks
-       SET name = $2, schedule = $3, action = $4, enabled = $5, last_run_at = $6,
-           session_id = $7, tools = $8, updated_at = now()
-       WHERE id = $1`,
+       SET name = COALESCE($2, name),
+           schedule = COALESCE($3, schedule),
+           action = COALESCE($4, action),
+           enabled = COALESCE($5, enabled),
+           last_run_at = COALESCE($6, last_run_at),
+           session_id = COALESCE($7, session_id),
+           tools = COALESCE($8::jsonb, tools),
+           updated_at = now()
+       WHERE id = $1
+       RETURNING id`,
       [
         id,
-        next.name,
-        next.schedule,
-        next.action,
-        next.enabled,
-        next.lastRunAt ?? null,
-        next.sessionId,
-        next.tools ? JSON.stringify(next.tools) : null,
+        patch.name ?? null,
+        patch.schedule ?? null,
+        patch.action ?? null,
+        patch.enabled ?? null,
+        patch.lastRunAt ?? null,
+        patch.sessionId ?? null,
+        patch.tools ? JSON.stringify(patch.tools) : null,
       ],
     );
+    if ((result.rowCount ?? 0) === 0) return undefined;
     return this.getTask(id);
   }
 
