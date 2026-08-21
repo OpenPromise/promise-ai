@@ -48,4 +48,22 @@ describe('createGoalTools', () => {
     const noArgs = await done.execute({}, { sessionId: 's1' });
     expect(noArgs.ok).toBe(false);
   });
+
+  it('goal.set 写入带 goal tag；goal.list 也按 tag 过滤旧无前缀数据', async () => {
+    const store = new InMemoryMemoryStore();
+    const tools = createGoalTools(store);
+    const set = tools.find((tool) => tool.name === 'goal.set')!;
+    const list = tools.find((tool) => tool.name === 'goal.list')!;
+
+    await set.execute({ title: '减肥', description: '三个月减 5 公斤' }, { sessionId: 's1' });
+
+    const entries = await store.list('semantic');
+    expect(entries[0]?.tag).toBe('goal');
+
+    // 旧数据：无 tag、无前缀，但被手动打上 tag —— 仍应被 goal.list 列出
+    await store.add({ kind: 'semantic', content: '早起', tag: 'goal' });
+    const listed = (await list.execute({}, { sessionId: 's1' })).data as GoalListData;
+    expect(listed.count).toBe(2);
+    expect(listed.goals.some((goal) => goal.title === '早起')).toBe(true);
+  });
 });

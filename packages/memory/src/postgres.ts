@@ -9,6 +9,7 @@ import {
   type MemoryKind,
   type MemorySearchResult,
   type MemoryStore,
+  type MemoryTag,
 } from './memory.js';
 
 const { Pool } = pg;
@@ -25,6 +26,7 @@ interface MemoryRow {
   content: string;
   created_at: string;
   updated_at: string;
+  tag?: MemoryTag | null;
   score?: number;
 }
 
@@ -35,6 +37,7 @@ function toEntry(row: MemoryRow): MemoryEntry {
     content: row.content,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    ...(row.tag ? { tag: row.tag } : {}),
   };
 }
 
@@ -61,10 +64,13 @@ export class PostgresMemoryStore implements MemoryStore {
         kind text NOT NULL CHECK (kind IN ('episodic', 'semantic')),
         content text NOT NULL,
         embedding vector(${this.#dimensions}),
+        tag text,
         created_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now()
       )
     `);
+    // 幂等迁移：已存在的旧表没有 tag 列（CREATE TABLE IF NOT EXISTS 不会加列）
+    await this.#pool.query('ALTER TABLE memories ADD COLUMN IF NOT EXISTS tag text');
     await this.#pool.query('CREATE INDEX IF NOT EXISTS memories_kind_idx ON memories (kind)');
     await this.#ensureDimensionMatches();
   }
@@ -106,12 +112,12 @@ export class PostgresMemoryStore implements MemoryStore {
     }
   }
 
-  async add(input: { kind: MemoryKind; content: string }): Promise<MemoryEntry> {
+  async add(input: { kind: MemoryKind; content: string; tag?: MemoryTag }): Promise<MemoryEntry> {
     const id = randomUUID();
     const embedding = await this.#embedder.embed(input.content);
     await this.#pool.query(
-      `INSERT INTO memories (id, kind, content, embedding) VALUES ($1, $2, $3, $4::vector)`,
-      [id, input.kind, input.content, JSON.stringify(embedding)],
+      `INSERT INTO memories (id, kind, content, embedding, tag) VALUES ($1, $2, $3, $4::vector, $5)`,
+      [id, input.kind, input.content, JSON.stringify(embedding), input.tag ?? null],
     );
     const entry = await this.#getById(id);
     if (!entry) throw new Error('failed to read back inserted memory');
@@ -120,7 +126,7 @@ export class PostgresMemoryStore implements MemoryStore {
 
   async list(kind?: MemoryKind): Promise<MemoryEntry[]> {
     const result = await this.#pool.query<MemoryRow>(
-      `SELECT id, kind, content, created_at, updated_at
+      `SELECT id, kind, content, tag, created_at, updated_at
        FROM memories
        WHERE $1::text IS NULL OR kind = $1
        ORDER BY created_at DESC`,
@@ -132,7 +138,7 @@ export class PostgresMemoryStore implements MemoryStore {
   async search(query: string, limit = 5): Promise<MemorySearchResult[]> {
     const embedding = await this.#embedder.embed(query);
     const vectorResult = await this.#pool.query<MemoryRow>(
-      `SELECT id, kind, content, created_at, updated_at,
+      `SELECT id, kind, content, tag, created_at, updated_at,
               1 - (embedding <=> $1::vector) AS score
        FROM memories
        WHERE embedding IS NOT NULL
@@ -150,7 +156,7 @@ export class PostgresMemoryStore implements MemoryStore {
     const keywordRows: MemorySearchResult[] = [];
     if (keywords.length > 0) {
       const keywordResult = await this.#pool.query<MemoryRow>(
-        `SELECT id, kind, content, created_at, updated_at, 0.1 AS score
+        `SELECT id, kind, content, tag, created_at, updated_at, 0.1 AS score
          FROM memories
          WHERE content ILIKE ANY($1)
          ORDER BY updated_at DESC
@@ -182,7 +188,7 @@ export class PostgresMemoryStore implements MemoryStore {
 
   async #getById(id: string): Promise<MemoryEntry | undefined> {
     const result = await this.#pool.query<MemoryRow>(
-      `SELECT id, kind, content, created_at, updated_at FROM memories WHERE id = $1`,
+      `SELECT id, kind, content, tag, created_at, updated_at FROM memories WHERE id = $1`,
       [id],
     );
     const row = result.rows[0];

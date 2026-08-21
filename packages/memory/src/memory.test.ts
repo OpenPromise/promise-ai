@@ -38,6 +38,23 @@ describe('InMemoryMemoryStore', () => {
     expect(await store.list('episodic')).toHaveLength(1);
   });
 
+  it('persists an optional tag on the entry', async () => {
+    const store = new InMemoryMemoryStore();
+    const goal = await store.add({ kind: 'semantic', content: '[goal] 减肥', tag: 'goal' });
+    expect(goal.tag).toBe('goal');
+
+    const feedback = await store.add({
+      kind: 'episodic',
+      content: '[feedback] 回复太长',
+      tag: 'feedback',
+    });
+    expect(feedback.tag).toBe('feedback');
+
+    const untagged = await store.add({ kind: 'semantic', content: '普通记忆' });
+    expect(untagged.tag).toBeUndefined();
+    expect((await store.list('semantic')).some((entry) => entry.id === goal.id)).toBe(true);
+  });
+
   it('searches by semantic similarity', async () => {
     const store = new InMemoryMemoryStore();
     await store.add({ kind: 'semantic', content: '用户喜欢喝美式咖啡' });

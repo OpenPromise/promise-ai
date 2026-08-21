@@ -345,6 +345,7 @@ export function createSelfTools(
           const added = await memory.add({
             kind: 'episodic',
             content: `[feedback] ${evidence.trim()}（规则：${rule.trim()}）`,
+            tag: 'feedback',
           });
           memoryEntry = { id: added.id, kind: added.kind };
         }

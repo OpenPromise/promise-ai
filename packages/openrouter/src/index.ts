@@ -36,6 +36,9 @@ export interface OpenRouterProviderOptions {
   name?: string;
 }
 
+/** 无 signal 请求的默认超时：画像抽取/记忆整理等 fire-and-forget 场景，防止永久挂起。 */
+const DEFAULT_REQUEST_TIMEOUT_MS = 90_000;
+
 interface RawChatResponse {
   choices?: Array<{
     message?: {
@@ -181,6 +184,11 @@ export class OpenRouterProvider implements LLMProvider {
       throw new OpenRouterConfigError('OPENROUTER_API_KEY is not configured');
     }
 
+    // 无 signal 的请求加默认超时（画像抽取/记忆整理等 fire-and-forget 场景），
+    // 避免网络半开/上游不返回时 Promise 永不 settle。流式聊天自带 idle 超时
+    // signal，传入即有值，不受默认超时影响；超时失败由调用方静默处理。
+    const requestSignal = signal ?? AbortSignal.timeout(DEFAULT_REQUEST_TIMEOUT_MS);
+
     let response: Response;
     try {
       response = await fetch(`${this.#baseUrl}/chat/completions`, {
@@ -191,7 +199,7 @@ export class OpenRouterProvider implements LLMProvider {
           'X-Title': this.#siteTitle,
         },
         body: JSON.stringify(body),
-        signal,
+        signal: requestSignal,
       });
     } catch (error) {
       throw new OpenRouterApiError(

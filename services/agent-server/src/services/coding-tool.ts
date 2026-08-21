@@ -44,13 +44,6 @@ function resolveDshBin(): string | null {
   return null;
 }
 
-interface ChildOutput {
-  stdout: string;
-  stderr: string;
-  killed: boolean;
-  exitCode: number;
-}
-
 /** 流式输出回调：dsh 每产出一段 stdout/stderr 就调用一次（后台任务进度用）。 */
 export type DshOutputCallback = (chunk: string, stream: 'stdout' | 'stderr') => void;
 
@@ -65,15 +58,21 @@ export interface RunDshOptions {
 export interface DshRunResult {
   stdout: string;
   stderr: string;
-  killed: boolean;
+  /** 是否因超时被终止（与"退出码非零"分离，不再靠 124 反推）。 */
+  timedOut: boolean;
   exitCode: number;
 }
+
+/** SIGTERM 后强杀前的宽限：给 dsh 时间清理/刷盘，忽略 SIGTERM 时兜底回收。 */
+const SIGKILL_GRACE_MS = 5_000;
+/** GNU timeout 约定退出码：仅作信息展示，超时判定以 timedOut 为准。 */
+const TIMEOUT_EXIT_CODE = 124;
 
 function runChild(
   executable: string,
   args: string[],
   options: { cwd: string; timeoutMs: number; env?: NodeJS.ProcessEnv; onData?: DshOutputCallback },
-): Promise<ChildOutput> {
+): Promise<DshRunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, {
       cwd: options.cwd,
@@ -83,6 +82,7 @@ function runChild(
     });
     let stdout = '';
     let stderr = '';
+    let timedOut = false;
     child.stdout.on('data', (chunk: Buffer) => {
       const text = chunk.toString('utf8');
       stdout += text;
@@ -94,18 +94,23 @@ function runChild(
       options.onData?.(text, 'stderr');
     });
     child.on('error', (error) => reject(error));
+    let killTimer: NodeJS.Timeout | undefined;
     const timer = setTimeout(() => {
+      timedOut = true;
       child.kill('SIGTERM');
+      // dsh 可能忽略 SIGTERM：5s 宽限后强杀，避免子进程泄漏、任务挂到超时之外。
+      killTimer = setTimeout(() => child.kill('SIGKILL'), SIGKILL_GRACE_MS);
+      killTimer.unref?.();
     }, options.timeoutMs);
     timer.unref?.();
-    child.on('close', (code, signal) => {
+    child.on('close', (code) => {
       clearTimeout(timer);
-      const timedOut = signal === 'SIGTERM';
+      if (killTimer) clearTimeout(killTimer);
       resolve({
         stdout,
         stderr,
-        killed: timedOut || code !== 0,
-        exitCode: timedOut ? 124 : (code ?? 1),
+        timedOut,
+        exitCode: timedOut ? TIMEOUT_EXIT_CODE : (code ?? 1),
       });
     });
     child.stdin.end();
@@ -121,7 +126,7 @@ export async function runDshHeadless(
     return {
       stdout: '',
       stderr: '未找到 dsh，请确认容器/服务器已安装 @deepseek-ai/dsh',
-      killed: true,
+      timedOut: false,
       exitCode: 1,
     };
   }
@@ -202,19 +207,19 @@ export function createCodingTool(): Tool {
           error: '任务文本超过 20000 字符，经命令行传参会超限；请拆分任务后重试',
         };
       }
-      const { stdout, stderr, killed, exitCode } = await runDshHeadless(taskText, {
+      const { stdout, stderr, timedOut, exitCode } = await runDshHeadless(taskText, {
         cwd: resolvedDir,
         timeoutMs,
         permissionMode:
           mode === 'bypassPermissions' ? 'danger-full-access' : 'workspace-write',
       });
-      if (killed && exitCode === 124) {
+      if (timedOut) {
         return {
           ok: false,
           error: `dsh 执行超过 ${Math.round(timeoutMs / 60_000)} 分钟被终止`,
         };
       }
-      if (killed || exitCode !== 0) {
+      if (exitCode !== 0) {
         return {
           ok: false,
           error: `dsh 执行失败（exit ${exitCode}）：${(stderr.trim() || stdout.trim()).slice(0, 2000)}`,

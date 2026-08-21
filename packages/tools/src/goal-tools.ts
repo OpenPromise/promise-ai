@@ -30,14 +30,19 @@ export function createGoalTools(store: MemoryStore): Tool[] {
   const listGoals = async (): Promise<
     Array<{ id: string; title: string; description: string }>
   > => {
-    const entries = (await store.list('semantic')).filter((entry) =>
-      entry.content.startsWith(GOAL_PREFIX),
+    // 优先按结构化 tag 过滤，旧数据（无 tag）回退到内容前缀匹配。
+    const entries = (await store.list('semantic')).filter(
+      (entry) => entry.tag === 'goal' || (!entry.tag && entry.content.startsWith(GOAL_PREFIX)),
     );
     return entries
       .map((entry) => {
         const parsed = parseGoal(entry.content);
-        if (!parsed) return null;
-        return { id: entry.id, ...parsed };
+        if (parsed) return { id: entry.id, ...parsed };
+        // 旧数据回退：带 goal tag 但没有 [goal] 前缀的内容，整段视为标题
+        if (entry.tag === 'goal') {
+          return { id: entry.id, title: entry.content.trim(), description: '' };
+        }
+        return null;
       })
       .filter((goal): goal is { id: string; title: string; description: string } => goal !== null);
   };
@@ -73,7 +78,7 @@ export function createGoalTools(store: MemoryStore): Tool[] {
         const content = description?.trim()
           ? `${GOAL_PREFIX}${title.trim()}：${description.trim()}`
           : `${GOAL_PREFIX}${title.trim()}`;
-        const entry = await store.add({ kind: 'semantic', content });
+        const entry = await store.add({ kind: 'semantic', content, tag: 'goal' });
         return { ok: true, data: { entry } };
       },
     },

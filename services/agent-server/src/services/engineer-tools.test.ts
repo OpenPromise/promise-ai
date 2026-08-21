@@ -33,7 +33,7 @@ describe('buildXiaoHeiTask', () => {
 describe('createEngineerTool', () => {
   function makeRunner() {
     return new EngineerTaskRunner({
-      runTask: async () => ({ stdout: 'ok', stderr: '', killed: false, exitCode: 0 }),
+      runTask: async () => ({ stdout: 'ok', stderr: '', timedOut: false, exitCode: 0 }),
     });
   }
 
@@ -76,7 +76,7 @@ describe('createEngineerTool', () => {
         started = true;
         onData?.('开始干活\n', 'stdout');
         await new Promise((resolve) => setTimeout(resolve, 50));
-        return { stdout: '完成', stderr: '', killed: false, exitCode: 0 };
+        return { stdout: '完成', stderr: '', timedOut: false, exitCode: 0 };
       },
     });
     const tool = createEngineerTool(runner);
@@ -98,7 +98,7 @@ describe('createEngineerTool', () => {
 describe('createEngineerStatusTool', () => {
   it('权限 L0；按 taskId 返回状态/结果；无 taskId 返回最近任务列表', async () => {
     const runner = new EngineerTaskRunner({
-      runTask: async () => ({ stdout: '报告：全部通过', stderr: '', killed: false, exitCode: 0 }),
+      runTask: async () => ({ stdout: '报告：全部通过', stderr: '', timedOut: false, exitCode: 0 }),
     });
     const tool = createEngineerStatusTool(runner);
     expect(tool.name).toBe('engineer.status');

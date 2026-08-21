@@ -105,23 +105,30 @@ export async function runEventPusher(
   const { agentUrl, client, peers, log } = options;
   const fetchImpl = options.fetchImpl ?? fetch;
   let failures = 0;
+  /** 最近一次已处理事件的 SSE id：断线重连时回传 Last-Event-ID 拉回错过的通知。 */
+  let lastEventId = '';
 
   while (!signal.aborted) {
     try {
       const response = await fetchImpl(`${agentUrl.replace(/\/+$/, '')}/api/events`, {
         signal,
+        ...(lastEventId ? { headers: { 'Last-Event-ID': lastEventId } } : {}),
       });
       if (!response.ok) throw new Error(`events HTTP ${response.status}`);
       failures = 0;
       let currentEvent = '';
+      let currentId = '';
 
       await consumeSse(response, (line) => {
         const trimmed = line.trim();
-        if (trimmed.startsWith('event:')) {
+        if (trimmed.startsWith('id:')) {
+          currentId = trimmed.slice(3).trim();
+        } else if (trimmed.startsWith('event:')) {
           currentEvent = trimmed.slice(6).trim();
         } else if (trimmed.startsWith('data:')) {
           const data = trimmed.slice(5).trim();
           if (!data || data === '[DONE]') return;
+          if (currentId) lastEventId = currentId;
           let json: unknown;
           try {
             json = JSON.parse(data) as unknown;

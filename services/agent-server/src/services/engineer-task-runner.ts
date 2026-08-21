@@ -84,6 +84,8 @@ export interface EngineerTaskRunnerOptions {
   progressIntervalMs?: number;
   /** dsh 累计输出保留上限（字符），默认 20_000。 */
   outputCap?: number;
+  /** 并发上限（默认 2）：超限任务排队，前一个完成后自动出队，防止连环派单 spawn 无上限 dsh。 */
+  maxConcurrent?: number;
   /** 测试注入用；默认跑真实 dsh。 */
   runTask?: RunTaskFn;
 }
@@ -111,29 +113,49 @@ export class EngineerTaskRunner {
   readonly #persistFile?: string;
   readonly #progressIntervalMs: number;
   readonly #outputCap: number;
+  readonly #maxConcurrent: number;
   readonly #runTask: RunTaskFn;
+  /** 当前正在运行的 dsh 子进程数。 */
+  #active = 0;
+  /** 并发超限时排队的任务（FIFO），前一个完成/失败后出队。 */
+  readonly #pending: Array<{ task: EngineerTask; timeoutMinutes: number }> = [];
 
   constructor(options: EngineerTaskRunnerOptions = {}) {
     this.#timeline = options.timeline;
     this.#progressIntervalMs = options.progressIntervalMs ?? 20_000;
     this.#outputCap = options.outputCap ?? 20_000;
+    this.#maxConcurrent = Math.max(1, Math.floor(options.maxConcurrent ?? 2));
     this.#runTask = options.runTask ?? runDshHeadless;
     if (options.persistDir) {
       this.#persistFile = path.join(options.persistDir, 'engineer-tasks.json');
     }
   }
 
-  /** 启动时加载已持久化的任务记录（完成/失败的结果在重启后仍可查询）。 */
+  /** 启动时加载已持久化的任务记录；残留 running（进程重启被杀）标记失败并补发 done。 */
   async loadPersisted(): Promise<void> {
     if (!this.#persistFile) return;
     try {
       const raw = await readFile(this.#persistFile, 'utf8');
       const records = JSON.parse(raw) as EngineerTask[];
+      let changed = false;
       for (const record of records) {
-        if (record?.id && record.status !== 'running') {
-          this.#tasks.set(record.id, record);
+        if (!record?.id) continue;
+        if (record.status === 'running') {
+          // 进程重启时 dsh 子进程已被杀：把残留 running 记录落为 failed，
+          // 并补发一次 done 事件，用户不再"查无此任务"、也能收到中断通知。
+          record.status = 'failed';
+          record.finishedAt = new Date().toISOString();
+          record.error = '进程重启，任务中断';
+          changed = true;
+        }
+        this.#tasks.set(record.id, record);
+      }
+      for (const record of records) {
+        if (record?.status === 'failed' && record.error === '进程重启，任务中断') {
+          this.#emit({ type: 'done', taskId: record.id, status: 'failed', error: record.error });
         }
       }
+      if (changed) void this.#persist();
     } catch {
       // 文件不存在或损坏：从空任务表开始，不阻塞启动
     }
@@ -178,11 +200,27 @@ export class EngineerTaskRunner {
       status: 'running',
       text: '小黑已开工，正在执行任务',
     });
-    void this.#run(record, timeoutMinutes);
+    if (this.#active >= this.#maxConcurrent) {
+      this.#pending.push({ task: record, timeoutMinutes });
+    } else {
+      void this.#run(record, timeoutMinutes);
+    }
     return record;
   }
 
+  /** 并发门 + 队列出队：前一个任务 settle 后从 pending 拉下一个。 */
   async #run(task: EngineerTask, timeoutMinutes: number): Promise<void> {
+    this.#active += 1;
+    try {
+      await this.#runInner(task, timeoutMinutes);
+    } finally {
+      this.#active -= 1;
+      const next = this.#pending.shift();
+      if (next) void this.#run(next.task, next.timeoutMinutes);
+    }
+  }
+
+  async #runInner(task: EngineerTask, timeoutMinutes: number): Promise<void> {
     const taskText = buildXiaoHeiTask(task.task);
     let lastProgressAt = 0;
     const onData: RunDshOptions['onData'] = (chunk) => {
@@ -224,15 +262,15 @@ export class EngineerTaskRunner {
       return;
     }
 
-    if (result.killed && result.exitCode === 124) {
+    if (result.timedOut) {
       this.#finish(task, {
         status: 'timeout',
         error: `小黑执行超过 ${timeoutMinutes} 分钟被终止`,
-        exitCode: 124,
+        exitCode: result.exitCode,
       });
       return;
     }
-    if (result.killed || result.exitCode !== 0) {
+    if (result.exitCode !== 0) {
       this.#finish(task, {
         status: 'failed',
         error: `小黑执行失败（exit ${result.exitCode}）：${(result.stderr.trim() || result.stdout.trim()).slice(0, 2000)}`,

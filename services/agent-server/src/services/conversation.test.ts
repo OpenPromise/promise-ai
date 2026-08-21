@@ -41,6 +41,22 @@ describe('ConversationService', () => {
     expect(context).toContain('开放端口 8080');
   });
 
+  it('按 tag 注入目标/反馈（不依赖内容前缀），旧数据前缀回退', async () => {
+    const memory = new InMemoryMemoryStore();
+    // 带 tag 但内容不以前缀开头：仍应按 tag 注入
+    await memory.add({ kind: 'semantic', content: '三个月减 5 公斤', tag: 'goal' });
+    await memory.add({ kind: 'episodic', content: '回复太长，控制篇幅', tag: 'feedback' });
+    // 旧数据：无 tag 但内容带前缀，走前缀回退
+    await memory.add({ kind: 'semantic', content: '[goal] 帮助用户早起' });
+    await memory.add({ kind: 'episodic', content: '[feedback] 别在深夜发通知' });
+
+    const context = await collectPersistentContext(memory);
+    expect(context).toContain('三个月减 5 公斤');
+    expect(context).toContain('回复太长，控制篇幅');
+    expect(context).toContain('帮助用户早起');
+    expect(context).toContain('别在深夜发通知');
+  });
+
   it('对话结束后写入 chat 时间线事件', async () => {
     const store = new InMemorySessionStore();
     const session = await store.createSession({ systemPrompt: '你是助理。' });

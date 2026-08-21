@@ -2,12 +2,17 @@ import { randomUUID } from 'node:crypto';
 
 export type MemoryKind = 'episodic' | 'semantic';
 
+/** 结构化记忆标签：让"注入过滤"不再依赖 content 字符串前缀（旧数据仍走前缀回退）。 */
+export type MemoryTag = 'goal' | 'feedback';
+
 export interface MemoryEntry {
   id: string;
   kind: MemoryKind;
   content: string;
   createdAt: string;
   updatedAt: string;
+  /** 可选标签（goal/feedback 等），由写入方显式打标。 */
+  tag?: MemoryTag;
 }
 
 export interface MemorySearchResult {
@@ -22,7 +27,7 @@ export interface Embedder {
 }
 
 export interface MemoryStore {
-  add(input: { kind: MemoryKind; content: string }): Promise<MemoryEntry>;
+  add(input: { kind: MemoryKind; content: string; tag?: MemoryTag }): Promise<MemoryEntry>;
   list(kind?: MemoryKind): Promise<MemoryEntry[]>;
   search(query: string, limit?: number): Promise<MemorySearchResult[]>;
   /** Permanently deletes a memory entry. */
@@ -217,7 +222,7 @@ export class InMemoryMemoryStore implements MemoryStore {
     this.#embedder = embedder;
   }
 
-  async add(input: { kind: MemoryKind; content: string }): Promise<MemoryEntry> {
+  async add(input: { kind: MemoryKind; content: string; tag?: MemoryTag }): Promise<MemoryEntry> {
     const now = new Date().toISOString();
     const entry: MemoryEntry = {
       id: randomUUID(),
@@ -225,6 +230,7 @@ export class InMemoryMemoryStore implements MemoryStore {
       content: input.content,
       createdAt: now,
       updatedAt: now,
+      ...(input.tag ? { tag: input.tag } : {}),
     };
     this.#items.push(entry);
     this.#vectors.set(entry.id, await this.#embedder.embed(entry.content));

@@ -221,11 +221,20 @@ export async function collectPersistentContext(
   timeline?: TimelineStore,
 ): Promise<string | null> {
   const entries = await memory.list();
+  // 优先按结构化 tag 过滤（写入方显式打标），旧数据（无 tag）回退到内容前缀匹配。
   const goals = entries
-    .filter((entry) => entry.kind === 'semantic' && entry.content.startsWith(GOAL_PREFIX))
+    .filter(
+      (entry) =>
+        entry.kind === 'semantic' &&
+        (entry.tag === 'goal' || (!entry.tag && entry.content.startsWith(GOAL_PREFIX))),
+    )
     .slice(0, GOAL_CONTEXT_LIMIT);
   const feedback = entries
-    .filter((entry) => entry.kind === 'episodic' && entry.content.startsWith('[feedback]'))
+    .filter(
+      (entry) =>
+        entry.kind === 'episodic' &&
+        (entry.tag === 'feedback' || (!entry.tag && entry.content.startsWith('[feedback]'))),
+    )
     .slice(0, FEEDBACK_CONTEXT_LIMIT);
 
   const blocks: string[] = [];
