@@ -58,6 +58,16 @@ export class ToolRegistry {
     if (this.#tools.has(tool.name)) {
       throw new Error(`Tool already registered: ${tool.name}`);
     }
+    // 下划线化（LLM wire 名）碰撞检测：engineer.delegate 与 engineer_delegate
+    // 这类不同原始名会映射成同一个 wire 名，运行时静默顶替，这里注册期直接拒绝。
+    const wireName = tool.name.replace(/\./g, '_');
+    for (const existing of this.#tools.values()) {
+      if (existing.name !== tool.name && existing.name.replace(/\./g, '_') === wireName) {
+        throw new Error(
+          `Tool wire name collision: ${tool.name} and ${existing.name} both map to ${wireName}`,
+        );
+      }
+    }
     this.#tools.set(tool.name, tool);
   }
 

@@ -64,6 +64,7 @@ function makeClient(options: ILinkClientOptions = {}): ILinkClient {
     token: options.token,
     channelVersion,
     botAgent,
+    log,
   });
 }
 
@@ -212,6 +213,11 @@ const LOGIN_PAGE = `<!doctype html>
             });
           }
           poll();
+          return;
+        }
+        if (json.status === 'error') {
+          statusEl.textContent = '❌ 登录状态查询失败：' + (json.error || '请检查网络后重试');
+          document.getElementById('retry').style.display = '';
           return;
         }
         statusEl.textContent = {

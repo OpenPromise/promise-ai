@@ -222,7 +222,9 @@ export async function collectPersistentContext(
   profile?: ProfileStore,
   timeline?: TimelineStore,
 ): Promise<string | null> {
-  const entries = await memory.list();
+  // 限量取最近记忆（默认 200 条封顶）：避免每轮对话全表扫描 + 全量进内存。
+  // goal/feedback 过滤逻辑不变（tag + 旧数据前缀回退），只是输入收窄。
+  const entries = await memory.list(undefined, { limit: 200 });
   // 优先按结构化 tag 过滤（写入方显式打标），旧数据（无 tag）回退到内容前缀匹配。
   const goals = entries
     .filter(

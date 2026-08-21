@@ -136,7 +136,12 @@ export type QrStatus =
   | 'scaned_but_redirect'
   | 'need_verifycode'
   | 'verify_code_blocked'
-  | 'binded_redirect';
+  | 'binded_redirect'
+  /**
+   * 本地状态：二维码状态长轮询连续失败到上限（网络/网关/解析错误）。
+   * 不是服务端返回的状态——服务端从不返回它，见 pollQrStatus。
+   */
+  | 'error';
 
 export interface QrStatusResponse {
   status: QrStatus;
@@ -145,6 +150,45 @@ export interface QrStatusResponse {
   ilink_user_id?: string;
   baseurl?: string;
   redirect_host?: string;
+  /** status='error' 时的失败原因（给登录页展示 / 日志定位）。 */
+  message?: string;
+}
+
+/**
+ * 二维码状态轮询容忍的连续失败次数。低于它视为网关抖动（继续轮询），
+ * 达到它就必须把故障暴露出来——否则登录失败会永久显示"等待扫码"（P1-19）。
+ */
+export const QR_POLL_MAX_FAILURES = 5;
+/** 微信媒体下载大小上限（图片/文件），超过即拒绝，防止恶意/异常大响应撑爆内存。 */
+export const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
+
+/** 流式读取响应体，超过上限即中断并抛错（避免 arrayBuffer() 全量进内存后再判）。 */
+export async function readBodyCapped(
+  response: Response,
+  maxBytes: number,
+  label: string,
+): Promise<Buffer> {
+  if (!response.body) {
+    throw new ILinkError(`${label}：响应体为空`);
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        throw new ILinkError(`${label}：超过 ${Math.round(maxBytes / 1024 / 1024)}MB 上限`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, total);
 }
 
 export interface UploadedMediaInfo {
@@ -162,6 +206,8 @@ export interface ILinkClientOptions {
   channelVersion?: string;
   botAgent?: string;
   fetchImpl?: typeof fetch;
+  /** 故障日志回调（当前只用于二维码轮询失败）。默认写 console.warn。 */
+  log?: (message: string) => void;
 }
 
 function encodeClientVersion(version: string): number {
@@ -198,6 +244,9 @@ export class ILinkClient {
   readonly #botAgent: string;
   readonly #channelVersion: string;
   readonly #fetch: typeof fetch;
+  readonly #log: (message: string) => void;
+  /** 二维码状态轮询的连续失败次数（成功一次即清零）。 */
+  #qrPollFailures = 0;
 
   constructor(options: ILinkClientOptions = {}) {
     this.baseUrl = (options.baseUrl?.trim() || ILINK_DEFAULT_BASE_URL).replace(/\/+$/, '');
@@ -207,6 +256,11 @@ export class ILinkClient {
     this.#clientVersion = encodeClientVersion(this.#channelVersion);
     this.#botAgent = options.botAgent?.trim() || 'PromiseAi/0.1.0';
     this.#fetch = options.fetchImpl ?? fetch;
+    this.#log =
+      options.log ??
+      ((message: string) => {
+        console.warn(`[ilink] ${message}`);
+      });
   }
 
   #commonHeaders(): Record<string, string> {
@@ -289,7 +343,14 @@ export class ILinkClient {
     );
   }
 
-  /** 长轮询二维码状态（最多 35s），可携带配对码；baseUrl 允许 IDC 重定向。 */
+  /**
+   * 长轮询二维码状态（最多 35s），可携带配对码；baseUrl 允许 IDC 重定向。
+   *
+   * 失败处理（P1-19）：单次网络/网关/解析错误可能只是抖动，返回 `wait` 继续轮询；
+   * 但连续失败到 {@link QR_POLL_MAX_FAILURES} 次后必须返回 `status: 'error'`
+   * 并写日志——否则后端挂掉时登录页会永远显示"等待扫码"，用户无从判断。
+   * 主动取消（AbortError：登录页关闭 / 上层长轮询到点）不算故障。
+   */
   async pollQrStatus(
     qrcode: string,
     verifyCode?: string,
@@ -300,12 +361,22 @@ export class ILinkClient {
     if (verifyCode) endpoint += `&verify_code=${encodeURIComponent(verifyCode)}`;
     const base = (baseUrl?.trim() || this.baseUrl).replace(/\/+$/, '');
     try {
-      return await this.#getJson<QrStatusResponse>(endpoint, 35_000, signal, base);
+      const resp = await this.#getJson<QrStatusResponse>(endpoint, 35_000, signal, base);
+      this.#qrPollFailures = 0;
+      return resp;
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        return { status: 'wait' };
+      // 主动取消不是故障：不累计，也不报错。
+      if (error instanceof Error && error.name === 'AbortError') return { status: 'wait' };
+      const message = error instanceof Error ? error.message : String(error);
+      this.#qrPollFailures += 1;
+      this.#log(
+        `二维码状态轮询失败（${this.#qrPollFailures}/${QR_POLL_MAX_FAILURES}）：${message}`,
+      );
+      if (this.#qrPollFailures >= QR_POLL_MAX_FAILURES) {
+        this.#qrPollFailures = 0;
+        return { status: 'error', message };
       }
-      // 网络/网关抖动视为等待，继续轮询。
+      // 未到上限：视为抖动，继续轮询。
       return { status: 'wait' };
     }
   }
@@ -557,7 +628,7 @@ export class ILinkClient {
     if (!response.ok) {
       throw new ILinkError(`CDN 下载失败 ${response.status}`);
     }
-    const encrypted = Buffer.from(await response.arrayBuffer());
+    const encrypted = await readBodyCapped(response, MAX_MEDIA_BYTES, 'CDN 下载');
     if (!params.aesKeyBase64) return encrypted;
     return decryptAesEcb(encrypted, parseAesKey(params.aesKeyBase64));
   }

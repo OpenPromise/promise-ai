@@ -9,6 +9,11 @@ export interface ApprovalRequest {
   confirmationsNeeded: number;
   confirmationsDone: number;
   createdAt: string;
+  /**
+   * 服务端判超时（自动拒绝）的时刻（ISO）。下游通道（微信 bridge 等）按它
+   * 计时，不要自己猜一个窗口——两边窗口错配会让用户"明明回复了允许却没反应"。
+   */
+  expiresAt: string;
 }
 
 export interface ApprovalDecision {
@@ -76,6 +81,7 @@ export class ApprovalRegistry {
     confirmationsNeeded: number;
     confirmationsDone?: number;
   }): { request: ApprovalRequest; decision: Promise<ApprovalDecision> } {
+    const createdAt = Date.now();
     const request: ApprovalRequest = {
       requestId: randomUUID(),
       sessionId: input.sessionId,
@@ -84,7 +90,8 @@ export class ApprovalRegistry {
       permissionLevel: input.permissionLevel,
       confirmationsNeeded: input.confirmationsNeeded,
       confirmationsDone: input.confirmationsDone ?? 0,
-      createdAt: new Date().toISOString(),
+      createdAt: new Date(createdAt).toISOString(),
+      expiresAt: new Date(createdAt + this.#timeoutMs).toISOString(),
     };
 
     const decision = new Promise<ApprovalDecision>((resolve) => {

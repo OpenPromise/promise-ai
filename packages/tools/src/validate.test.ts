@@ -89,4 +89,13 @@ describe('validateToolArgs', () => {
     );
     expect(issues).toEqual([]);
   });
+
+  it('非法 pattern 返回可读错误而不是抛出异常', () => {
+    const issues = validateToolArgs(
+      { type: 'object', properties: { code: { type: 'string', pattern: '[' } }, required: [] },
+      { code: 'abc' },
+    );
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.message).toContain('无效');
+  });
 });

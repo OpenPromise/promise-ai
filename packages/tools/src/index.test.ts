@@ -34,4 +34,17 @@ describe('ToolRegistry', () => {
     registry.register(weatherTool);
     expect(() => registry.register(weatherTool)).toThrow(/already registered/);
   });
+
+  it('rejects wire-name collisions（. 与 _ 映射同名）', () => {
+    const registry = new ToolRegistry();
+    registry.register(weatherTool); // weather.get → weather_get
+    const collision: Tool = {
+      name: 'weather_get',
+      description: 'collides',
+      inputSchema: { type: 'object', properties: {} },
+      permissionLevel: 0,
+      execute: async () => ({ ok: true, data: {} }),
+    };
+    expect(() => registry.register(collision)).toThrow(/collision/);
+  });
 });

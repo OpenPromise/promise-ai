@@ -142,7 +142,15 @@ if (config.databaseUrl) {
     reminderStore = postgresReminders;
     memoryBackend = 'postgres';
     console.log(`[memory] embedding: dashscope/${memoryEmbedder.dimensions ?? 'local'}`);
-    console.log(`[memory] using postgres (${config.databaseUrl.split('@')[1] ?? ''})`);
+    // 脱敏打印：只显示 host:port，不含用户/密码（split('@')[1] 会带出 credential 段）
+    let dbHost = 'postgres';
+    try {
+      const parsed = new URL(config.databaseUrl);
+      dbHost = parsed.host;
+    } catch {
+      // URL 解析失败保持默认占位，不外泄原始串
+    }
+    console.log(`[memory] using postgres (${dbHost})`);
   } catch (error) {
     console.warn(
       `[memory] postgres unavailable (${error instanceof Error ? error.message : String(error)}), falling back to in-memory`,

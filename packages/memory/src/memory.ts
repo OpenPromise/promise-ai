@@ -28,7 +28,8 @@ export interface Embedder {
 
 export interface MemoryStore {
   add(input: { kind: MemoryKind; content: string; tag?: MemoryTag }): Promise<MemoryEntry>;
-  list(kind?: MemoryKind): Promise<MemoryEntry[]>;
+  /** 按类型列出记忆，可按时间倒序限量（避免每轮对话全表扫描）。 */
+  list(kind?: MemoryKind, options?: { limit?: number }): Promise<MemoryEntry[]>;
   search(query: string, limit?: number): Promise<MemorySearchResult[]>;
   /** Permanently deletes a memory entry. */
   forget(id: string): Promise<boolean>;
@@ -268,10 +269,11 @@ export class InMemoryMemoryStore implements MemoryStore {
     return entry;
   }
 
-  async list(kind?: MemoryKind): Promise<MemoryEntry[]> {
-    return this.#items
+  async list(kind?: MemoryKind, options?: { limit?: number }): Promise<MemoryEntry[]> {
+    const entries = this.#items
       .filter((entry) => !kind || entry.kind === kind)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return options?.limit !== undefined ? entries.slice(0, options.limit) : entries;
   }
 
   async search(query: string, limit = 5): Promise<MemorySearchResult[]> {

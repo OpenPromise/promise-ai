@@ -77,6 +77,11 @@ export class LoginManager {
         baseUrl: resp.baseurl || this.#client.baseUrl,
       };
     }
+    // 轮询连续失败到上限：把故障透出去，让登录页显示错误而不是"等待扫码"（P1-19）。
+    if (resp.status === 'error') {
+      login.error = resp.message;
+      return { status: 'error', error: resp.message ?? '二维码状态查询失败' };
+    }
     return { status: resp.status };
   }
 

@@ -39,6 +39,35 @@ const SSE_IDLE_TIMEOUT_MS = 90_000;
  */
 const CHAT_TOTAL_TIMEOUT_MS = 5 * 60_000;
 
+/**
+ * 桥接侧等待微信文字审批的默认窗口。服务端 ApprovalRegistry 默认 60s 自动拒绝，
+ * 这里必须 **不小于** 服务端，否则用户刚回复「允许」时本地登记已被清掉，
+ * 答复会被当成普通消息重新开一轮对话。
+ * 服务端在 permission.request 里带 expiresAt 时按它计时（见 approvalWindowMs）。
+ */
+const DEFAULT_APPROVAL_WINDOW_MS = 60_000;
+/**
+ * 在服务端过期时刻之后多等的余量：覆盖 SSE 投递 + 微信下发 + 用户手速的时间差。
+ * 只影响"本地登记何时清掉"——服务端过期后答复会被 /permission 以 404 拒绝，
+ * 此时给用户一条明确的超时提示，比静默丢弃好。
+ */
+const APPROVAL_WINDOW_SLACK_MS = 5_000;
+
+/**
+ * 计算桥接侧等待审批的窗口（毫秒）。
+ * - 有合法 expiresAt：剩余时间 + 余量（永不早于服务端过期）；
+ * - expiresAt 已过去：返回 0，调用方立即告知用户"授权已超时"，不再干等；
+ * - 缺失/非法（旧版服务端）：退回默认窗口。
+ */
+export function approvalWindowMs(expiresAt: string | undefined, now = Date.now()): number {
+  if (!expiresAt) return DEFAULT_APPROVAL_WINDOW_MS + APPROVAL_WINDOW_SLACK_MS;
+  const at = Date.parse(expiresAt);
+  if (Number.isNaN(at)) return DEFAULT_APPROVAL_WINDOW_MS + APPROVAL_WINDOW_SLACK_MS;
+  const remaining = at - now;
+  if (remaining <= 0) return 0;
+  return remaining + APPROVAL_WINDOW_SLACK_MS;
+}
+
 /** 提前推送分段策略常量（见 takeEarlySegment）。 */
 const PARAGRAPH_SEPARATOR = '\n\n';
 /** 首段最小长度：低于它不提前发，避免「好的。」这类碎片消息刷屏。 */
@@ -220,6 +249,8 @@ export async function chatOnce(
     log?: (message: string) => void;
     /** 权限请求到达时回调（发送微信授权提示）。 */
     onPermissionRequest?: (info: { requestId: string; toolName: string }) => void;
+    /** 审批窗口（服务端 expiresAt）到点仍未答复时回调：告知用户授权已超时。 */
+    onPermissionTimeout?: (info: { requestId: string; toolName: string }) => void;
     /** 检测到完整段落/句子时回调：提前发送该段。reject 视为发送失败，内容保留到最终补发。 */
     onSegment?: (segmentText: string) => Promise<void>;
     /** 长任务工具开始执行时回调（派单确认：程序保证，不依赖模型输出文字）。 */
@@ -274,6 +305,7 @@ async function chatOnceInner(
     fetchImpl?: typeof fetch;
     log?: (message: string) => void;
     onPermissionRequest?: (info: { requestId: string; toolName: string }) => void;
+    onPermissionTimeout?: (info: { requestId: string; toolName: string }) => void;
     onSegment?: (segmentText: string) => Promise<void>;
     onLongTaskStarted?: (toolName: string) => Promise<void>;
     onLongTaskFinished?: (toolName: string) => Promise<void>;
@@ -324,7 +356,7 @@ async function chatOnceInner(
         payload?: {
           delta?: string;
           error?: string;
-          request?: { requestId?: string; toolName?: string };
+          request?: { requestId?: string; toolName?: string; expiresAt?: string };
         };
       };
       try {
@@ -370,17 +402,28 @@ async function chatOnceInner(
           const toolName = envelope.payload?.request?.toolName ?? '';
           if (!requestId) break;
           lastRequestId = requestId;
+          const label = toolName || '未知操作';
+          // 窗口按服务端 expiresAt 计时（P1-16）：两边错配会让用户
+          // "明明回复了允许却没反应"。窗口已归零说明服务端早就自动拒绝了，
+          // 直接告知超时，不再向用户要一个注定失效的授权。
+          const windowMs = approvalWindowMs(envelope.payload?.request?.expiresAt);
+          if (windowMs <= 0) {
+            options.onPermissionTimeout?.({ requestId, toolName: label });
+            break;
+          }
           // 登记待授权：用户下一条微信文字答复后由 handleInboundMessage 触发。
           const timer = setTimeout(() => {
             if (pendingApprovals.get(sessionId)?.requestId === requestId) {
               pendingApprovals.delete(sessionId);
+              // 主动告知超时：服务端此时已自动拒绝，用户再回复也无效。
+              options.onPermissionTimeout?.({ requestId, toolName: label });
             }
-          }, 70_000);
+          }, windowMs);
           timer.unref?.();
           pendingApprovals.set(sessionId, {
             sessionId,
             requestId,
-            toolName: toolName || '未知操作',
+            toolName: label,
             resolve: () => {
               if (pendingApprovals.get(sessionId)?.requestId === requestId) {
                 pendingApprovals.delete(sessionId);
@@ -389,7 +432,7 @@ async function chatOnceInner(
             },
             timer,
           });
-          options.onPermissionRequest?.({ requestId, toolName: toolName || '未知操作' });
+          options.onPermissionRequest?.({ requestId, toolName: label });
           break;
         }
         case 'chat.error':
@@ -609,16 +652,34 @@ async function handleInboundMessage(msg: WeixinMessage, options: RelayOptions): 
       return;
     }
     const approved = decision === 'allow';
-    await fetchImpl(`${agentUrl.replace(/\/+$/, '')}/api/sessions/${sessionId}/permission`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        requestId: pending.requestId,
-        approved,
-        reason: approved ? '用户微信文字允许' : '用户微信文字拒绝',
-      }),
-    }).catch(() => {});
+    // 服务端窗口可能刚好在答复送到前过期（404）：此时必须告诉用户，
+    // 否则他只看到自己回了「允许」然后一片安静（P1-16）。
+    const resolvedOnServer = await fetchImpl(
+      `${agentUrl.replace(/\/+$/, '')}/api/sessions/${sessionId}/permission`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          requestId: pending.requestId,
+          approved,
+          reason: approved ? '用户微信文字允许' : '用户微信文字拒绝',
+        }),
+      },
+    )
+      .then((response) => response.ok)
+      .catch(() => false);
     pending.resolve();
+    if (approved && !resolvedOnServer) {
+      await client.sendMessage(
+        buildReplyMessage({
+          to: peer,
+          text: `⌛ 授权已超时（${pending.toolName}），该操作已取消。需要的话请重新发送指令。`,
+          contextToken: msg.context_token,
+          runId: msg.run_id,
+        }),
+      );
+      return;
+    }
     if (!approved) {
       await client.sendMessage(
         buildReplyMessage({
@@ -668,6 +729,20 @@ async function handleInboundMessage(msg: WeixinMessage, options: RelayOptions): 
               buildReplyMessage({
                 to: peer,
                 text: `⚠️ 需要你的授权：${info.toolName}\n回复「允许」继续，或「拒绝」取消。`,
+                contextToken: msg.context_token,
+                runId: msg.run_id,
+              }),
+            )
+            .catch(() => {});
+        },
+        // 审批窗口到点：服务端已自动拒绝，明确告知用户，别让他对着一条
+        // 已失效的授权提示继续回复「允许」。
+        onPermissionTimeout: (info) => {
+          void client
+            .sendMessage(
+              buildReplyMessage({
+                to: peer,
+                text: `⌛ 授权已超时（${info.toolName}），该操作已取消。需要的话请重新发送指令。`,
                 contextToken: msg.context_token,
                 runId: msg.run_id,
               }),

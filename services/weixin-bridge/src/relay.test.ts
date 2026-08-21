@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { ILinkClient, WeixinMessage } from './ilink.js';
 import {
+  approvalWindowMs,
   chatOnce,
   consumeSse,
   parseApprovalText,
@@ -103,6 +104,39 @@ describe('chatOnce', () => {
     // 不再自动拒绝：把请求交给微信文字审批（onPermissionRequest 回调）
     expect(asks).toEqual([{ requestId: 'req-1', toolName: 'files.delete' }]);
     expect(calls.some((call) => call.url.includes('/permission'))).toBe(false);
+  });
+
+  it('审批窗口按服务端 expiresAt 计时；已过期的请求立即提示超时而不是干等', async () => {
+    const asks: Array<{ requestId: string; toolName: string }> = [];
+    const timeouts: Array<{ requestId: string; toolName: string }> = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (String(url).endsWith('/chat')) {
+        return sseResponse([
+          JSON.stringify({
+            type: 'permission.request',
+            payload: {
+              request: {
+                requestId: 'req-late',
+                toolName: 'files.delete',
+                // 服务端窗口早已过去（桥接侧比服务端慢/消息积压）
+                expiresAt: new Date(Date.now() - 60_000).toISOString(),
+              },
+            },
+          }),
+        ]);
+      }
+      return new Response('{}', { status: 200 });
+    });
+
+    await chatOnce('http://agent:3000', 's-late', '删掉它', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      onPermissionRequest: (info) => asks.push(info),
+      onPermissionTimeout: (info) => timeouts.push(info),
+    });
+
+    // 不再向用户要一个注定失效的授权，而是直接告知超时
+    expect(asks).toEqual([]);
+    expect(timeouts).toEqual([{ requestId: 'req-late', toolName: 'files.delete' }]);
   });
 
   it('returns an error note on non-200 chat response', async () => {
@@ -277,6 +311,29 @@ describe('chatOnce', () => {
     });
     expect(reply.preflushedChars).toBe(0);
     expect(reply.text.slice(reply.preflushedChars ?? 0)).toBe(reply.text);
+  });
+});
+
+describe('approvalWindowMs（P1-16 对齐服务端审批窗口）', () => {
+  it('按服务端 expiresAt 计时，并留一点回程余量（不早于服务端过期）', () => {
+    const now = Date.now();
+    // 服务端说 60s 后过期：桥接侧窗口 >= 60s（不能先于服务端把登记清掉）。
+    const win = approvalWindowMs(new Date(now + 60_000).toISOString(), now);
+    expect(win).toBeGreaterThanOrEqual(60_000);
+    // 也不能离谱地长（服务端已自动拒绝后还挂着等答复）。
+    expect(win).toBeLessThanOrEqual(60_000 + 30_000);
+  });
+
+  it('没有 expiresAt（旧版服务端）时退回默认窗口，仍不小于服务端 60s', () => {
+    expect(approvalWindowMs(undefined, Date.now())).toBeGreaterThanOrEqual(60_000);
+  });
+
+  it('expiresAt 非法时退回默认窗口', () => {
+    expect(approvalWindowMs('not-a-date', Date.now())).toBeGreaterThanOrEqual(60_000);
+  });
+
+  it('expiresAt 已过期（服务端早已自动拒绝）时窗口为 0：立即提示超时，不再干等', () => {
+    expect(approvalWindowMs(new Date(Date.now() - 60_000).toISOString(), Date.now())).toBe(0);
   });
 });
 
@@ -1011,6 +1068,121 @@ describe('runWeixinRelay', () => {
     expect(permissionCalls).toEqual([{ approved: true }]);
     expect(sent.some((m) => m.text?.includes('需要你的授权：files.delete'))).toBe(true);
     expect(sent.some((m) => m.text?.includes('已执行'))).toBe(true);
+
+    controller.abort();
+    await relayPromise;
+  });
+
+  it('授权窗口到点后主动告知用户「已超时」，不再静默等一条永远没用的答复', async () => {
+    const sent: Array<{ text?: string }> = [];
+    const controller = new AbortController();
+    let polls = 0;
+
+    const client = {
+      baseUrl: 'https://ilinkai.weixin.qq.com',
+      async notifyStart() {},
+      async notifyStop() {},
+      async getUpdates(_buf: string, options: { signal?: AbortSignal }) {
+        polls += 1;
+        if (polls === 1) {
+          return {
+            ret: 0,
+            get_updates_buf: 'buf-2',
+            msgs: [
+              {
+                from_user_id: 'wx_peer',
+                message_type: 1,
+                message_state: 2,
+                context_token: 'ctx',
+                run_id: 'r1',
+                item_list: [{ type: 1, text_item: { text: '执行删除' } }],
+              },
+            ],
+          };
+        }
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, 60_000);
+          options.signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            resolve(undefined);
+          });
+        });
+        throw new Error('aborted');
+      },
+      async getConfig() {
+        return { ret: 0, typing_ticket: 'ticket' };
+      },
+      async sendTyping() {},
+      async sendMessage(message: {
+        item_list?: Array<{ text_item?: { text?: string } }>;
+      }) {
+        sent.push({ text: message.item_list?.[0]?.text_item?.text });
+      },
+    } as unknown as ILinkClient;
+
+    const state: AccountState = {
+      token: 'tok',
+      baseUrl: 'https://ilinkai.weixin.qq.com',
+      accountId: 'bot-1',
+      peerSessions: {},
+      savedAt: new Date().toISOString(),
+    };
+
+    const fetchImpl = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith('/api/sessions')) {
+        return new Response(JSON.stringify({ id: 'session-approval-timeout' }), { status: 201 });
+      }
+      if (u.endsWith('/chat')) {
+        const enc = new TextEncoder();
+        const stream = new ReadableStream<Uint8Array>({
+          start(streamController) {
+            streamController.enqueue(
+              enc.encode(
+                `data: ${JSON.stringify({
+                  type: 'permission.request',
+                  payload: {
+                    request: {
+                      requestId: 'req-t',
+                      toolName: 'files.delete',
+                      // 服务端很快就会自动拒绝：桥接侧窗口按 expiresAt 计时
+                      expiresAt: new Date(Date.now() + 100).toISOString(),
+                    },
+                  },
+                })}\n\n`,
+              ),
+            );
+            // 用户始终不回复：流保持打开，由总超时护栏收尾
+          },
+        });
+        return new Response(stream, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      }
+      return new Response('{}', { status: 200 });
+    });
+
+    const relayPromise = runWeixinRelay(
+      {
+        agentUrl: 'http://agent:3000',
+        client,
+        state,
+        persist: vi.fn(async () => {}),
+        log: () => {},
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        chatTimeoutMs: 6_000,
+      },
+      controller.signal,
+    );
+
+    const deadline = Date.now() + 6000;
+    while (!sent.some((m) => m.text?.includes('授权已超时')) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(sent.some((m) => m.text?.includes('需要你的授权：files.delete'))).toBe(true);
+    expect(sent.some((m) => m.text?.includes('授权已超时'))).toBe(true);
 
     controller.abort();
     await relayPromise;

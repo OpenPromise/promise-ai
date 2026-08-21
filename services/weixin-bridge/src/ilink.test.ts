@@ -7,6 +7,7 @@ import {
   extractInboundText,
   ILinkClient,
   ILINK_APP_ID,
+  QR_POLL_MAX_FAILURES,
   STALE_TOKEN_ERRCODE,
 } from './ilink.js';
 
@@ -75,6 +76,86 @@ describe('sendMessage', () => {
     await expect(client.sendMessage(buildReplyMessage({ to: 'u', text: 'x' }))).rejects.toThrow(
       /ret=1/,
     );
+  });
+});
+
+describe('pollQrStatus（P1-19 登录故障不再伪装成"等待扫码"）', () => {
+  it('接口明确说还没扫时返回 wait', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ status: 'wait' }));
+    const client = new ILinkClient({ token: 't', fetchImpl });
+    await expect(client.pollQrStatus('qr-1')).resolves.toEqual({ status: 'wait' });
+  });
+
+  it('调用失败累计到上限后返回 status=error 并写日志（不再永久静默）', async () => {
+    const logs: string[] = [];
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError('fetch failed');
+    });
+    const client = new ILinkClient({ token: 't', fetchImpl, log: (m) => logs.push(m) });
+
+    // 前 4 次容忍抖动，继续轮询
+    for (let i = 0; i < QR_POLL_MAX_FAILURES - 1; i += 1) {
+      expect(await client.pollQrStatus('qr-1')).toEqual({ status: 'wait' });
+    }
+    const final = await client.pollQrStatus('qr-1');
+    expect(final.status).toBe('error');
+    expect(final.message).toContain('fetch failed');
+    expect(logs.length).toBe(QR_POLL_MAX_FAILURES);
+    expect(logs.at(-1)).toContain('fetch failed');
+  });
+
+  it('HTTP 5xx / 响应体不是 JSON 也算调用失败（一样会累计）', async () => {
+    const client5xx = new ILinkClient({
+      token: 't',
+      fetchImpl: vi.fn(async () => new Response('bad gateway', { status: 502 })),
+    });
+    for (let i = 0; i < QR_POLL_MAX_FAILURES - 1; i += 1) {
+      expect((await client5xx.pollQrStatus('qr-1')).status).toBe('wait');
+    }
+    expect((await client5xx.pollQrStatus('qr-1')).status).toBe('error');
+
+    const clientHtml = new ILinkClient({
+      token: 't',
+      fetchImpl: vi.fn(async () => new Response('<html>nginx</html>', { status: 200 })),
+    });
+    for (let i = 0; i < QR_POLL_MAX_FAILURES - 1; i += 1) {
+      expect((await clientHtml.pollQrStatus('qr-1')).status).toBe('wait');
+    }
+    expect((await clientHtml.pollQrStatus('qr-1')).status).toBe('error');
+  });
+
+  it('中途成功一次即重置计数（偶发抖动不会累积成 error）', async () => {
+    let ok = false;
+    const fetchImpl = vi.fn(async () => {
+      if (ok) return jsonResponse({ status: 'wait' });
+      throw new TypeError('fetch failed');
+    });
+    const client = new ILinkClient({ token: 't', fetchImpl });
+
+    for (let i = 0; i < QR_POLL_MAX_FAILURES - 1; i += 1) {
+      expect((await client.pollQrStatus('qr-1')).status).toBe('wait');
+    }
+    ok = true;
+    expect((await client.pollQrStatus('qr-1')).status).toBe('wait');
+    ok = false;
+    // 计数已清零：再失败 4 次仍然只是 wait
+    for (let i = 0; i < QR_POLL_MAX_FAILURES - 1; i += 1) {
+      expect((await client.pollQrStatus('qr-1')).status).toBe('wait');
+    }
+  });
+
+  it('外部取消（登录页关闭 / 长轮询到点）不算故障，不累计', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const fetchImpl = vi.fn(async () => {
+      throw new DOMException('aborted', 'AbortError');
+    });
+    const client = new ILinkClient({ token: 't', fetchImpl });
+    for (let i = 0; i < QR_POLL_MAX_FAILURES + 2; i += 1) {
+      expect(await client.pollQrStatus('qr-1', undefined, controller.signal)).toEqual({
+        status: 'wait',
+      });
+    }
   });
 });
 

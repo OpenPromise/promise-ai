@@ -136,13 +136,15 @@ export class PostgresMemoryStore implements MemoryStore {
     return entry;
   }
 
-  async list(kind?: MemoryKind): Promise<MemoryEntry[]> {
+  async list(kind?: MemoryKind, options?: { limit?: number }): Promise<MemoryEntry[]> {
+    const limit = Math.min(Math.max(1, Math.floor(options?.limit ?? 200)), 1000);
     const result = await this.#pool.query<MemoryRow>(
       `SELECT id, kind, content, tag, created_at, updated_at
        FROM memories
        WHERE $1::text IS NULL OR kind = $1
-       ORDER BY created_at DESC`,
-      [kind ?? null],
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [kind ?? null, limit],
     );
     return result.rows.map(toEntry);
   }

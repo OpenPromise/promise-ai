@@ -22,6 +22,31 @@ function stripHtml(input: string): string {
     .trim();
 }
 
+/** 流式读取响应体文本，超过 maxBytes 即中断并抛错（避免全量进内存后再判大小）。 */
+async function readBodyCapped(response: Response, maxBytes: number): Promise<string> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        throw new Error('页面过大（>2MB），已拒绝抓取');
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    text += decoder.decode();
+  } finally {
+    reader.releaseLock();
+  }
+  return text;
+}
+
 /**
  * web.fetch：抓取网页并提取正文文本（L0 只读）。
  * 吸收 OpenClaw web-fetch 思路：去脚本/样式/标签、压缩空白、截断输出；
@@ -68,10 +93,8 @@ export function createWebFetchTool(fetchImpl: typeof fetch = fetch): Tool {
           return { ok: false, error: `抓取失败：HTTP ${response.status}` };
         }
         const contentType = response.headers.get('content-type') ?? '';
-        const text = await response.text();
-        if (text.length > 2_000_000) {
-          return { ok: false, error: '页面过大（>2MB），已拒绝抓取' };
-        }
+        // 流式限长读取：先 text() 全量进内存再判大小，2MB 上限就形同虚设。
+        const text = await readBodyCapped(response, 2_000_000);
         const body = contentType.includes('html') ? stripHtml(text) : text.replace(/\s+/g, ' ').trim();
         return {
           ok: true,

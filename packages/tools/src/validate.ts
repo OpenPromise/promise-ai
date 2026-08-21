@@ -78,8 +78,18 @@ function validateValue(
         message: `${path || '参数'} 长度不能超过 ${schema.maxLength}`,
       });
     }
-    if (typeof schema.pattern === 'string' && !new RegExp(schema.pattern).test(value as string)) {
-      issues.push({ path: path || '参数', message: `${path || '参数'} 不符合格式要求` });
+    if (typeof schema.pattern === 'string') {
+      try {
+        if (!new RegExp(schema.pattern).test(value as string)) {
+          issues.push({ path: path || '参数', message: `${path || '参数'} 不符合格式要求` });
+        }
+      } catch {
+        // 非法正则按"未通过校验"处理，返回可读错误而不是让异常穿透上层
+        issues.push({
+          path: path || '参数',
+          message: `${path || '参数'} 的格式规则（pattern）无效`,
+        });
+      }
     }
   }
 
