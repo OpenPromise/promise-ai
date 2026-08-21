@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  classifyShellExit,
   collectSecrets,
   createServerShellTool,
   normalizePtyOutput,
   redactOutput,
+  serverShellEnv,
   shellSingleQuote,
+  type ShellOutput,
   type ShellRunner,
 } from './server-shell.js';
 
@@ -185,6 +188,134 @@ describe('server.shell（云服务器即她的世界）', () => {
     expect(result.ok).toBe(false);
     expect(result.error).toContain('不能同时使用');
     expect(runner).not.toHaveBeenCalled();
+  });
+
+  // N-P1-1：上层超时/用户中断必须真正传到子进程（否则命令在容器里继续跑）
+  it('context.signal abort 时把取消传给 runner，并按"取消"而非"超时"上报', async () => {
+    const runner: ShellRunner = vi.fn(
+      (_command, options) =>
+        new Promise<ShellOutput>((resolve) => {
+          const finish = (): void =>
+            resolve({ exitCode: 130, stdout: '', stderr: '', timedOut: false, cancelled: true });
+          if (options.signal.aborted) finish();
+          else options.signal.addEventListener('abort', finish, { once: true });
+        }),
+    );
+    const tool = createServerShellTool({ runner, defaultCwd: process.cwd() });
+    const controller = new AbortController();
+    const pending = tool.execute(
+      { command: 'sleep 999' },
+      { sessionId: 's1', signal: controller.signal },
+    );
+    controller.abort();
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    const data = result.data as { timedOut: boolean; cancelled?: boolean; note?: string };
+    expect(data.cancelled).toBe(true);
+    expect(data.timedOut).toBe(false);
+    expect(data.note).toContain('取消');
+  });
+
+  it('context.signal 已 abort 时 runner 收到的 signal 也已 abort', async () => {
+    let sawAborted: boolean | undefined;
+    const runner: ShellRunner = vi.fn(async (_command, options) => {
+      sawAborted = options.signal.aborted;
+      return { exitCode: 130, stdout: '', stderr: '', timedOut: false, cancelled: true };
+    });
+    const tool = createServerShellTool({ runner, defaultCwd: process.cwd() });
+    await tool.execute(
+      { command: 'pwd' },
+      { sessionId: 's1', signal: AbortSignal.abort() },
+    );
+    expect(sawAborted).toBe(true);
+  });
+
+  // N-P2-7：排队等待超时，不再让用户端"卡住不回"
+  it('前一条命令占用队列超过等待上限时返回"服务器正忙"，且不重复执行', async () => {
+    let release: (() => void) | undefined;
+    let runnerCalls = 0;
+    const runner: ShellRunner = vi.fn(
+      () => {
+        runnerCalls += 1;
+        if (runnerCalls === 1) {
+          return new Promise<ShellOutput>((resolve) => {
+            release = () => resolve({ exitCode: 0, stdout: 'done', stderr: '', timedOut: false });
+          });
+        }
+        return Promise.resolve({ exitCode: 0, stdout: 'done', stderr: '', timedOut: false });
+      },
+    );
+    const tool = createServerShellTool({
+      runner,
+      defaultCwd: process.cwd(),
+      queueWaitMs: 20,
+    });
+    // N-P2-7 后队列按会话分片：同一会话内排队超时才返回"忙"，不同会话互不阻塞
+    const first = tool.execute({ command: 'sleep 10' }, { sessionId: 's1' });
+    const second = await tool.execute({ command: 'pwd' }, { sessionId: 's1' });
+    expect(second.ok).toBe(false);
+    expect(second.error).toContain('服务器正忙');
+    expect(runner).toHaveBeenCalledTimes(1);
+    release?.();
+    await first;
+    expect(runner).toHaveBeenCalledTimes(1);
+
+    // 不同会话的命令不被占用中的其它会话阻塞
+    const other = await tool.execute({ command: 'pwd' }, { sessionId: 's2' });
+    expect(other.ok).toBe(true);
+  });
+});
+
+describe('serverShellEnv（N-P1-1 环境变量白名单）', () => {
+  it('只透传 PATH/HOME/LANG 等基础变量，不把密钥与数据库连接串交给 bash', () => {
+    const env = serverShellEnv({
+      PATH: '/usr/bin',
+      HOME: '/root',
+      LANG: 'C.UTF-8',
+      TZ: 'Asia/Shanghai',
+      TERM: 'xterm',
+      DATABASE_URL: 'postgres://user:pass@db/app',
+      OPENROUTER_API_KEY: 'sk-secret',
+      DASHSCOPE_API_KEY: 'sk-dashscope',
+      HOOK_SECRET: 'hook-secret',
+      AGENT_API_TOKEN: 'agent-token',
+    });
+    expect(env).toEqual({
+      PATH: '/usr/bin',
+      HOME: '/root',
+      LANG: 'C.UTF-8',
+      TZ: 'Asia/Shanghai',
+      TERM: 'xterm',
+    });
+  });
+
+  it('缺少 PATH 时回落到标准系统路径', () => {
+    expect(serverShellEnv({}).PATH).toContain('/usr/bin');
+  });
+});
+
+describe('classifyShellExit（N-P1-1 超时与取消分开上报）', () => {
+  it('定时器触发 → timedOut，退出码 124', () => {
+    expect(classifyShellExit({ code: null, signal: 'SIGTERM', timedOut: true, cancelled: false }))
+      .toEqual({ exitCode: 124, timedOut: true, cancelled: false });
+  });
+
+  it('外部取消 → cancelled，不报成超时', () => {
+    expect(classifyShellExit({ code: null, signal: 'SIGTERM', timedOut: false, cancelled: true }))
+      .toEqual({ exitCode: 130, timedOut: false, cancelled: true });
+  });
+
+  it('正常结束保留原始退出码', () => {
+    expect(classifyShellExit({ code: 3, signal: null, timedOut: false, cancelled: false })).toEqual({
+      exitCode: 3,
+      timedOut: false,
+      cancelled: false,
+    });
+  });
+
+  it('被第三方 kill（非我方超时/取消）不谎报超时', () => {
+    expect(classifyShellExit({ code: null, signal: 'SIGKILL', timedOut: false, cancelled: false }))
+      .toEqual({ exitCode: 137, timedOut: false, cancelled: false });
   });
 });
 

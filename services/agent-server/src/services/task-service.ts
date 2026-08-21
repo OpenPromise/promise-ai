@@ -16,7 +16,7 @@ export interface TaskServiceDeps {
   /** 事件时间线：任务完成/失败留痕。 */
   timeline?: TimelineStore;
   tickIntervalMs?: number;
-  /** 同一 tick 内并发执行的到期任务上限（默认 2）；其余排队。 */
+  /** 同时执行的到期任务上限（默认 2，跨 tick 统一计数）；其余推迟到下个 tick。 */
   maxConcurrentRuns?: number;
 }
 
@@ -100,7 +100,8 @@ export class TaskService {
   readonly #maxConcurrentRuns: number;
   readonly #listeners = new Set<(event: TaskRunEvent) => void>();
   #timer: NodeJS.Timeout | undefined;
-  #ticking = false;
+  /** 正在执行（或本 tick 已排入队列）的任务 id：tick 只跳过这些，不再锁整个调度。 */
+  readonly #running = new Map<string, number>();
 
   constructor(deps: TaskServiceDeps) {
     this.#tasks = deps.tasks;
@@ -143,29 +144,46 @@ export class TaskService {
 
   /** Runs the scheduler once; public so tests can trigger ticks deterministically. */
   async checkNow(): Promise<void> {
-    if (this.#ticking) return;
-    this.#ticking = true;
     try {
       const tasks = await this.#tasks.listTasks();
       const now = new Date();
-      const due = tasks.filter((task) => task.enabled && isTaskDue(task, now));
+      // 只跳过"仍在跑的那个任务"，不再用全 tick 锁：旧实现里一个 60 分钟的
+      // coding.run 定时任务会让接下来一小时的所有 tick 直接 return，到点的
+      // 巡检/日报全部静默失约（N-P1-5）。
+      const due = tasks.filter(
+        (task) => task.enabled && !this.#running.has(task.id) && isTaskDue(task, now),
+      );
+      if (due.length === 0) return;
+      // 全局并发额度：跨 tick 统一计数，避免"每个 tick 各开 2 个"叠加成无界并发。
+      const slots = this.#maxConcurrentRuns - this.#running.size;
+      if (slots <= 0) {
+        const oldest = Math.min(...this.#running.values());
+        console.warn(
+          `[tasks] 并发额度已满（${this.#running.size}/${this.#maxConcurrentRuns}），` +
+            `本 tick 推迟 ${due.length} 个到期任务；最久的已运行 ${Math.round(
+              (Date.now() - oldest) / 1000,
+            )} 秒`,
+        );
+        return;
+      }
       // 有界并发 + 单任务兜底：一个慢任务不再拖垮同 tick 的其它任务，
       // 单任务抛错（含 getSession 的数据库抖动）也不会终止整个 tick。
-      await runWithConcurrency(due, this.#maxConcurrentRuns, async (task) => {
+      await runWithConcurrency(due, slots, async (task) => {
+        this.#running.set(task.id, Date.now());
         try {
           await this.#runTask(task);
         } catch (error) {
           console.error(
             `[tasks] task ${task.id}（${task.name}）run failed: ${error instanceof Error ? error.message : String(error)}`,
           );
+        } finally {
+          this.#running.delete(task.id);
         }
       });
     } catch (error) {
       console.error(
         `[tasks] scheduler tick failed: ${error instanceof Error ? error.message : String(error)}`,
       );
-    } finally {
-      this.#ticking = false;
     }
   }
 

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { access } from 'node:fs/promises';
-import type { PermissionLevel, Tool, ToolResult } from '@personal-ai/tools';
+import type { PermissionLevel, Tool, ToolContext, ToolResult } from '@personal-ai/tools';
 
 /**
  * server.shell：在服务器容器内执行 bash 命令（容器内终端，L3 系统级）。
@@ -16,12 +16,71 @@ export interface ShellOutput {
   stdout: string;
   stderr: string;
   timedOut: boolean;
+  /** 被上层（工具超时/用户中断）取消：与自身超时分开上报，避免误触发自愈重试。 */
+  cancelled?: boolean;
 }
 
 export type ShellRunner = (
   command: string,
   options: { cwd: string; timeoutMs: number; signal: AbortSignal; input?: string },
 ) => Promise<ShellOutput>;
+
+/**
+ * 交给 bash 的最小环境变量集合（同 system-status.ts 的 minimalStatusEnv 思路）。
+ * 不透传 process.env：否则 `env | grep -i key` 一条命令就能把 DASHSCOPE_API_KEY /
+ * OPENROUTER_API_KEY / DATABASE_URL（含密码）/ HOOK_SECRET / AGENT_API_TOKEN
+ * 全部回显出去，L3 shell 立刻变成凭据外泄面。
+ */
+const SHELL_ENV_ALLOWLIST = [
+  'HOME',
+  'LANG',
+  'LC_ALL',
+  'TZ',
+  'TERM',
+  'USER',
+  'LOGNAME',
+  'SHELL',
+  'HOSTNAME',
+] as const;
+
+export function serverShellEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const result: NodeJS.ProcessEnv = {
+    PATH: env.PATH ?? '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+  };
+  for (const key of SHELL_ENV_ALLOWLIST) {
+    const value = env[key];
+    if (value !== undefined) result[key] = value;
+  }
+  return result;
+}
+
+/** 信号 → 退出码（128 + signum，shell 惯例）。 */
+const SIGNAL_EXIT_CODES: Record<string, number> = {
+  SIGINT: 130,
+  SIGTERM: 143,
+  SIGKILL: 137,
+  SIGHUP: 129,
+};
+
+/**
+ * 退出分类：超时（我方定时器）与取消（上层 signal）分开上报。
+ * 旧实现由退出信号反推 timedOut，于是"用户中断"和"被第三方 kill"都被报成
+ * 超时，failure-classifier 会按可恢复处理并触发无意义的自愈重试。
+ */
+export function classifyShellExit(input: {
+  code: number | null;
+  signal: NodeJS.Signals | string | null;
+  timedOut: boolean;
+  cancelled: boolean;
+}): { exitCode: number; timedOut: boolean; cancelled: boolean } {
+  if (input.timedOut) return { exitCode: 124, timedOut: true, cancelled: false };
+  if (input.cancelled) return { exitCode: 130, timedOut: false, cancelled: true };
+  if (input.code !== null) {
+    return { exitCode: input.code, timedOut: false, cancelled: false };
+  }
+  const bySignal = input.signal ? SIGNAL_EXIT_CODES[input.signal] : undefined;
+  return { exitCode: bySignal ?? 1, timedOut: false, cancelled: false };
+}
 
 function defaultRunner(
   command: string,
@@ -33,11 +92,13 @@ function defaultRunner(
     const child = spawn('/bin/bash', ['-lc', command], {
       cwd: options.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: process.env,
+      env: serverShellEnv(),
       detached: process.platform !== 'win32',
     });
     let stdout = '';
     let stderr = '';
+    let timedOut = false;
+    let cancelled = false;
     child.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString('utf8');
     });
@@ -57,24 +118,29 @@ function defaultRunner(
         child.kill(signal);
       }
     };
-    const onAbort = (): void => {
+    const terminate = (): void => {
       killTree('SIGTERM');
       // 2 秒后仍存活则强杀，避免个别进程不响应 SIGTERM
       const killer = setTimeout(() => killTree('SIGKILL'), 2000);
       killer.unref?.();
     };
+    const onAbort = (): void => {
+      cancelled = true;
+      terminate();
+    };
     if (options.signal.aborted) onAbort();
     else options.signal.addEventListener('abort', onAbort, { once: true });
     child.on('error', reject);
     const timer = setTimeout(() => {
-      onAbort();
+      timedOut = true;
+      terminate();
     }, options.timeoutMs);
     timer.unref?.();
     child.on('close', (code, signal) => {
       clearTimeout(timer);
       options.signal.removeEventListener('abort', onAbort);
-      const timedOut = signal === 'SIGTERM' || signal === 'SIGKILL';
-      resolve({ exitCode: timedOut ? 124 : (code ?? 1), stdout, stderr, timedOut });
+      const classified = classifyShellExit({ code, signal, timedOut, cancelled });
+      resolve({ ...classified, stdout, stderr });
     });
     if (options.input !== undefined) {
       child.stdin.write(options.input);
@@ -166,22 +232,68 @@ export interface ServerShellToolOptions {
   runner?: ShellRunner;
   /** 默认工作目录（缺省 /projects 持久工作区）。 */
   defaultCwd?: string;
+  /** 排队等待上限（毫秒）：等太久直接回"服务器正忙"，不让用户端干等。 */
+  queueWaitMs?: number;
 }
 
 /**
  * 全局串行队列：同一时刻只执行一条 server.shell 命令。
  * 防止聊天会话与定时任务并发跑 npm install / docker build 等重命令互相干扰
  * （OpenClaw command-queue 思路的最简形态）。
+ *
+ * N-P2-7：队列没有等待上限时，前面排着一条 10 分钟的命令会让后续调用干等到
+ * 自己的 timeoutMs 耗尽，用户侧表现为"AI 卡住不回"。这里加等待超时：超过
+ * DEFAULT_QUEUE_WAIT_MS 仍拿不到锁就直接失败，让模型有机会换个说法回复用户。
  */
-let shellQueue: Promise<unknown> = Promise.resolve();
+export const DEFAULT_QUEUE_WAIT_MS = 30_000;
 
-function withShellLock<T>(fn: () => Promise<T>): Promise<T> {
-  const run = shellQueue.then(fn, fn);
-  shellQueue = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  return run;
+export class ShellBusyError extends Error {
+  constructor(waitMs: number) {
+    super(`服务器正忙：已有命令在执行，等待超过 ${Math.round(waitMs / 1000)} 秒仍未排到`);
+    this.name = 'ShellBusyError';
+  }
+}
+
+/** 按会话分片的 shell 队列：一个会话的长命令不再堵死其它会话（N-P2-7）。 */
+const shellQueues = new Map<string, Promise<unknown>>();
+
+function withShellLock<T>(key: string, fn: () => Promise<T>, waitMs: number): Promise<T> {
+  const previous = shellQueues.get(key) ?? Promise.resolve();
+  let settle: () => void = () => {};
+  // 先把自己接到队尾（占位），再决定是执行还是放弃——放弃时也要释放占位。
+  const next = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+  shellQueues.set(key, next);
+  return new Promise<T>((resolve, reject) => {
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      settle();
+      reject(new ShellBusyError(waitMs));
+    }, waitMs);
+    timer.unref?.();
+    void previous.then(
+      () => start(),
+      () => start(),
+    );
+    function start(): void {
+      if (timedOut) return;
+      clearTimeout(timer);
+      void fn().then(
+        (value) => {
+          settle();
+          if (shellQueues.get(key) === next) shellQueues.delete(key);
+          resolve(value);
+        },
+        (error: unknown) => {
+          settle();
+          if (shellQueues.get(key) === next) shellQueues.delete(key);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
+    }
+  });
 }
 
 export function createServerShellTool(
@@ -189,6 +301,7 @@ export function createServerShellTool(
 ): Tool {
   const runner = options.runner ?? defaultRunner;
   const defaultCwd = options.defaultCwd ?? '/projects';
+  const queueWaitMs = options.queueWaitMs ?? DEFAULT_QUEUE_WAIT_MS;
   const executeCommand = (
     command: string,
     opts: { cwd: string; timeoutMs: number; signal: AbortSignal; input?: string },
@@ -256,7 +369,7 @@ export function createServerShellTool(
     },
     permissionLevel: 3 as PermissionLevel,
     timeoutMs: 5 * 60 * 1000,
-    async execute(input: unknown): Promise<ToolResult> {
+    async execute(input: unknown, context?: ToolContext): Promise<ToolResult> {
       const {
         command,
         cwd,
@@ -285,20 +398,28 @@ export function createServerShellTool(
         return { ok: false, error: `工作目录不存在：${resolvedCwd}` };
       }
       const timeoutMs = Math.min(Math.max(1, Math.floor(timeoutSeconds)), 300) * 1000;
+      // N-P1-1：上层（runToolWithTimeout 的超时 / 用户中断）的 signal 必须真正
+      // 传到子进程，否则"已报告超时"但容器里的命令还在跑。
       const controller = new AbortController();
+      const onParentAbort = (): void => controller.abort();
+      if (context?.signal?.aborted) onParentAbort();
+      else context?.signal?.addEventListener('abort', onParentAbort, { once: true });
       try {
-        const result = await withShellLock(() =>
-          executeCommand(
-            command.trim(),
-            {
-              cwd: resolvedCwd,
-              timeoutMs,
-              signal: controller.signal,
-              ...(stdinInput !== undefined ? { input: stdinInput } : {}),
-            },
-            interactive,
-            sandbox,
-          ),
+        const result = await withShellLock(
+          context?.sessionId ?? 'global',
+          () =>
+            executeCommand(
+              command.trim(),
+              {
+                cwd: resolvedCwd,
+                timeoutMs,
+                signal: controller.signal,
+                ...(stdinInput !== undefined ? { input: stdinInput } : {}),
+              },
+              interactive,
+              sandbox,
+            ),
+          queueWaitMs,
         );
         const secrets = collectSecrets();
         const rawStdout = result.stdout;
@@ -317,19 +438,26 @@ export function createServerShellTool(
           data: {
             exitCode: result.exitCode,
             timedOut: result.timedOut,
+            cancelled: result.cancelled ?? false,
             stdout: redactedStdout.slice(0, 20_000),
             stderr: redactedStderr.slice(0, 10_000),
             note: result.timedOut
               ? `命令超过 ${Math.round(timeoutMs / 1000)} 秒被终止（已清理进程树）`
-              : undefined,
+              : result.cancelled
+                ? '命令被取消（上层超时或用户中断），已清理进程树'
+                : undefined,
           },
         };
       } catch (error) {
+        if (error instanceof ShellBusyError) {
+          return { ok: false, error: error.message };
+        }
         return {
           ok: false,
           error: `server.shell 执行失败：${error instanceof Error ? error.message : String(error)}`,
         };
       } finally {
+        context?.signal?.removeEventListener('abort', onParentAbort);
         controller.abort();
       }
     },

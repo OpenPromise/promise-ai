@@ -355,7 +355,8 @@ export class EngineerTaskRunner {
     if (!this.#persistFile) return;
     try {
       await mkdir(path.dirname(this.#persistFile), { recursive: true });
-      const records = [...this.#tasks.values()].slice(-50);
+      // 与内存表上限一致（MAX_TASKS=100），避免持久化只存末 50 条与运行态分叉
+      const records = [...this.#tasks.values()].slice(-MAX_TASKS);
       await writeFile(this.#persistFile, JSON.stringify(records, null, 2), 'utf8');
     } catch {
       // 持久化失败不致命：任务仍可运行/查询，只是重启后丢失记录

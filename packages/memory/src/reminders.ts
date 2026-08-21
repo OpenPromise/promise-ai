@@ -128,7 +128,7 @@ export class PostgresReminderStore implements ReminderStore {
   async markDone(id: string): Promise<Reminder | undefined> {
     const result = await this.#pool.query<ReminderRow>(
       `UPDATE reminders SET done = true
-       WHERE id = $1
+       WHERE id = $1 AND NOT done
        RETURNING id, text, due_at, created_at, done`,
       [id],
     );

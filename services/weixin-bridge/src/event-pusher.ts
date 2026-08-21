@@ -124,7 +124,7 @@ export async function runEventPusher(
       let currentEvent = '';
       let currentId = '';
 
-      await consumeSse(response, (line) => {
+      await consumeSse(response, async (line) => {
         const trimmed = line.trim();
         if (trimmed.startsWith('id:')) {
           currentId = trimmed.slice(3).trim();
@@ -133,7 +133,6 @@ export async function runEventPusher(
         } else if (trimmed.startsWith('data:')) {
           const data = trimmed.slice(5).trim();
           if (!data || data === '[DONE]') return;
-          if (currentId) lastEventId = currentId;
           let json: unknown;
           try {
             json = JSON.parse(data) as unknown;
@@ -143,14 +142,20 @@ export async function runEventPusher(
           const text = formatEvent(currentEvent, json);
           if (!text) return;
           const targets = peers();
-          for (const peer of targets) {
-            void client
-              .sendMessage(buildReplyMessage({ to: peer, text }))
-              .catch((error) =>
+          const results = await Promise.allSettled(
+            targets.map((peer) =>
+              client.sendMessage(buildReplyMessage({ to: peer, text })).catch((error) => {
                 log?.(
                   `[weixin] 推送失败 ${peer}：${error instanceof Error ? error.message : String(error)}`,
-                ),
-              );
+                );
+                throw error;
+              }),
+            ),
+          );
+          // 至少一个对端投递成功才推进 Last-Event-ID；全部失败则不推进，
+          // 断线重连后服务端会按 Last-Event-ID 重放错过的通知（N-P2-1）。
+          if (currentId && results.some((result) => result.status === 'fulfilled')) {
+            lastEventId = currentId;
           }
           if (targets.length > 0) {
             log?.(`[weixin] 已推送事件 ${currentEvent} 到 ${targets.length} 个微信对端`);

@@ -51,15 +51,28 @@ export class ReminderService {
   /** 扫描一次到期提醒（公开便于测试确定性触发）。 */
   async checkNow(): Promise<void> {
     const now = Date.now();
-    const reminders = await this.#reminders.list(false);
-    for (const reminder of reminders) {
-      if (reminder.dueAt === undefined || Date.parse(reminder.dueAt) > now) continue;
-      await this.#reminders.markDone(reminder.id);
-      this.#emit({
-        id: reminder.id,
-        text: reminder.text,
-        ...(reminder.dueAt ? { dueAt: reminder.dueAt } : {}),
-      });
+    try {
+      const reminders = await this.#reminders.list(false);
+      for (const reminder of reminders) {
+        try {
+          if (reminder.dueAt === undefined || Date.parse(reminder.dueAt) > now) continue;
+          await this.#reminders.markDone(reminder.id);
+          this.#emit({
+            id: reminder.id,
+            text: reminder.text,
+            ...(reminder.dueAt ? { dueAt: reminder.dueAt } : {}),
+          });
+        } catch (error) {
+          // 单条提醒失败不影响其它提醒（如某条 markDone 数据库抖动）
+          console.warn(
+            `[reminder] 处理提醒 ${reminder.id} 失败：${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+    } catch (error) {
+      console.warn(
+        `[reminder] 扫描失败：${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 

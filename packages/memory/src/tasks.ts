@@ -262,6 +262,9 @@ export class PostgresTaskStore implements TaskStore {
     // 单条原子更新：只覆盖调用方提供的字段（COALESCE 兜底保留原值），
     // 避免"先读整行再整列覆盖"在调度器写 lastRunAt 与用户改 schedule/enabled
     // 并发时互相覆盖（丢失更新，P0-4 同族问题）。
+    // 注意：COALESCE 语义下字段无法通过传 null 显式清空（Task 当前字段
+    // 均非可空业务字段，lastRunAt 由调度器管理）；若未来出现可清空字段，
+    // 用单独的 clear 语义而非依赖 null patch。
     const result = await this.#pool.query(
       `UPDATE tasks
        SET name = COALESCE($2, name),

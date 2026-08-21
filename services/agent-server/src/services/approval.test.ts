@@ -85,4 +85,21 @@ describe('ApprovalRegistry 有界指纹记忆', () => {
     expect(registry.isApproved('s-fp', 'tool.0')).toBe(false);
     expect(registry.isApproved('s-fp', 'tool.104')).toBe(true);
   });
+
+  // N-P1-6：clearForRequest 走不到的异常路径（流被中断、语音连接异常断开）
+  // 会留下永久条目，这里必须有上限驱逐。
+  it('任务级授权（#requestApproved）同样封顶：请求数与单请求工具数都驱逐最旧', () => {
+    const registry = new ApprovalRegistry({ timeoutMs: 30_000 });
+    for (let i = 0; i < 205; i += 1) {
+      registry.rememberRequestApproval(`req-${i}`, 'server.shell');
+    }
+    expect(registry.isRequestApproved('req-0', 'server.shell')).toBe(false);
+    expect(registry.isRequestApproved('req-204', 'server.shell')).toBe(true);
+
+    for (let i = 0; i < 105; i += 1) {
+      registry.rememberRequestApproval('req-many-tools', `tool.${i}`);
+    }
+    expect(registry.isRequestApproved('req-many-tools', 'tool.0')).toBe(false);
+    expect(registry.isRequestApproved('req-many-tools', 'tool.104')).toBe(true);
+  });
 });

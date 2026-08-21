@@ -1,8 +1,16 @@
 import type { Tool } from './index.js';
+import { type HostResolver, checkUrlHost, safeFetch } from './ssrf.js';
 
 interface WebFetchInput {
   url: string;
   maxChars?: number;
+}
+
+export interface WebFetchOptions {
+  /** 主机名解析（默认 node:dns）；单测注入避免真实 DNS。 */
+  resolveHost?: HostResolver;
+  /** 手动跟随的重定向上限（默认 5）。 */
+  maxRedirects?: number;
 }
 
 function stripHtml(input: string): string {
@@ -50,9 +58,14 @@ async function readBodyCapped(response: Response, maxBytes: number): Promise<str
 /**
  * web.fetch：抓取网页并提取正文文本（L0 只读）。
  * 吸收 OpenClaw web-fetch 思路：去脚本/样式/标签、压缩空白、截断输出；
- * 只允许 http/https，限制响应大小与输出长度（SSRF/资源滥用防护）。
+ * 只允许 http/https，限制响应大小与输出长度。
+ * SSRF（N-P1-8）：DNS 解析后逐个 IP 拒绝回环/私网/链路本地/保留网段，
+ * 并用 `redirect: 'manual'` 逐跳重新校验，防止 302 绕过入口检查。
  */
-export function createWebFetchTool(fetchImpl: typeof fetch = fetch): Tool {
+export function createWebFetchTool(
+  fetchImpl: typeof fetch = fetch,
+  options: WebFetchOptions = {},
+): Tool {
   return {
     name: 'web.fetch',
     description:
@@ -84,22 +97,34 @@ export function createWebFetchTool(fetchImpl: typeof fetch = fetch): Tool {
         return { ok: false, error: '只支持 http/https 协议' };
       }
       const capped = Math.min(Math.max(1, Math.floor(maxChars)), 20_000);
+      // 入口先做一次校验：协议不对/目标是内网时，连 fetch 都不发。
+      const entry = await checkUrlHost(parsed, options.resolveHost);
+      if (!entry.ok) return { ok: false, error: entry.error ?? '目标地址不被允许' };
       try {
-        const response = await fetchImpl(parsed, {
-          signal: context.signal,
-          redirect: 'follow',
-        });
+        const hopped = await safeFetch(
+          parsed,
+          { signal: context.signal },
+          {
+            fetchImpl,
+            ...(options.resolveHost ? { resolveHost: options.resolveHost } : {}),
+            ...(options.maxRedirects !== undefined ? { maxRedirects: options.maxRedirects } : {}),
+          },
+        );
+        if (!hopped.ok) return { ok: false, error: hopped.error };
+        const { response, url: finalUrl } = hopped;
         if (!response.ok) {
           return { ok: false, error: `抓取失败：HTTP ${response.status}` };
         }
         const contentType = response.headers.get('content-type') ?? '';
         // 流式限长读取：先 text() 全量进内存再判大小，2MB 上限就形同虚设。
         const text = await readBodyCapped(response, 2_000_000);
-        const body = contentType.includes('html') ? stripHtml(text) : text.replace(/\s+/g, ' ').trim();
+        const body = contentType.includes('html')
+          ? stripHtml(text)
+          : text.replace(/\s+/g, ' ').trim();
         return {
           ok: true,
           data: {
-            url: parsed.toString(),
+            url: finalUrl.toString(),
             contentType,
             text: body.slice(0, capped),
             truncated: body.length > capped,

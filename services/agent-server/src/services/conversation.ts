@@ -69,6 +69,8 @@ const GOAL_CONTEXT_LIMIT = 5;
 const FEEDBACK_CONTEXT_LIMIT = 3;
 const PROFILE_CONTEXT_LIMIT = 30;
 const TIMELINE_CONTEXT_LIMIT = 8;
+/** 持久上下文（目标/画像/时间线）重新注入的轮次间隔：长会话里记忆不能只在第 0 轮有效。 */
+const PERSISTENT_CONTEXT_REINJECT_INTERVAL = 8;
 const AUTO_APPROVE_PROMPT =
   '【当前为全权限模式】所有工具都会自动执行，无需用户确认。' +
   '即使工具描述里写着"需要确认"，也直接调用，不要询问或等待用户确认。';
@@ -251,6 +253,8 @@ export async function collectPersistentContext(
     );
   }
   if (profile) {
+    // 单用户场景恒为 'default'（与 profile-tools 的 resolveProfileUserId(ctx.userId)
+    // 在微信会话无 userId 时一致）；多用户时此处应从会话 metadata 取 userId。
     const userProfile = await profile.getProfile('default');
     const profileEntries = userProfile?.entries ?? [];
     if (profileEntries.length > 0) {
@@ -478,7 +482,6 @@ export class ConversationService {
       collectPersistentContext(this.#memory, this.#profile, this.#timeline),
       this.#memory.search(input.userMessage, MEMORY_LIMIT),
     ]);
-    let memoryInjected = false;
     let lastToolFingerprint: string | null = null;
     let toolRepeatCount = 0;
     let toolCallsUsed = 0;
@@ -507,8 +510,9 @@ export class ConversationService {
       });
 
       const messagesForTurn: LLMChatMessage[] = (() => {
-        if (memoryInjected) return messages;
-        memoryInjected = true;
+        // 周期性重新注入（N-P1-13）：目标/画像/时间线只在第 0 轮注入会让
+        // 长会话后续轮次"失忆"；每 N 轮带一次，保持记忆在长对话中持续有效。
+        if (turn !== 0 && turn % PERSISTENT_CONTEXT_REINJECT_INTERVAL !== 0) return messages;
         const blocks: string[] = [];
         if (persistentContext) blocks.push(persistentContext);
         if (relevantMemories.length > 0) {

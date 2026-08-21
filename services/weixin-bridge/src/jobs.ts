@@ -27,6 +27,11 @@ export interface FileJobManagerOptions {
   maxBytes?: number;
 }
 
+/** 后台文件发送的全局并发上限：超过则排队，防止连环请求拉起无上限上传。 */
+const MAX_CONCURRENT_JOBS = 3;
+/** 任务表上限：超过后驱逐最旧的已完成/失败任务。 */
+const MAX_JOBS = 50;
+
 function formatSize(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)}KB`;
@@ -39,6 +44,8 @@ function formatSize(bytes: number): string {
  */
 export class FileJobManager {
   readonly #jobs = new Map<string, FileJob>();
+  /** 并发超限时排队的任务（FIFO）。 */
+  readonly #waiting: Array<{ job: FileJob; bytes: Buffer }> = [];
   readonly #options: FileJobManagerOptions;
 
   constructor(options: FileJobManagerOptions) {
@@ -90,8 +97,44 @@ export class FileJobManager {
       createdAt: new Date().toISOString(),
     };
     this.#jobs.set(job.id, job);
-    void this.#run(job, loaded.bytes);
+    this.#startQueuedOrWait(job, loaded.bytes);
     return { job, deduped: false };
+  }
+
+  /** 并发未满则启动，否则排队（队列中的 job 保持 queued，参与同文件去重）。 */
+  #startQueuedOrWait(job: FileJob, bytes: Buffer): void {
+    if (this.#activeCount() >= MAX_CONCURRENT_JOBS) {
+      this.#waiting.push({ job, bytes });
+      return;
+    }
+    void this.#run(job, bytes);
+  }
+
+  /** 正在上传/投递的任务数（queued 排队中的不算）。 */
+  #activeCount(): number {
+    let count = 0;
+    for (const job of this.#jobs.values()) {
+      if (job.status === 'uploading' || job.status === 'sending') count += 1;
+    }
+    return count;
+  }
+
+  /** 前一个任务结束后，从等待队列拉下一个（直到并发满）。 */
+  #drainQueue(): void {
+    while (this.#waiting.length > 0 && this.#activeCount() < MAX_CONCURRENT_JOBS) {
+      const next = this.#waiting.shift()!;
+      this.#startQueuedOrWait(next.job, next.bytes);
+    }
+  }
+
+  /** 有界驱逐：只清已完成/失败的最旧记录，运行中的不受影响。 */
+  #evict(): void {
+    if (this.#jobs.size <= MAX_JOBS) return;
+    const finished = [...this.#jobs.values()]
+      .filter((job) => job.status === 'done' || job.status === 'failed')
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const overflow = this.#jobs.size - MAX_JOBS;
+    for (const job of finished.slice(0, overflow)) this.#jobs.delete(job.id);
   }
 
   async #run(job: FileJob, bytes: Buffer): Promise<void> {
@@ -135,6 +178,9 @@ export class FileJobManager {
       job.finishedAt = new Date().toISOString();
       await progress(`❌ 「${job.fileName}」发送失败：${job.error}`);
       log?.(`[weixin] 后台发送失败 ${job.fileName}：${job.error}`);
+    } finally {
+      this.#drainQueue();
+      this.#evict();
     }
   }
 }

@@ -340,6 +340,9 @@ const { tools, stores } = createBuiltinTools({
   },
 });
 for (const tool of tools) {
+  // 内置 filesystem.delete 限定工作区且需要二次确认，容易让模型误报"不在工作区"，
+  // 因此从不注册（而不是注册后 unregister）；微信侧的文件删除走 weixin.delete_file。
+  if (tool.name === 'filesystem.delete') continue;
   toolRegistry.register(tool);
 }
 // coding.run 是服务端能力（服务器上驱动 dsh 开源编码代理），不属于桌面客户端。
@@ -393,9 +396,6 @@ if (config.tencent.configured) {
 } else {
   console.warn('[cloud-tools] TENCENT_SECRET_ID/TENCENT_SECRET_KEY 未配置，cloud.* 工具未注册');
 }
-// 内置 filesystem.delete 限定工作区且需要二次确认，容易让模型误报"不在工作区"，
-// 因此不注册；微信侧的文件删除走 weixin.delete_file。
-toolRegistry.unregister('filesystem.delete');
 taskService.start();
 const reminderService = new ReminderService({ reminders: stores.reminders });
 reminderService.start();

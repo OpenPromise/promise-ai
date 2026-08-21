@@ -92,12 +92,13 @@ export class PostgresMemoryStore implements MemoryStore {
     const currentDim = typmod - 4;
     if (currentDim === this.#dimensions) return;
 
-    const rows = await this.#pool.query<MemoryRow>(
-      'SELECT id, kind, content FROM memories ORDER BY created_at',
-    );
     const client = await this.#pool.connect();
     try {
       await client.query('BEGIN');
+      // 行快照必须在同一事务连接上取（N-P2-3）：BEGIN 前的快照与 DDL 后状态不一致
+      const rows = await client.query<MemoryRow>(
+        'SELECT id, kind, content FROM memories ORDER BY created_at',
+      );
       await client.query('ALTER TABLE memories DROP COLUMN embedding');
       await client.query(`ALTER TABLE memories ADD COLUMN embedding vector(${this.#dimensions})`);
       for (const row of rows.rows) {

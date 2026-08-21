@@ -81,6 +81,9 @@ function createNoopTTS(): TTSProvider {
 export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify({
     logger: { level: deps.config.logLevel },
+    // 显式 bodyLimit（N-P2-10）：默认 1MB 是兜底而非设计，写出来便于审计；
+    // 语音/媒体走 WebSocket 或 base64 端点，受各自上限约束，不依赖这里放大。
+    bodyLimit: 1024 * 1024,
   });
 
   const conversation = new ConversationService({

@@ -422,6 +422,124 @@ describe('TaskService', () => {
     expect(runs[0]?.output).toBe('正常完成');
   });
 
+  it('上一 tick 的长任务不再停摆后续 tick（per-task 运行集合，非全 tick 锁）', async () => {
+    const tasks = new InMemoryTaskStore();
+    const sessions = new InMemorySessionStore();
+    const slowSession = await sessions.createSession({ systemPrompt: 'test' });
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    await tasks.createTask({
+      name: 'slow',
+      schedule: '*/1 * * * *',
+      action: 'slow',
+      sessionId: slowSession.id,
+    });
+    for (const task of await tasks.listTasks()) {
+      await tasks.updateTask(task.id, {
+        lastRunAt: new Date(Date.now() - 60_000).toISOString(),
+      });
+    }
+
+    const runChat = vi.fn(function ({ sessionId }: { sessionId: string }) {
+      return (async function* () {
+        if (sessionId === slowSession.id) await gate;
+        yield {
+          type: 'chat.done',
+          timestamp: new Date().toISOString(),
+          sessionId,
+          requestId: 'r1',
+          payload: { text: 'ok' },
+        };
+      })();
+    });
+    const service = new TaskService({
+      tasks,
+      sessions,
+      conversation: { runChat } as unknown as ConversationService,
+      systemPrompt: async () => 'test prompt',
+      tickIntervalMs: 30,
+    });
+
+    // 第 1 个 tick：慢任务卡住不返回
+    const firstTick = service.checkNow();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // 慢任务仍在跑时新增一个到期任务，第 2 个 tick 必须能把它跑掉
+    const fast = await sessions.createSession({ systemPrompt: 'test' });
+    await tasks.createTask({
+      name: 'fast',
+      schedule: '*/1 * * * *',
+      action: 'fast',
+      sessionId: fast.id,
+    });
+    const fastTask = (await tasks.listTasks()).find((task) => task.name === 'fast')!;
+    await tasks.updateTask(fastTask.id, {
+      lastRunAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+
+    await service.checkNow();
+    const midRuns = await tasks.listRuns();
+    expect(midRuns.map((run) => run.taskId)).toContain(fastTask.id);
+
+    release?.();
+    await firstTick;
+    service.stop();
+    expect((await tasks.listRuns()).length).toBe(2);
+  });
+
+  it('同一任务仍在跑时后续 tick 跳过它，不重复触发', async () => {
+    const tasks = new InMemoryTaskStore();
+    const sessions = new InMemorySessionStore();
+    const session = await sessions.createSession({ systemPrompt: 'test' });
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await tasks.createTask({
+      name: 'slow',
+      schedule: '*/1 * * * *',
+      action: 'slow',
+      sessionId: session.id,
+    });
+    const created = (await tasks.listTasks())[0]!;
+    await tasks.updateTask(created.id, {
+      lastRunAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+
+    const runChat = vi.fn(function ({ sessionId }: { sessionId: string }) {
+      return (async function* () {
+        await gate;
+        yield {
+          type: 'chat.done',
+          timestamp: new Date().toISOString(),
+          sessionId,
+          requestId: 'r1',
+          payload: { text: 'ok' },
+        };
+      })();
+    });
+    const service = new TaskService({
+      tasks,
+      sessions,
+      conversation: { runChat } as unknown as ConversationService,
+      systemPrompt: async () => 'test prompt',
+      tickIntervalMs: 30,
+    });
+
+    const first = service.checkNow();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await service.checkNow();
+    await service.checkNow();
+    expect(runChat).toHaveBeenCalledTimes(1);
+    release?.();
+    await first;
+    service.stop();
+    expect((await tasks.listRuns()).length).toBe(1);
+  });
+
   it('denies L2 tools in headless mode without prompting', async () => {
     const registry = new ToolRegistry();
     let executed = 0;

@@ -215,15 +215,17 @@ export class ProfileIngestor {
   async ingest(userMessage: string): Promise<void> {
     if (!userMessage.trim()) return;
     if (!this.canRun()) return;
+    // 进入即占用节流窗口（提到 await 之前）：避免并发 ingest 在 LLM 调用期间
+    // 都通过 canRun 检查，造成同一批消息重复抽取。
+    this.#lastRunAt = Date.now();
     try {
-      console.log(`[profile] ingest start: ${userMessage.trim().slice(0, 60)}`);
+      // 日志不含用户原文（隐私）：只记触发与结果统计
+      console.log(`[profile] ingest start`);
       const userId = resolveProfileUserId();
       const profile = await this.#store.getProfile(userId);
       const result = await this.#llm.generate({
         messages: buildExtractionPrompt(profile?.entries ?? [], userMessage.trim()),
       });
-      // 无论是否抽到内容都记下时间，避免"无事实可抽"时每条消息都调 LLM。
-      this.#lastRunAt = Date.now();
       const facts = parseExtractionResponse(result.text);
       console.log(`[profile] extraction facts: ${facts.length}`);
       if (facts.length === 0) return;

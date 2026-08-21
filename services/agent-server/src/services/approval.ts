@@ -3,6 +3,13 @@ import { randomUUID } from 'node:crypto';
 /** #approved 指纹记忆的上限：会话数与每会话指纹数都封顶，防止长期运行无界增长。 */
 const MAX_APPROVED_SESSIONS = 200;
 const MAX_APPROVED_FINGERPRINTS = 100;
+/**
+ * 任务级授权（#requestApproved）的上限。
+ * clearForRequest 只在正常收尾路径调用；chat 流被客户端中断、语音连接异常断开、
+ * 进程内抛错等路径都会留下永久条目（N-P1-6），因此同样需要有界驱逐。
+ */
+const MAX_APPROVED_REQUESTS = 200;
+const MAX_APPROVED_REQUEST_TOOLS = 100;
 
 export interface ApprovalRequest {
   requestId: string;
@@ -160,10 +167,19 @@ export class ApprovalRegistry {
   /** 记住"Allow once"：本次请求后续对该工具的调用自动放行（OpenDex 任务级授权）。 */
   rememberRequestApproval(requestId: string | undefined, toolName: string): void {
     if (!requestId) return;
+    // 有界驱逐（同 #approved 的做法）：异常路径漏掉 clearForRequest 时不至于泄漏。
+    if (!this.#requestApproved.has(requestId) && this.#requestApproved.size >= MAX_APPROVED_REQUESTS) {
+      const oldest = this.#requestApproved.keys().next().value;
+      if (oldest !== undefined) this.#requestApproved.delete(oldest);
+    }
     let names = this.#requestApproved.get(requestId);
     if (!names) {
       names = new Set();
       this.#requestApproved.set(requestId, names);
+    }
+    if (names.size >= MAX_APPROVED_REQUEST_TOOLS) {
+      const oldestTool = names.keys().next().value;
+      if (oldestTool !== undefined) names.delete(oldestTool);
     }
     names.add(toolName);
   }
