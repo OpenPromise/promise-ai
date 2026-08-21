@@ -73,8 +73,39 @@ export class SseEventBuffer {
  * 立即推送 `task.run` 事件（通知闭环的出口）。
  */
 export function registerEventRoutes(app: FastifyInstance, deps: EventRouteDeps): void {
-  // 共享事件缓冲：所有 SSE 连接共用一个环形日志，重连后才能拉回错过的通知。
+  // 共享事件缓冲 + 活跃连接集。事件源只订阅一次：事件先入缓冲（分配一次 id），
+  // 再广播到所有连接——避免"每个连接各自订阅"导致同一事件被重复入缓冲、id 发散。
   const eventBuffer = new SseEventBuffer();
+  const connections = new Set<import('node:http').ServerResponse>();
+
+  const broadcast = (event: string, data: unknown, buffered: boolean): void => {
+    const base = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+    const frame = buffered ? `id: ${eventBuffer.push(event, data)}\n${base}` : base;
+    for (const conn of connections) {
+      try {
+        conn.write(frame);
+      } catch {
+        // 单个连接写失败不影响其他
+      }
+    }
+  };
+
+  const unsubscribers = [
+    deps.subscribeTaskEvents((event) => broadcast('task.run', event, true)),
+    deps.subscribeReminderEvents((event) => broadcast('reminder.due', event, true)),
+    ...(deps.subscribeHookEvents
+      ? [deps.subscribeHookEvents((event) => broadcast('hook.run', event, true))]
+      : []),
+    ...(deps.subscribeEngineerEvents
+      ? [
+          deps.subscribeEngineerEvents((event) => {
+            const sseEvent =
+              event.type === 'done' ? 'engineer.task.done' : 'engineer.task.progress';
+            broadcast(sseEvent, event, event.type === 'done');
+          }),
+        ]
+      : []),
+  ];
 
   app.get('/api/events', (request, reply) => {
     reply.hijack();
@@ -85,6 +116,7 @@ export function registerEventRoutes(app: FastifyInstance, deps: EventRouteDeps):
       'X-Accel-Buffering': 'no',
     });
     reply.raw.write(': connected\n\n');
+    connections.add(reply.raw);
 
     // 断线重连恢复：重放 Last-Event-ID 之后的一次性通知（SSE 标准重放）。
     const lastEventIdHeader = request.headers['last-event-id'];
@@ -98,21 +130,18 @@ export function registerEventRoutes(app: FastifyInstance, deps: EventRouteDeps):
       );
     }
 
-    const writeBuffered = (event: string, data: unknown): void => {
-      const id = eventBuffer.push(event, data);
-      reply.raw.write(`id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-    };
-    const writeLive = (event: string, data: unknown): void => {
-      reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-    };
-
     // 重启完成通知：只有"宿主机真重启"（开机自启）才推送 system.boot，
-    // 普通部署/容器重启（宿主机 uptime 很大）不推送，避免误报。
-    if (shouldEmitBootNotice(deps.processStartedAt, Date.now(), deps.hostBootedRecently)) {
-      writeBuffered('system.boot', {
+    // 普通部署/容器重启（宿主机 uptime 很大）不推送。只广播一次，重连客户端靠重放补收。
+    let bootSent = false;
+    if (
+      !bootSent &&
+      shouldEmitBootNotice(deps.processStartedAt, Date.now(), deps.hostBootedRecently)
+    ) {
+      bootSent = true;
+      broadcast('system.boot', {
         bootedAt: new Date().toISOString(),
         text: '云服务器重启完成，所有服务已自动恢复',
-      });
+      }, true);
     }
 
     // 心跳注释行防止代理/网络空闲断开长连接
@@ -121,30 +150,14 @@ export function registerEventRoutes(app: FastifyInstance, deps: EventRouteDeps):
     }, 15_000);
     heartbeat.unref?.();
 
-    const unsubscribe = deps.subscribeTaskEvents((event) => {
-      writeBuffered('task.run', event);
-    });
-    const unsubscribeReminders = deps.subscribeReminderEvents((event) => {
-      writeBuffered('reminder.due', event);
-    });
-    const unsubscribeHooks = deps.subscribeHookEvents?.((event) => {
-      writeBuffered('hook.run', event);
-    });
-    const unsubscribeEngineer = deps.subscribeEngineerEvents?.((event) => {
-      const sseEvent = event.type === 'done' ? 'engineer.task.done' : 'engineer.task.progress';
-      if (event.type === 'done') {
-        writeBuffered(sseEvent, event);
-      } else {
-        writeLive(sseEvent, event);
-      }
-    });
-
     request.raw.on('close', () => {
       clearInterval(heartbeat);
-      unsubscribe();
-      unsubscribeReminders();
-      unsubscribeHooks?.();
-      unsubscribeEngineer?.();
+      connections.delete(reply.raw);
     });
+  });
+
+  // 应用关闭时清理事件源订阅，避免泄漏
+  app.addHook('onClose', async () => {
+    for (const unsubscribe of unsubscribers) unsubscribe();
   });
 }
