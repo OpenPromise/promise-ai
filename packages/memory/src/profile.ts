@@ -289,9 +289,35 @@ function parseEntries(raw: unknown): ProfileEntry[] {
 /** 用户画像 Postgres 存储：单行 JSONB（单用户场景足够简单）。 */
 export class PostgresProfileStore implements ProfileStore {
   readonly #pool: pg.Pool;
+  /**
+   * 用户级串行队列：同一用户的读-改-写串行执行。entries 是单行 JSONB，
+   * "先读整列→内存改→整列覆盖"在并发写时（画像工具 + 对话后异步抽取）会
+   * 丢失更新，这里在进程内把每个 userId 的写串行化，后写者基于前写者结果。
+   */
+  readonly #userQueues = new Map<string, Promise<unknown>>();
 
   constructor(options: PostgresProfileStoreOptions) {
     this.#pool = new Pool({ connectionString: options.connectionString, max: 5 });
+  }
+
+  /** 把 fn 串行进同一 userId 的队列；队列空时自动清理条目避免 Map 无限增长。 */
+  async #runExclusive<T>(userId: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.#userQueues.get(userId) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const chain = previous.then(() => gate);
+    this.#userQueues.set(userId, chain);
+    await previous;
+    try {
+      return await fn();
+    } finally {
+      release();
+      if (this.#userQueues.get(userId) === chain) {
+        this.#userQueues.delete(userId);
+      }
+    }
   }
 
   async init(): Promise<void> {
@@ -362,63 +388,37 @@ export class PostgresProfileStore implements ProfileStore {
     userId: string,
     entry: Omit<ProfileEntry, 'updatedAt'>,
   ): Promise<UserProfile> {
-    const now = new Date().toISOString();
-    const existing = await this.getProfile(userId);
-    const oldEntry = existing?.entries.find((item) => item.key === entry.key);
-    const entries = (existing?.entries ?? []).filter((item) => item.key !== entry.key);
-    entries.push({ ...entry, updatedAt: now });
-    entries.sort((a, b) => a.key.localeCompare(b.key));
-    await this.#pool.query(
-      `INSERT INTO user_profiles (user_id, entries, updated_at)
-       VALUES ($1, $2::jsonb, $3)
-       ON CONFLICT (user_id) DO UPDATE SET entries = $2::jsonb, updated_at = $3`,
-      [userId, JSON.stringify(entries), now],
-    );
-    await this.#recordDiff(userId, oldEntry, entry);
-    return { userId, entries, updatedAt: now };
+    return this.#runExclusive(userId, async () => {
+      const now = new Date().toISOString();
+      const existing = await this.getProfile(userId);
+      const oldEntry = existing?.entries.find((item) => item.key === entry.key);
+      const entries = (existing?.entries ?? []).filter((item) => item.key !== entry.key);
+      entries.push({ ...entry, updatedAt: now });
+      entries.sort((a, b) => a.key.localeCompare(b.key));
+      await this.#pool.query(
+        `INSERT INTO user_profiles (user_id, entries, updated_at)
+         VALUES ($1, $2::jsonb, $3)
+         ON CONFLICT (user_id) DO UPDATE SET entries = $2::jsonb, updated_at = $3`,
+        [userId, JSON.stringify(entries), now],
+      );
+      await this.#recordDiff(userId, oldEntry, entry);
+      return { userId, entries, updatedAt: now };
+    });
   }
 
   async removeEntry(userId: string, key: string): Promise<UserProfile> {
-    const now = new Date().toISOString();
-    const existing = await this.getProfile(userId);
-    const oldEntry = existing?.entries.find((item) => item.key === key);
-    const entries = (existing?.entries ?? []).filter((item) => item.key !== key);
-    await this.#pool.query(
-      `INSERT INTO user_profiles (user_id, entries, updated_at)
-       VALUES ($1, $2::jsonb, $3)
-       ON CONFLICT (user_id) DO UPDATE SET entries = $2::jsonb, updated_at = $3`,
-      [userId, JSON.stringify(entries), now],
-    );
-    if (oldEntry) {
-      await this.#record(userId, {
-        userId,
-        key,
-        category: oldEntry.category,
-        event: 'DELETE',
-        oldValue: oldEntry.value,
-      });
-    }
-    return { userId, entries, updatedAt: now };
-  }
-
-  async replaceAll(
-    userId: string,
-    entries: Array<Omit<ProfileEntry, 'updatedAt'>>,
-  ): Promise<UserProfile> {
-    const now = new Date().toISOString();
-    const normalized = entries.map((entry) => ({ ...entry, updatedAt: now }));
-    normalized.sort((a, b) => a.key.localeCompare(b.key));
-    const existing = await this.getProfile(userId);
-    await this.#pool.query(
-      `INSERT INTO user_profiles (user_id, entries, updated_at)
-       VALUES ($1, $2::jsonb, $3)
-       ON CONFLICT (user_id) DO UPDATE SET entries = $2::jsonb, updated_at = $3`,
-      [userId, JSON.stringify(normalized), now],
-    );
-    const oldByKey = new Map((existing?.entries ?? []).map((entry) => [entry.key, entry]));
-    const newByKey = new Map(normalized.map((entry) => [entry.key, entry]));
-    for (const [key, oldEntry] of oldByKey) {
-      if (!newByKey.has(key)) {
+    return this.#runExclusive(userId, async () => {
+      const now = new Date().toISOString();
+      const existing = await this.getProfile(userId);
+      const oldEntry = existing?.entries.find((item) => item.key === key);
+      const entries = (existing?.entries ?? []).filter((item) => item.key !== key);
+      await this.#pool.query(
+        `INSERT INTO user_profiles (user_id, entries, updated_at)
+         VALUES ($1, $2::jsonb, $3)
+         ON CONFLICT (user_id) DO UPDATE SET entries = $2::jsonb, updated_at = $3`,
+        [userId, JSON.stringify(entries), now],
+      );
+      if (oldEntry) {
         await this.#record(userId, {
           userId,
           key,
@@ -427,11 +427,43 @@ export class PostgresProfileStore implements ProfileStore {
           oldValue: oldEntry.value,
         });
       }
-    }
-    for (const newEntry of normalized) {
-      await this.#recordDiff(userId, oldByKey.get(newEntry.key), newEntry);
-    }
-    return { userId, entries: normalized, updatedAt: now };
+      return { userId, entries, updatedAt: now };
+    });
+  }
+
+  async replaceAll(
+    userId: string,
+    entries: Array<Omit<ProfileEntry, 'updatedAt'>>,
+  ): Promise<UserProfile> {
+    return this.#runExclusive(userId, async () => {
+      const now = new Date().toISOString();
+      const normalized = entries.map((entry) => ({ ...entry, updatedAt: now }));
+      normalized.sort((a, b) => a.key.localeCompare(b.key));
+      const existing = await this.getProfile(userId);
+      await this.#pool.query(
+        `INSERT INTO user_profiles (user_id, entries, updated_at)
+         VALUES ($1, $2::jsonb, $3)
+         ON CONFLICT (user_id) DO UPDATE SET entries = $2::jsonb, updated_at = $3`,
+        [userId, JSON.stringify(normalized), now],
+      );
+      const oldByKey = new Map((existing?.entries ?? []).map((entry) => [entry.key, entry]));
+      const newByKey = new Map(normalized.map((entry) => [entry.key, entry]));
+      for (const [key, oldEntry] of oldByKey) {
+        if (!newByKey.has(key)) {
+          await this.#record(userId, {
+            userId,
+            key,
+            category: oldEntry.category,
+            event: 'DELETE',
+            oldValue: oldEntry.value,
+          });
+        }
+      }
+      for (const newEntry of normalized) {
+        await this.#recordDiff(userId, oldByKey.get(newEntry.key), newEntry);
+      }
+      return { userId, entries: normalized, updatedAt: now };
+    });
   }
 
   async listHistory(

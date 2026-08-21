@@ -44,7 +44,8 @@ function toSession(row: SessionRow): Session {
  * desktop client can resume the same conversation after a crash. Messages are
  * stored as one JSONB column per session, which keeps the store simple at this
  * stage (no per-message tables or joins) and matches the Session shape used by
- * the in-memory implementation.
+ * the in-memory implementation. Writes are single-statement (jsonb `||` append /
+ * COALESCE merge) so concurrent writers never clobber each other's messages.
  */
 export class PostgresSessionStore implements SessionStore {
   readonly #pool: pg.Pool;
@@ -98,7 +99,6 @@ export class PostgresSessionStore implements SessionStore {
   }
 
   async addMessage(sessionId: string, input: AddMessageInput): Promise<Session> {
-    const session = await this.getSession(sessionId);
     const message: ChatMessage = {
       id: randomUUID(),
       sessionId,
@@ -109,29 +109,40 @@ export class PostgresSessionStore implements SessionStore {
       ...(input.toolCallId ? { toolCallId: input.toolCallId } : {}),
     };
     const updatedAt = new Date().toISOString();
-    await this.#pool.query(
-      `UPDATE sessions SET messages = $2::jsonb, updated_at = $3 WHERE id = $1`,
-      [sessionId, JSON.stringify([...session.messages, message]), updatedAt],
+    // 原子追加：`messages || $2::jsonb` 在数据库侧完成"读旧数组→追加"，
+    // 避免多个写入方（不同 ConversationService 实例 / 语音路由）并发
+    // 读-改-写整列覆盖导致的丢失更新（后写者覆盖先写者）。
+    const result = await this.#pool.query(
+      `UPDATE sessions SET messages = messages || $2::jsonb, updated_at = $3 WHERE id = $1`,
+      [sessionId, JSON.stringify([message]), updatedAt],
     );
+    if (result.rowCount === 0) throw new SessionNotFoundError(sessionId);
     return this.getSession(sessionId);
   }
 
   async updateSession(sessionId: string, input: UpdateSessionInput): Promise<Session> {
-    const session = await this.getSession(sessionId);
-    const messages = input.messages ?? session.messages;
-    const metadata = { ...(session.metadata ?? {}), ...(input.metadata ?? {}) };
+    const metadataPatch =
+      input.metadata && Object.keys(input.metadata).length > 0
+        ? JSON.stringify(input.metadata)
+        : null;
     const updatedAt = new Date().toISOString();
-    await this.#pool.query(
+    // 单条原子 UPDATE：messages 整列替换（压缩用，未提供则保留），metadata
+    // 用 `||` 合并（未提供则保留）。不再"先 SELECT 再整列覆盖"，避免并发丢更新。
+    const result = await this.#pool.query(
       `UPDATE sessions
-       SET messages = $2::jsonb, metadata = $3::jsonb, updated_at = $4
+       SET messages = COALESCE($2::jsonb, messages),
+           metadata = CASE WHEN $3::jsonb IS NULL THEN metadata
+                           ELSE COALESCE(metadata, '{}'::jsonb) || $3::jsonb END,
+           updated_at = $4
        WHERE id = $1`,
       [
         sessionId,
-        JSON.stringify(messages),
-        Object.keys(metadata).length > 0 ? JSON.stringify(metadata) : null,
+        input.messages ? JSON.stringify(input.messages) : null,
+        metadataPatch,
         updatedAt,
       ],
     );
+    if (result.rowCount === 0) throw new SessionNotFoundError(sessionId);
     return this.getSession(sessionId);
   }
 

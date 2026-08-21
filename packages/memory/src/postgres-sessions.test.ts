@@ -61,6 +61,31 @@ describe.skipIf(!connectionString)('PostgresSessionStore', () => {
     expect(Array.isArray(all)).toBe(true);
   });
 
+  it('并发 addMessage 跨多个 store 实例不丢消息（原子追加，无读-改-写覆盖）', async () => {
+    const a = new PostgresSessionStore({ connectionString: connectionString as string });
+    const b = new PostgresSessionStore({ connectionString: connectionString as string });
+    await a.init();
+    await b.init();
+    const session = await a.createSession({ systemPrompt: '并发测试' });
+    createdIds.push(session.id);
+
+    const total = 20;
+    await Promise.all(
+      Array.from({ length: total }, (_, i) => {
+        // 交替用两个独立 store 实例写入，模拟不同 ConversationService 实例并发写同一会话
+        const writer = i % 2 === 0 ? a : b;
+        return writer.addMessage(session.id, { role: 'user', content: `msg-${i}` });
+      }),
+    );
+
+    const refreshed = await a.getSession(session.id);
+    expect(refreshed.messages.map((m) => m.content).sort()).toEqual(
+      Array.from({ length: total }, (_, i) => `msg-${i}`).sort(),
+    );
+    await a.close();
+    await b.close();
+  });
+
   afterAll(async () => {
     if (createdIds.length > 0) {
       await pool.query('DELETE FROM sessions WHERE id = ANY($1::uuid[])', [createdIds]);
