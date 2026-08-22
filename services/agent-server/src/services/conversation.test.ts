@@ -1262,6 +1262,61 @@ describe('ConversationService', () => {
     expect(enforcePromptSeen).toBe(false);
   });
 
+  it('复述/引语/条件句（"我确实说了让小黑开干了，但那是条件句"）不触发自动派单（修复误报）', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    let delegated = 0;
+    const tools = new ToolRegistry();
+    tools.register({
+      name: 'engineer.delegate',
+      description: '派给小黑',
+      inputSchema: { type: 'object', properties: { task: { type: 'string' } } },
+      permissionLevel: 1,
+      async execute() {
+        delegated += 1;
+        return { ok: true, data: { text: '小黑完成' } };
+      },
+    });
+
+    let callSeq = 0;
+    let enforcePromptSeen = false;
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'test',
+      configured: true,
+      async *chat(input: ChatInput): AsyncIterable<ChatChunk> {
+        callSeq += 1;
+        enforcePromptSeen = input.messages.some(
+          (m) => m.role === 'user' && m.content.includes('系统校验'),
+        );
+        // 复述用户的条件句（引语+过去时"说了…了"），不是 bot 自己的"已派单"声称
+        yield {
+          delta: "校验收到——我确实说了'让小黑开干'了，但那是条件句，等你确认再派。",
+        };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+    const service = new ConversationService({
+      store,
+      llm,
+      tools,
+      approvals: new ApprovalRegistry(),
+      memory: new InMemoryMemoryStore(),
+    });
+    for await (const _ of service.runChat({
+      sessionId: session.id,
+      userMessage: '能报名的话我就让小黑开干',
+    })) {
+      // drain
+    }
+    // 只跑 1 轮 LLM、无强制校验、没有自动派单
+    expect(callSeq).toBe(1);
+    expect(enforcePromptSeen).toBe(false);
+    expect(delegated).toBe(0);
+  });
+
   it('完成态新表述"已经让小黑去做了"但未调工具时仍拦截（守卫不削弱）', async () => {
     const store = new InMemorySessionStore();
     const session = await store.createSession({ systemPrompt: '你是助理。' });
