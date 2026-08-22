@@ -275,3 +275,15 @@
 - **配置化改法（YAGNI 最小面）**：vision.ts 暴露 `DEFAULT_VISION_MODEL` / `DEFAULT_VISION_ENDPOINT` 常量 + `describeImage(options)`（endpoint/model 可覆盖）；index.ts 用 `WEIXIN_VISION_MODEL` / `WEIXIN_VISION_ENDPOINT` 环境变量覆盖默认；relay.ts 只透传。**函数名要跟着供应商改名**（describeImageWithDashScope → describeImage），别留说谎的名字。
 - **改动连带面**：relay.test.ts 的 fetch mock 是按 URL 匹配的（`dashscope.aliyuncs.com` → `api.deepseek.com`），换端点必须同步；README/.env.example 文档同步更新，避免文档与代码打架。
 - **坑：本环境 `NODE_ENV=production`**，`npm install` 默认跳过 devDependencies，typescript/vitest 装不上导致质量门没法跑 → 需 `NODE_ENV=development npm install --include=dev`；npm cache 若遇 EACCES（/root/.npm root-owned），加 `--cache /tmp/npm-cache` 绕开。node_modules 缺失时先 `npm ls <pkg>` 确认再动手，别在空工具链上跑门禁。
+
+---
+
+## 十一、派单硬校验守卫误报修复（任务沉淀 #5，2026-08-22）
+
+> 场景：守卫把"闲聊/未来计划提到派单"误判为"声称已派单未调工具"，反复注入强制补调提示。沉淀"守卫判定模式"的写法教训。
+
+- **守卫位置**：`services/agent-server/src/services/conversation.ts` 的 `DISPATCH_CLAIM_PATTERN`（对 bot 回复文字判"声称派单"）+ L585 注入逻辑；触发条件 = 文本命中模式 且 本轮与请求内历史都无 `engineer.delegate`/`coding.run` 真实调用（`dispatchedLongTask` 跨轮证据）。`services/weixin-bridge/src/relay.ts` 的"已派给小黑"确认是**工具调用驱动**（onLongTaskStarted），不走文本匹配，与守卫无关。
+- **误报根因**：模式里混入了**无完成态标记**的分支——`派给小黑`（"有活随时喊我，我派给小黑"命中）、`这就(派|开工)`（"这就派"命中）、`让小黑(去|来|分析|做|处理|搞)`（计划指令句式命中）。关键词匹配"提到派单"≠"声称已派单"。
+- **修复模式（可复用）**：守卫文本模式只保留**完成态/进行中断言**，且完成态必须有显式标记：`(?:早?已|已经)+动作`（已派给小黑/已经开工/已经让小黑）、`了`结尾（派出去了/派给小黑了/派|让小黑…了）、进行中锚定主体（任务|小黑|后台 + 正在/在 + 跑|运行|执行）。未来/计划句式（这就/马上/我派给/让小黑去）一律不匹配。
+- **防误伤锚定**："正在运行/正在执行"这类泛进行时**不能裸匹配**（"服务器正在运行"会误伤），必须锚定任务/小黑/后台上下文；"正在派给小黑"单独保留（进行中的派单声称本身就该拦）。
+- **改动原则**：守卫收紧时，既有的"真漏派必须拦"测试一个都不能红——改模式后用正反例句集（真命中 10 句 + 不应命中 7 句）先做正则自检，再跑全量测试；守卫修复 = 模式收紧 + 补 3 类测试（真派单不拦 / 完成态声称拦截 / 计划闲聊不拦）。
