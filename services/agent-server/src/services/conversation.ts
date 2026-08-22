@@ -74,6 +74,28 @@ const PERSISTENT_CONTEXT_REINJECT_INTERVAL = 8;
 const AUTO_APPROVE_PROMPT =
   '【当前为全权限模式】所有工具都会自动执行，无需用户确认。' +
   '即使工具描述里写着"需要确认"，也直接调用，不要询问或等待用户确认。';
+/** 派单工具（核查的目标）：声称已派时必须真的调用其一。 */
+const LONG_TASK_TOOLS = ['engineer.delegate', 'coding.run'];
+/**
+ * 轻量派单核查（替代已移除的硬校验，不 tool_choice 强制）：
+ * 模型在未调 engineer.delegate / coding.run 时，仍会先输出"已派给…/已开工/
+ * 任务在后台跑"这类完成式声称（DeepSeek"先宣布后行动"的规划习惯，persona
+ * 约束压不住）。检测到后注入"澄清或补派"提示——模型可以澄清"我还没派"，
+ * 不会被强制调用工具，复述/条件句/引用（QUOTE_GUARD_RE 命中）不触发。
+ */
+const DISPATCH_CLAIM_RE =
+  /已派给(?:小黑|小优|工程师|她|他)|(?:已经)?派出去了|已开工|正在派给(?:小黑|小优)|(?:任务|小黑|小优)[^。！？!?\n]{0,10}(?:正在|在)(?:后台)?(?:跑|运行|执行)/;
+/** 引用/复述/否定/时间回溯标记：出现即视为"在讨论派单而非声称已派"。 */
+const DISPATCH_QUOTE_GUARD_RE =
+  /(?:只是|条件句|复述|引号|你让我|你叫我|你吩咐|你说|刚才说|之前|上次|并没有|还没派|没有派|不是派)/;
+const DISPATCH_CHECK_PROMPT =
+  '【事实核查】你上一句用了"已派给…/已开工/任务在后台跑"这类完成式表述，' +
+  '但本轮没有 engineer.delegate / coding.run 的工具调用记录——用户那边不会有系统 🔧 ' +
+  '确认，任务面板也没有对应任务，用户能立即识破。请二选一：\n' +
+  '1. 如果用户确实要求派单且你打算派：现在就调用对应工具真正完成派单；\n' +
+  '2. 如果你并没有派单（只是在复述/讨论/引用）：向用户澄清"我还没有派单"，' +
+  '并停止使用"已派"这类表述。\n' +
+  '不要为了消除本提示而强行调用工具——除非用户确实下达了派单指令。';
 const COMPACTION_PROMPT = [
   '你是对话摘要助手。请把下面这段 AI 助理与用户的对话压缩成一份简洁的中文摘要，',
   '保留：用户的重要事实与偏好、已完成的任务和关键结果、尚未解决的事项。',
@@ -477,6 +499,8 @@ export class ConversationService {
     let toolCallsUsed = 0;
     let toolBudgetExceeded = false;
     let stopToolLoop = false;
+    /** 本请求内是否已真正调用过派单工具（跨轮）：真派过就不再核查打扰。 */
+    let dispatchedLongTask = false;
 
     await this.#store.addMessage(input.sessionId, {
       role: 'user',
@@ -558,6 +582,22 @@ export class ConversationService {
           payload: { state: 'listening' },
         });
         return;
+      }
+
+      // 轻量派单核查：完成式声称但无派单工具调用 → 注入"澄清或补派"提示。
+      // 不 tool_choice 强制（模型可澄清，不会被逼着派单）；引用/条件句不触发。
+      const claimedDispatch =
+        !input.headless &&
+        DISPATCH_CLAIM_RE.test(fullText) &&
+        !DISPATCH_QUOTE_GUARD_RE.test(fullText);
+      const dispatchedThisTurn = (toolCalls ?? []).some((call) =>
+        LONG_TASK_TOOLS.includes(call.name),
+      );
+      if (dispatchedThisTurn) dispatchedLongTask = true;
+      if (claimedDispatch && !dispatchedLongTask && turn < MAX_TOOL_TURNS - 1) {
+        messages.push({ role: 'assistant', content: fullText });
+        messages.push({ role: 'user', content: DISPATCH_CHECK_PROMPT });
+        continue;
       }
 
       if (!toolCalls || toolCalls.length === 0) {

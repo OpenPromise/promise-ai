@@ -945,6 +945,169 @@ describe('ConversationService', () => {
     expect(envelopes.at(-1)?.type).toBe('agent.state');
     expect(envelopes.at(-1)?.payload.state).toBe('listening');
   });
+
+  it('轻量核查：声称"已派给小黑"但未调工具时注入提示，模型可澄清而非被强制派单', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    let delegated = 0;
+    const tools = new ToolRegistry();
+    tools.register({
+      name: 'engineer.delegate',
+      description: '派给小黑',
+      inputSchema: { type: 'object', properties: { task: { type: 'string' } } },
+      permissionLevel: 1,
+      async execute() {
+        delegated += 1;
+        return { ok: true, data: { text: '小黑完成' } };
+      },
+    });
+
+    let callSeq = 0;
+    let checkPromptSeen = false;
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'test',
+      configured: true,
+      async *chat(input: ChatInput): AsyncIterable<ChatChunk> {
+        callSeq += 1;
+        if (callSeq === 1) {
+          // 第一轮：声称已派但没调工具（DeepSeek 老毛病）
+          yield { delta: '收到，已派给小黑！让它查端口。' };
+          return;
+        }
+        // 第二轮：收到核查提示后澄清，而不是被迫派单
+        checkPromptSeen = input.messages.some(
+          (m) => m.role === 'user' && m.content.includes('事实核查'),
+        );
+        yield { delta: '澄清一下：我还没有派单，刚才是口误，这就说明情况。' };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+    const service = new ConversationService({
+      store,
+      llm,
+      tools,
+      approvals: new ApprovalRegistry(),
+      memory: new InMemoryMemoryStore(),
+    });
+    let finalText = '';
+    for await (const envelope of service.runChat({
+      sessionId: session.id,
+      userMessage: '让小优查下端口',
+    })) {
+      if (envelope.type === 'chat.done') {
+        finalText = (envelope.payload as { text?: string }).text ?? '';
+      }
+    }
+
+    expect(callSeq).toBe(2);
+    expect(checkPromptSeen).toBe(true);
+    expect(delegated).toBe(0); // 澄清路径不会真派单
+    expect(finalText).toContain('还没有派单');
+  });
+
+  it('轻量核查：声称已派未调工具时，模型可补派（delegated=1）', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    let delegated = 0;
+    const tools = new ToolRegistry();
+    tools.register({
+      name: 'engineer.delegate',
+      description: '派给小黑',
+      inputSchema: { type: 'object', properties: { task: { type: 'string' } } },
+      permissionLevel: 1,
+      async execute() {
+        delegated += 1;
+        return { ok: true, data: { text: '小黑完成' } };
+      },
+    });
+
+    let callSeq = 0;
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'test',
+      configured: true,
+      async *chat(): AsyncIterable<ChatChunk> {
+        callSeq += 1;
+        if (callSeq === 1) {
+          yield { delta: '收到，已派给小黑！让它查端口。' };
+          return;
+        }
+        if (callSeq === 2) {
+          yield {
+            delta: '',
+            finishReason: 'tool_calls',
+            toolCalls: [
+              {
+                id: 'call_delegate',
+                name: 'engineer_delegate',
+                arguments: JSON.stringify({ task: '查端口' }),
+              },
+            ],
+          };
+          return;
+        }
+        yield { delta: '这次真派了，任务在后台跑。' };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+    const service = new ConversationService({
+      store,
+      llm,
+      tools,
+      approvals: new ApprovalRegistry(),
+      memory: new InMemoryMemoryStore(),
+    });
+    for await (const _ of service.runChat({
+      sessionId: session.id,
+      userMessage: '让小优查下端口',
+    })) {
+      // drain
+    }
+    expect(callSeq).toBe(3);
+    expect(delegated).toBe(1);
+  });
+
+  it('轻量核查不误伤：引用/计划表述（"之前已派给小黑""这就派"）不触发', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    let callSeq = 0;
+    let checkPromptSeen = false;
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'test',
+      configured: true,
+      async *chat(input: ChatInput): AsyncIterable<ChatChunk> {
+        callSeq += 1;
+        checkPromptSeen = input.messages.some(
+          (m) => m.role === 'user' && m.content.includes('事实核查'),
+        );
+        yield { delta: '之前已派给小黑的任务还在跑，新的我这就派。' };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+    const service = new ConversationService({
+      store,
+      llm,
+      tools: new ToolRegistry(),
+      approvals: new ApprovalRegistry(),
+      memory: new InMemoryMemoryStore(),
+    });
+    for await (const _ of service.runChat({
+      sessionId: session.id,
+      userMessage: '看看小黑任务',
+    })) {
+      // drain
+    }
+    expect(callSeq).toBe(1);
+    expect(checkPromptSeen).toBe(false);
+  });
 });
 
 function failLlm(): never {

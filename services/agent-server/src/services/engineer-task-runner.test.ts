@@ -266,7 +266,9 @@ describe('EngineerTaskRunner 持久化原子性与写序列化（N4-P2-3）', ()
 
       // 同一 tick 内全部 finish → 12 次 #persist 并发进入写队列
       for (const done of release) done();
-      await new Promise((r) => setTimeout(r, 80));
+      // 12 次串行写大 JSON 需要时间；等够久避免 finally rm 撞上未写完的句柄
+      // （Windows 下会 ENOTEMPTY，全量并行时更明显）。
+      await new Promise((r) => setTimeout(r, 800));
 
       // 落盘内容完整可解析
       const parsed = JSON.parse(await readFile(file, 'utf8')) as Array<{ id: string }>;
