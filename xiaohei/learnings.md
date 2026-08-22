@@ -556,3 +556,29 @@
 ### 3. key 安全（延续 §十五-4 模式）
 
 - 生成脚本 `/tmp/minimax_h3_video.mjs`（不入库），key 仅 `export MINIMAX_API_KEY=...` 环境变量注入，调用后 unset；提交前 `git grep -n "sk-api"` 全仓零命中（工具结果见任务报告）。
+
+---
+
+## 二十一、团队官网 Phase 3 开发（任务沉淀，2026-08-22）
+
+> 记录人：小黑；记录日期：2026-08-22；依据：本次"官网 Phase 3 正式开发（React 前端 + Node 后端 + nginx 配置）"任务实施结果（build / node:test / curl / 根质量门均有工具结果）。
+
+### 1. 关键结论（均有工具结果依据）
+
+- **【已确认】前端**：Vite 7.3.6 + React 18.3.1 + TS 6.0.3 + react-router-dom 6.30.6；`tsc --noEmit` 零错误；`vite build` 43 modules 成功（dist 1.4KB index.html + hash js 178KB/gzip 59KB + css 14KB）。
+- **【已确认】后端**：Express 5.2.1，`/api/news`（type 过滤 + 中文别名）、`/api/roles`、`/api/worlds`、`/api/cities`、`/health` 全部 curl 200；node:test 10/10 通过；404/400 JSON 兜底验证通过。
+- **【已确认】链路**：vite dev `server.proxy /api → 127.0.0.1:8080` 实测取数成功（模拟 nginx 反代路径）；preview 静态冒烟 `/`、`/news`（SPA fallback）、全部素材 200。
+- **【已确认】素材**：`assets/` → `frontend/public/assets/{roles,worlds,cities,videos}/` 8/8 sha256 一致（共 24MB）；dist 内原样复制、名称不带 hash。
+- **【已确认】质量门**：根仓库 typecheck + vitest 全绿（54 文件 / 498 测试），team-site 独立子项目不影响根 include。
+
+### 2. 沉淀经验（原子化 + 置信度）
+
+1. **【高置信·本次验证】环境预设 `NODE_ENV=production` 会让 `npm install` 跳过 devDependencies**：首次装完 `npm ls --depth=0` 只有 react 三个包、vite 二进制缺失；显式 `NODE_ENV=development npm install` 后 dev 依赖齐。任何"装完缺包"先查 NODE_ENV 与 npm ls，别急着重装。
+2. **【高置信·本次验证】根仓库 typecheck/vitest include 只覆盖 packages/services/scripts**：repo 内新增独立子项目（team-site/）自带 package.json/tsconfig/测试即可，不被根质量门扫描，互不影响。证据：根 tsconfig.json / vitest.config.ts include + 根 498 测试全绿。
+3. **【高置信·本次验证】Node 24 `node --test test/` 把目录当模块报 MODULE_NOT_FOUND**；改用 `node --test`（默认发现 `**/*.test.js`）即通过。证据：首次失败栈（Cannot find module '.../test'）+ 改 script 后 10/10。
+4. **【高置信·本次验证】Express 5 + node:test + 全局 fetch 可零额外依赖测 API**：`app.js` 导出 `createApp()`，测试 `app.listen(0)` 随机端口 + `once(server,'listening')`，无需 supertest/额外 devDeps。证据：backend `npm test` 10/10。
+5. **【高置信·本次验证】环境变量 PORT 会覆盖默认端口**：沙箱预设 `PORT=3000`，`PORT ?? 8080` 被覆盖成 3000；契约默认 8080 保留（nginx 反代目标 127.0.0.1:8080），本地验证显式 `PORT=8080 npm start`。证据：服务日志 listening on :3000 → 显式后 :8080。
+6. **【低置信·本次验证】Vite public/ 素材（无 hash 文件名）nginx 缓存不要用 immutable**：同名覆盖会命中旧缓存；本次 nginx.conf 用 `expires 7d`（无 immutable），带 hash 的构建产物改名即换 URL 可安全长缓存。待 Phase 4 部署实测回验。
+7. **【低置信·待验证】`npm audit` 报 2 个 moderate**（react 18 依赖链，含 loose-envify 等）：未跑 `audit fix`（可能引入 breaking change），部署前再评估。
+8. **【高置信·本次验证】前后端双写同一数据契约必须成对同步**：前端兜底数据与后端 data.js 文案不一致（牢骚条目标题带了作者名前缀）→ 以 content-model.md 为单一权威来源对齐后端；双写场景要改一起改，防契约漂移。
+9. **【高置信·本次验证】子项目分 checkpoint 提交可独立回退**：后端 → 前端 → 收尾三连 commit；同一步的小修（数据同步）用 `git commit --amend` 折进上一个 checkpoint（未 push 前安全），避免提交噪音。
