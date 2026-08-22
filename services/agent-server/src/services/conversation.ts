@@ -489,6 +489,9 @@ export class ConversationService {
     let stopToolLoop = false;
     /** 检测到"声称派单但未调工具"后，下一轮强制模型必须调用工具（tool_choice=required）。 */
     let dispatchRetryPending = false;
+    /** 本请求内是否已真正调用过派单工具（跨轮记忆）：调过之后，后续总结轮次
+     * 的"已派给小黑"不再误判——声称有真实工具调用作证据。 */
+    let dispatchedLongTask = false;
 
     await this.#store.addMessage(input.sessionId, {
       role: 'user',
@@ -580,9 +583,11 @@ export class ConversationService {
       // - 未调任何工具 → 注入系统提示强制补调；
       // - 只调了无关工具 → 同样拦截，防止"调个工具糊弄过去"。
       const claimedDispatch = !input.headless && DISPATCH_CLAIM_PATTERN.test(fullText);
-      const dispatchedToBlack = (toolCalls ?? []).some((call) =>
+      const dispatchedThisTurn = (toolCalls ?? []).some((call) =>
         LONG_TASK_TOOLS.includes(call.name),
       );
+      if (dispatchedThisTurn) dispatchedLongTask = true;
+      const dispatchedToBlack = dispatchedLongTask || dispatchedThisTurn;
       if (claimedDispatch && !dispatchedToBlack && turn < MAX_TOOL_TURNS - 1) {
         messages.push({ role: 'assistant', content: fullText });
         messages.push({ role: 'user', content: DISPATCH_ENFORCE_PROMPT });

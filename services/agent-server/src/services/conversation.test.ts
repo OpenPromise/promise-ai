@@ -1074,6 +1074,80 @@ describe('ConversationService', () => {
     expect(finalText).toContain('小黑已开工');
   });
 
+  it('本请求早前轮次已真调派单工具时，后续总结轮不再误拦（跨轮证据）', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    let delegated = 0;
+    const tools = new ToolRegistry();
+    tools.register({
+      name: 'engineer.delegate',
+      description: '派给小黑',
+      inputSchema: { type: 'object', properties: { task: { type: 'string' } } },
+      permissionLevel: 1,
+      async execute() {
+        delegated += 1;
+        return { ok: true, data: { text: '小黑完成' } };
+      },
+    });
+
+    let callSeq = 0;
+    let enforcePromptSeen = false;
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'test',
+      configured: true,
+      async *chat(input: ChatInput): AsyncIterable<ChatChunk> {
+        callSeq += 1;
+        if (callSeq === 1) {
+          // 第 1 轮：真正调用 engineer.delegate（派单成功）
+          yield {
+            delta: '',
+            finishReason: 'tool_calls',
+            toolCalls: [
+              {
+                id: 'call_delegate',
+                name: 'engineer_delegate',
+                arguments: JSON.stringify({ task: '换视觉模型' }),
+              },
+            ],
+          };
+          return;
+        }
+        // 第 2 轮：总结"已派给小黑"（无工具调用）——不应被误判为假派单
+        enforcePromptSeen = input.messages.some(
+          (m) => m.role === 'user' && m.content.includes('系统校验'),
+        );
+        yield { delta: '收到，已派给小黑！任务在后台跑着，干完我汇报。' };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+
+    const service = new ConversationService({
+      store,
+      llm,
+      tools,
+      approvals: new ApprovalRegistry(),
+      memory: new InMemoryMemoryStore(),
+    });
+    let finalText = '';
+    for await (const envelope of service.runChat({
+      sessionId: session.id,
+      userMessage: '让小黑把视觉模型换成 DeepSeek 的',
+    })) {
+      if (envelope.type === 'chat.done') {
+        finalText = (envelope.payload as { text?: string }).text ?? '';
+      }
+    }
+
+    // 只有 2 轮 LLM：第 2 轮总结没有被强制校验拦下
+    expect(callSeq).toBe(2);
+    expect(enforcePromptSeen).toBe(false);
+    expect(delegated).toBe(1);
+    expect(finalText).toContain('已派给小黑');
+  });
+
   it('stops the loop when the same tool call repeats', async () => {
     const store = new InMemorySessionStore();
     const session = await store.createSession({ systemPrompt: '你是助理。' });
