@@ -582,3 +582,26 @@
 7. **【低置信·待验证】`npm audit` 报 2 个 moderate**（react 18 依赖链，含 loose-envify 等）：未跑 `audit fix`（可能引入 breaking change），部署前再评估。
 8. **【高置信·本次验证】前后端双写同一数据契约必须成对同步**：前端兜底数据与后端 data.js 文案不一致（牢骚条目标题带了作者名前缀）→ 以 content-model.md 为单一权威来源对齐后端；双写场景要改一起改，防契约漂移。
 9. **【高置信·本次验证】子项目分 checkpoint 提交可独立回退**：后端 → 前端 → 收尾三连 commit；同一步的小修（数据同步）用 `git commit --amend` 折进上一个 checkpoint（未 push 前安全），避免提交噪音。
+
+---
+
+## 二十二、团队官网 Phase 4 部署上线（任务沉淀，2026-08-22）
+
+> 记录人：小黑；记录日期：2026-08-22；依据：本次"官网 Phase 4 部署上线"任务实施结果（apt/nginx -t/curl/docker.sock/git push 均有工具结果）。
+
+### 1. 关键结论（均有工具结果依据）
+
+- **【已确认】容器内部署完成**：后端 Express（PID 7438，127.0.0.1:8080，nohup，日志 backend/server.log）+ nginx 1.24.0 官方 Ubuntu 构建（PID 7523，监听 0.0.0.0:80，日志 .deploy/nginx-run/logs/）。端到端：`/`、`/api/{roles,news,worlds}`、`/health`、`/roles`（SPA fallback）、`/assets/videos/home-video.mp4`（video/mp4, 2.85MB）全部 200；首页 HTML 含"世界第一 AI 工作室"，JS bundle 含角色文案。
+- **【已确认】80 端口当时空闲**（/proc/net/tcp 仅 0.0.0.0:3000=agent-server 在听；象棋 serve.js 已死），无需 kill。
+- **【已确认】公网 122.152.209.182:80 不可达（容器内 8s 超时）**：根因在宿主机层——本容器 hostname=assistant-app（172.18.0.3），docker.sock 查 Ports 仅映射 3000→3000，**无 80 映射**；且云安全组是否放行 80 无法从容器内确认。需宿主机管理员：① docker 将宿主 80 映射进本容器（重建容器或宿主 nginx 反代 172.18.0.3:80）；② 云安全组放行入站 TCP 80。容器内 nginx 已就绪，映射放行后无需再改。
+- **【已确认】持久化**：`/app/team-site/start.sh`（幂等，已 commit+push ed82d79）：后端在跑则跳过、nginx 在跑则跳过、dist 缺失才构建；容器重启后 `bash /app/team-site/start.sh` 一键恢复。
+
+### 2. 沉淀经验（原子化 + 置信度）
+
+1. **【高置信·本次验证】沙箱 workspace-write 下 apt 无法系统安装，可用"重定向 apt 目录 + 官方 deb 解包"替代**：apt 写 /var/lib/apt/lists 被拒且无审批通道时，`apt-get -o Dir::Cache=/app/.deploy/apt-cache -o Dir::State::lists=/app/.deploy/apt-lists -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources update/download` 把缓存/列表重定向到工作区即可下载（签名校验仍走系统 keyring，官方包可信），再 `dpkg -x nginx_*.deb /app/.deploy/nginx-root/` 解包运行。证据：重定向后 update 拉 32.4MB 成功、download 成功、`nginx -V` 显示 Ubuntu 构建。
+2. **【高置信·本次验证】Ubuntu 24.04 nginx 包名陷阱**：`nginx-core` 是 docs-only 过渡包（4.7KB，仅 changelog/copyright），真实二进制在 `nginx` 包（523KB，/usr/sbin/nginx）。下载前先 `dpkg -c` 看内容，别装错包。
+3. **【高置信·本次验证】非系统前缀跑官方 nginx 必须重定向编译内建路径**：Ubuntu 构建内建 `--pid-path=/run/nginx.pid`、`--error-log-path=/var/log/nginx/error.log`、`client_body_temp_path=/var/lib/nginx/body` 等，脱离标准安装后 `nginx -t` 报 `mkdir() "/var/lib/nginx/body" failed`；在配置里显式加 `pid logs/nginx.pid; error_log logs/error.log; access_log logs/access.log;` 与 5 个 `*_temp_path logs/*;`（相对 -p 前缀）即通过。mime.types 用 `include` 指向解包目录内文件。
+4. **【高置信·本次验证】判定"容器内服务能否被公网访问"要看宿主端口映射**：`hostname -I` 拿容器 IP（172.18.0.3 网桥），`curl --unix-socket /var/run/docker.sock http://localhost/containers/json` 读 Ports 字段——无 80 映射即宿主机层未放行，容器内无论怎么调都不可达；此时报告要区分"容器内已就绪"与"宿主机需映射 80 + 安全组放行"两个层次，别把容器内 200 说成公网可达。
+5. **【高置信·本次验证】pgrep -f 按"命令行子串"匹配，会误命中命令行内嵌同文本的无关进程**（本环境 harness 进程命令行含任务全文，内含 'node src/server.js'）：进程发现用锚定正则 `pgrep -f '^node src/server\.js$'`。证据：宽松模式返回 7030(harness)，锚定后唯一命中 7438。
+6. **【低置信·本次验证】官方 deb 解包运行 nginx 仅限受限沙箱的替代方案**：无 systemd/日志轮转/安全更新自动跟进；标准主机仍应 `apt-get install -y nginx` 系统安装（本沙箱不可行的根因是系统目录不可写 + 无审批通道）。
+7. **【低置信·待验证】公网可达性最终确认需外部视角**：容器内对自身公网 IP 超时可能叠加 hairpin NAT 不支持的因素，无法区分"安全组未放行"与"宿主未映射"；放行后应由外部机器/浏览器访问 http://122.152.209.182/ 复核。
