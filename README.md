@@ -67,7 +67,9 @@ npm run dev            # 启动 Agent Server（默认 :3000）
 
 语音开关拆成两个：
 
-- `VOICE_ENABLED=true`：语音路由总开关（false 时全部禁用）
+- `VOICE_ENABLED`：语音路由总开关。实时语音已废弃（桌面端下线、微信语音走
+  iLink 服务端转写），生产环境显式设 `false`——三个 `/ws/voice` 路由与
+  WebSocket 升级钩子都不注册；配置默认值仍是 `true`，所以必须显式写
 - `VOICE_TTS_ENABLED=false`：**只识别不说话**——Qwen ASR 继续识别你的语音，
   回复以文字显示（s2s 端到端语音需 TTS 开启才启用）
 

@@ -129,12 +129,16 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     approvals: deps.approvals,
   });
 
-  // The websocket plugin must be registered in the same encapsulation as the
-  // websocket routes so its `onRoute` hook rewrites the handlers.
-  app.register(async (instance) => {
-    await instance.register(websocket, { options: { maxPayload: 1024 * 1024 } });
-    // 语音总开关：VOICE_ENABLED=false 时只保留文字聊天
-    if (deps.config.voiceEnabled) {
+  // 语音总开关（N4-P2-5）：实时语音已废弃（桌面端下线、微信语音走 iLink 服务端
+  // 转写），VOICE_ENABLED=false 时这整块都不注册——三个 WebSocket 路由
+  // （/ws/voice 的 legacy / cascade / s2s 实现）与 @fastify/websocket 的 upgrade
+  // 钩子都不上挂，createQwen / createVoice / createTTS 一次都不调用（工厂是惰性的，
+  // 只在这里被引用）。路由代码保留（P2-22/P2-23 的修复仍在），只是不装载。
+  if (deps.config.voiceEnabled) {
+    // The websocket plugin must be registered in the same encapsulation as the
+    // websocket routes so its `onRoute` hook rewrites the handlers.
+    app.register(async (instance) => {
+      await instance.register(websocket, { options: { maxPayload: 1024 * 1024 } });
       if (deps.config.qwenRealtime.configured && deps.createQwen) {
         if (deps.config.qwenRealtime.voiceMode === 's2s' && deps.config.voiceTtsEnabled) {
           // End-to-end speech-to-speech: lowest latency, reasoning is Qwen's own.
@@ -189,8 +193,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
           });
         }
       }
-    }
-  });
+    });
+  }
 
   app.setErrorHandler((error, request, reply) => {
     if (reply.sent) return;
