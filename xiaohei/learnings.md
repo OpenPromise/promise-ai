@@ -443,3 +443,23 @@
 3. **【高置信·本次验证】Seedream 5.0 pro 文生图最小可用调用**：body `{model:"doubao-seedream-5-0-pro-260628", prompt, size:"1024x1024", output_format:"png", response_format:"b64_json", watermark:false, optimize_prompt_options:{mode:"standard"}}` → HTTP 200，`data[0].b64_json` 解码即 PNG。本次 32s 返回 2.2MB 图。
 4. **【高置信·本次验证】key 安全模式**：调用脚本放 /tmp 不入库，key 只经 `export VOLC_API_KEY=...` 环境变量注入（脚本读 `process.env`），调用后 unset；提交前 `grep -rn "ark-"` 扫全仓 + `git check-ignore` 确认派单记录目录（data/ 已在 .gitignore）不会入库。
 5. **【低置信·待验证】无图像输入能力时的图片验证替代方案**：当前模型 read_image 不可用时，用 python 校验 PNG magic bytes（89 50 4E 47）+ IHDR 宽高 + IDAT 字节量（真实图像 IDAT 大、纯色图极小）+ 生成 API 返回的 size/output_format 字段交叉验证；无法替代真看图，视觉细节 QA 受限时须在报告中如实标注。
+
+---
+
+## 十六、欢迎页静态子资源（avatar.png）被鉴权拦截修复（任务沉淀，2026-08-22）
+
+> 记录人：小黑；记录日期：2026-08-22；依据：本次"修复 /xiaohei/avatar.png 无法加载"任务的实施与测试结果。
+
+### 1. 根因与修复（两部分缺一不可）
+
+- **根因 1（鉴权层）**：`auth.ts` 的 `EXEMPT_PATHS` 只做精确匹配（'/xiaohei'），`/xiaohei/avatar.png` 不在名单 → token 模式下 401。修复：新增 `EXEMPT_PATH_PREFIXES = ['/xiaohei/', '/xiaoyou/']`，`isAuthExemptPath` 里精确集合 + 前缀集合逐项判断。
+- **根因 2（路由层）**：`xiaohei.ts` 只注册了 `GET /xiaohei`，没有 `/xiaohei/*` 静态路由 → 即使绕过鉴权也 404。修复：新增 `GET /xiaohei/*` 通配符路由，从 `/app/xiaohei`（`import.meta.url` 向上 4 级）按 safePath 解析后读文件返回；`/xiaoyou/*` 同构预留。
+
+### 2. 沉淀经验（原子化 + 置信度）
+
+1. **【高置信·本次验证】"豁免名单精确匹配"是新静态资源 401 的隐藏坑**：加路由 ≠ 能访问，auth 豁免必须同步放行子路径。前缀豁免要用**带尾斜杠的前缀**（`'/xiaohei/'`）逐项 `startsWith`，不能粗暴 `startsWith('/xiaohei')`——否则 `/xiaohei-other` 会被误豁免。
+2. **【高置信·本次验证】子路径豁免必须拦截 `..` 段**：`/xiaohei/../api/sessions` 会命中 `/xiaohei/` 前缀；`isAuthExemptPath` 里先 `path.split('/').includes('..')` 直接返回 false（现有安全测试断言此路径不豁免），穿越交给路由层兜底。
+3. **【高置信·本次验证】find-my-way 已解码 URL 参数**：Fastify 5 路由层拿到的通配符值 `request.params['*']` 是**解码后**的（`..%2Fpackage.json` → `'../package.json'`），safePath 必须按解码值拦 `..` 段，不要再 `decodeURIComponent` 二次解码（会破坏含字面 `%` 的文件名）。
+4. **【高置信·本次验证】`/xiaohei/*` 通配符匹配 `/xiaohei/`（空捕获）但不匹配 `/xiaohei`（无尾斜杠）**：保留原精确路由 `GET /xiaohei`，通配符里 `raw === ''` 时回落 index.html，两个入口行为一致。
+5. **【高置信·本次验证】二进制断言用 `response.rawPayload`**：`app.inject` 的 `response.body` 是 utf8 字符串（二进制会被转坏），断言 PNG 魔数要用 `rawPayload.subarray(0,4)`（Buffer）。
+6. **【低置信·待验证】参考实现不存在时的处理**：任务背景提到的 `routes/chess.ts`（safePath+MIME 参考实现）在本仓库与 git 历史中均不存在——先全局 grep（`safePath|MIME|image/png`）确认，再按描述的模式自建最小实现（`static-assets.ts` 共享工具），并把偏差写进最终报告；不要假设文件存在而直接引用。
