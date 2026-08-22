@@ -1,0 +1,54 @@
+/* ============================================================
+ * Design Tokens —— 派生自 docs/style-guide.md
+ * 规范改动时先改 style-guide.md，再同步本文件
+ * ============================================================ */
+:root {
+  /* 1. 中性色 */
+  --color-bg: #1d1d1d;
+  --color-bg-deep: #161616;
+  --color-panel: #282828;
+  --color-panel-2: #313131;
+  --color-line: rgba(255, 255, 255, 0.08);
+  --color-text: #ffffff;
+  --color-text-2: #afafaf;
+  --color-text-3: #7d7d7d;
+  --color-text-muted: #616161;
+
+  /* 2. 强调色 */
+  --color-accent: #50e5fb;
+  --color-accent-2: #7ce3f2;
+  --color-accent-dim: rgba(80, 229, 251, 0.16);
+  --color-pink: #fe5a95;
+  --color-purple: #7958cb;
+
+  /* 3. 字体 */
+  --font-sans: 'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC', system-ui, sans-serif;
+  --font-mono: ui-monospace, 'JetBrains Mono', Consolas, monospace;
+
+  /* 字号阶梯（56/32/20/16/13，display/title 响应式 clamp） */
+  --fs-display: clamp(2.25rem, 6.5vw, 3.5rem);
+  --fs-title: clamp(1.5rem, 4vw, 2rem);
+  --fs-subtitle: 1.25rem;
+  --fs-body: 1rem;
+  --fs-caption: 0.8125rem;
+
+  /* 4. 间距（4px 基准） */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  /* 5. 圆角 */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 16px;
+  --radius-full: 999px;
+
+  /* 6. 导航栏 */
+  --nav-bg: rgba(13, 13, 13, 0.72);
+  --nav-height: 64px;
+}
