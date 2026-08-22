@@ -262,3 +262,16 @@
   - 发送前提：bridge 已登录且 `state.json` 有 `account.peerSessions`（本次已有绑定对端，未指定 sessionId 时自动落到第一个绑定对端）。
 - **文件名匹配**：`resolveFileByName` 精确 > 前缀 > 包含（大小写不敏感），中文文件名直接传原名即可。
 - **入库即 gitignore**：`weixin-files/` 在 `.gitignore` 内，文件库内容不入 git；如需版本化备份，把文档副本放到仓库内目录（如 `xiaohei/`）单独提交。
+
+---
+
+## 十、微信视觉模型切换 DeepSeek（任务沉淀 #4，2026-08-22）
+
+> 场景：微信收图理解从 DashScope qwen3.8-max 切到 DeepSeek 官方视觉模型。沉淀调研与改法，避免下次再踩。
+
+- **调研路径（可复用）**：先 `web_search` 找官方新闻/文档 → 抓官方文档页（api-docs.deepseek.com/zh-cn/guides/vision/）核实模型名/端点/协议 → **用现有 key 调 `GET https://api.deepseek.com/models` 实测模型在列** → **用 1x1 PNG 走真实 `chat/completions` 冒烟**（验证 image_url data URL、Bearer 鉴权、响应结构 `choices[0].message.content`）。三步下来模型存在性/端点/协议全部实锤，不靠猜。
+- **DeepSeek 官方视觉模型关键事实**：API 模型 id 是小写 `deepseek-v4-flash-vision-exp`（显示名 DeepSeek-V4-Flash-Vision-Exp，2026-08-21 上线，**实验性 Exp 模型**）；端点 `https://api.deepseek.com/chat/completions`（base_url `https://api.deepseek.com`，OpenAI 兼容；也支持 /v1 前缀与 Anthropic /messages、Responses API）；鉴权 `Authorization: Bearer <DEEPSEEK_API_KEY>`；图片仅可放 `user` 消息，非视觉模型传图返回 400 "This model does not support image"；格式 JPEG/PNG/GIF/WebP，单图 ≤32MiB（data URL 内联整体请求 ≤48MiB）。
+- **Key 边界**：DASHSCOPE_API_KEY 只对 DashScope 端点有效；切到 DeepSeek 官方端点后必须用 DEEPSEEK_API_KEY，缺 key 时错误信息要明确点名（不能静默回退，也不能把 DashScope key 打到 DeepSeek 端点拿 401）。
+- **配置化改法（YAGNI 最小面）**：vision.ts 暴露 `DEFAULT_VISION_MODEL` / `DEFAULT_VISION_ENDPOINT` 常量 + `describeImage(options)`（endpoint/model 可覆盖）；index.ts 用 `WEIXIN_VISION_MODEL` / `WEIXIN_VISION_ENDPOINT` 环境变量覆盖默认；relay.ts 只透传。**函数名要跟着供应商改名**（describeImageWithDashScope → describeImage），别留说谎的名字。
+- **改动连带面**：relay.test.ts 的 fetch mock 是按 URL 匹配的（`dashscope.aliyuncs.com` → `api.deepseek.com`），换端点必须同步；README/.env.example 文档同步更新，避免文档与代码打架。
+- **坑：本环境 `NODE_ENV=production`**，`npm install` 默认跳过 devDependencies，typescript/vitest 装不上导致质量门没法跑 → 需 `NODE_ENV=development npm install --include=dev`；npm cache 若遇 EACCES（/root/.npm root-owned），加 `--cache /tmp/npm-cache` 绕开。node_modules 缺失时先 `npm ls <pkg>` 确认再动手，别在空工具链上跑门禁。
