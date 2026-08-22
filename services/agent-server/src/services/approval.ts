@@ -84,6 +84,8 @@ export class ApprovalRegistry {
   readonly #approved = new Map<string, Set<string>>();
   /** 任务级（单次请求）授权：requestId -> 已放行的工具名集合。 */
   readonly #requestApproved = new Map<string, Set<string>>();
+  /** requestId → sessionId：会话关闭时按归属清理任务级授权（N4-P2-2）。 */
+  readonly #requestSession = new Map<string, string>();
   readonly #timeoutMs: number;
   readonly #rememberApprovals: boolean;
 
@@ -158,36 +160,45 @@ export class ApprovalRegistry {
     return this.#approved.get(sessionId)?.has(fingerprint) ?? false;
   }
 
-  /** 该请求（一次用户指令的多步工具循环）内该工具是否已放行。 */
-  isRequestApproved(requestId: string | undefined, toolName: string): boolean {
+  /** 该请求（一次用户指令的多步工具循环）内该参数指纹是否已放行（N4-P2-1）。 */
+  isRequestApproved(requestId: string | undefined, fingerprint: string): boolean {
     if (!requestId) return false;
-    return this.#requestApproved.get(requestId)?.has(toolName) ?? false;
+    return this.#requestApproved.get(requestId)?.has(fingerprint) ?? false;
   }
 
-  /** 记住"Allow once"：本次请求后续对该工具的调用自动放行（OpenDex 任务级授权）。 */
-  rememberRequestApproval(requestId: string | undefined, toolName: string): void {
+  /**
+   * 记住"Allow once"：本次请求后续对**相同参数指纹**的调用自动放行
+   * （按指纹而非工具名，避免同名工具换参数被放大授权）。
+   */
+  rememberRequestApproval(
+    requestId: string | undefined,
+    sessionId: string,
+    fingerprint: string,
+  ): void {
     if (!requestId) return;
     // 有界驱逐（同 #approved 的做法）：异常路径漏掉 clearForRequest 时不至于泄漏。
     if (!this.#requestApproved.has(requestId) && this.#requestApproved.size >= MAX_APPROVED_REQUESTS) {
       const oldest = this.#requestApproved.keys().next().value;
       if (oldest !== undefined) this.#requestApproved.delete(oldest);
     }
-    let names = this.#requestApproved.get(requestId);
-    if (!names) {
-      names = new Set();
-      this.#requestApproved.set(requestId, names);
+    let fingerprints = this.#requestApproved.get(requestId);
+    if (!fingerprints) {
+      fingerprints = new Set();
+      this.#requestApproved.set(requestId, fingerprints);
+      this.#requestSession.set(requestId, sessionId);
     }
-    if (names.size >= MAX_APPROVED_REQUEST_TOOLS) {
-      const oldestTool = names.keys().next().value;
-      if (oldestTool !== undefined) names.delete(oldestTool);
+    if (fingerprints.size >= MAX_APPROVED_REQUEST_TOOLS) {
+      const oldestFingerprint = fingerprints.keys().next().value;
+      if (oldestFingerprint !== undefined) fingerprints.delete(oldestFingerprint);
     }
-    names.add(toolName);
+    fingerprints.add(fingerprint);
   }
 
   /** 请求结束（成功/失败/超轮数）后清理任务级授权，避免跨请求泄漏。 */
   clearForRequest(requestId: string | undefined): void {
     if (!requestId) return;
     this.#requestApproved.delete(requestId);
+    this.#requestSession.delete(requestId);
   }
 
   /** Remembers an approved call so an identical one can auto-run. */
@@ -212,6 +223,13 @@ export class ApprovalRegistry {
 
   clearForSession(sessionId: string): void {
     this.#approved.delete(sessionId);
+    // 会话关闭时清理该会话在途请求的任务级授权（N4-P2-2）
+    for (const [requestId, owner] of this.#requestSession) {
+      if (owner === sessionId) {
+        this.#requestApproved.delete(requestId);
+        this.#requestSession.delete(requestId);
+      }
+    }
     for (const [requestId, entry] of this.#pending) {
       if (entry.request.sessionId === sessionId) {
         this.#pending.delete(requestId);

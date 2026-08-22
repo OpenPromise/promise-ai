@@ -2,19 +2,31 @@ import { describe, expect, it } from 'vitest';
 import { ApprovalRegistry } from './approval.js';
 
 describe('ApprovalRegistry request-scoped grants', () => {
-  it('remembers and clears per-request tool grants', () => {
+  it('remembers and clears per-request fingerprint grants（N4-P2-1）', () => {
     const registry = new ApprovalRegistry();
-    expect(registry.isRequestApproved('req-1', 'app.launch')).toBe(false);
+    const fp = 'app.launch|{"url":"x"}';
+    expect(registry.isRequestApproved('req-1', fp)).toBe(false);
 
-    registry.rememberRequestApproval('req-1', 'app.launch');
-    expect(registry.isRequestApproved('req-1', 'app.launch')).toBe(true);
-    // 其他工具、其他请求、无请求 id 都不受影响。
-    expect(registry.isRequestApproved('req-1', 'terminal.run')).toBe(false);
-    expect(registry.isRequestApproved('req-2', 'app.launch')).toBe(false);
-    expect(registry.isRequestApproved(undefined, 'app.launch')).toBe(false);
+    registry.rememberRequestApproval('req-1', 's1', fp);
+    expect(registry.isRequestApproved('req-1', fp)).toBe(true);
+    // 同名工具不同参数（不同指纹）、其他请求、无请求 id 都不受影响。
+    expect(registry.isRequestApproved('req-1', 'app.launch|{"url":"y"}')).toBe(false);
+    expect(registry.isRequestApproved('req-2', fp)).toBe(false);
+    expect(registry.isRequestApproved(undefined, fp)).toBe(false);
 
     registry.clearForRequest('req-1');
-    expect(registry.isRequestApproved('req-1', 'app.launch')).toBe(false);
+    expect(registry.isRequestApproved('req-1', fp)).toBe(false);
+  });
+
+  it('clearForSession 清理该会话在途请求的任务级授权（N4-P2-2）', () => {
+    const registry = new ApprovalRegistry();
+    const fp = 'server.shell|{"command":"ls"}';
+    registry.rememberRequestApproval('req-a', 's1', fp);
+    registry.rememberRequestApproval('req-b', 's2', fp);
+    registry.clearForSession('s1');
+    expect(registry.isRequestApproved('req-a', fp)).toBe(false);
+    // 其它会话的授权不受影响
+    expect(registry.isRequestApproved('req-b', fp)).toBe(true);
   });
 });
 
@@ -91,15 +103,15 @@ describe('ApprovalRegistry 有界指纹记忆', () => {
   it('任务级授权（#requestApproved）同样封顶：请求数与单请求工具数都驱逐最旧', () => {
     const registry = new ApprovalRegistry({ timeoutMs: 30_000 });
     for (let i = 0; i < 205; i += 1) {
-      registry.rememberRequestApproval(`req-${i}`, 'server.shell');
+      registry.rememberRequestApproval(`req-${i}`, 's1', 'server.shell|{"cmd":"x"}');
     }
-    expect(registry.isRequestApproved('req-0', 'server.shell')).toBe(false);
-    expect(registry.isRequestApproved('req-204', 'server.shell')).toBe(true);
+    expect(registry.isRequestApproved('req-0', 'server.shell|{"cmd":"x"}')).toBe(false);
+    expect(registry.isRequestApproved('req-204', 'server.shell|{"cmd":"x"}')).toBe(true);
 
     for (let i = 0; i < 105; i += 1) {
-      registry.rememberRequestApproval('req-many-tools', `tool.${i}`);
+      registry.rememberRequestApproval('req-many-tools', 's1', `tool.${i}|{}`);
     }
-    expect(registry.isRequestApproved('req-many-tools', 'tool.0')).toBe(false);
-    expect(registry.isRequestApproved('req-many-tools', 'tool.104')).toBe(true);
+    expect(registry.isRequestApproved('req-many-tools', 'tool.0|{}')).toBe(false);
+    expect(registry.isRequestApproved('req-many-tools', 'tool.104|{}')).toBe(true);
   });
 });

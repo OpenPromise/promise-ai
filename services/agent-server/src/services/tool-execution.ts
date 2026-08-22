@@ -126,9 +126,9 @@ export async function* runToolCallWithApproval(
 
   const level = tool.permissionLevel as 2 | 3;
   const fingerprint = approvalFingerprint(tool.name, args);
-  // OpenDex 风格的任务级授权：本次请求已放行过该工具（Allow once），
-  // 后续同请求内的任意参数调用自动执行，直到请求结束。
-  if (level === 2 && approvals.isRequestApproved(context.requestId, tool.name)) {
+  // OpenDex 风格的任务级授权：本次请求已放行过该**参数指纹**（Allow once），
+  // 后续同请求内相同参数的调用自动执行，直到请求结束（N4-P2-1）。
+  if (level === 2 && approvals.isRequestApproved(context.requestId, fingerprint)) {
     return runToolWithTimeout(tool, args, context);
   }
   // L2: the user approved this exact call before in this session; run again
@@ -188,6 +188,6 @@ export async function* runToolCallWithApproval(
   }
 
   approvals.rememberApproval(context.sessionId, fingerprint);
-  approvals.rememberRequestApproval(context.requestId, tool.name);
+  approvals.rememberRequestApproval(context.requestId, context.sessionId, fingerprint);
   return runToolWithTimeout(tool, args, context);
 }

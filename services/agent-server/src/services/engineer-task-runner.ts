@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { TimelineStore } from '@personal-ai/memory';
 import {
@@ -122,6 +122,8 @@ export class EngineerTaskRunner {
   #active = 0;
   /** 并发超限时排队的任务（FIFO），前一个完成/失败后出队。 */
   readonly #pending: Array<{ task: EngineerTask; timeoutMinutes: number }> = [];
+  /** 持久化写队列：串行化避免多个任务同时 finish 时并发写同一文件。 */
+  #persistChain: Promise<void> = Promise.resolve();
 
   constructor(options: EngineerTaskRunnerOptions = {}) {
     this.#timeline = options.timeline;
@@ -353,13 +355,22 @@ export class EngineerTaskRunner {
 
   async #persist(): Promise<void> {
     if (!this.#persistFile) return;
-    try {
-      await mkdir(path.dirname(this.#persistFile), { recursive: true });
-      // 与内存表上限一致（MAX_TASKS=100），避免持久化只存末 50 条与运行态分叉
-      const records = [...this.#tasks.values()].slice(-MAX_TASKS);
-      await writeFile(this.#persistFile, JSON.stringify(records, null, 2), 'utf8');
-    } catch {
-      // 持久化失败不致命：任务仍可运行/查询，只是重启后丢失记录
-    }
+    const run = this.#persistChain.then(async () => {
+      try {
+        await mkdir(path.dirname(this.#persistFile!), { recursive: true });
+        // 与内存表上限一致（MAX_TASKS=100），避免持久化只存末 50 条与运行态分叉
+        const records = [...this.#tasks.values()].slice(-MAX_TASKS);
+        // .tmp + rename 原子替换：进程恰在写入时被杀不会留下截断 JSON
+        // （loadPersisted 遇到截断会整表丢弃，中断通知全丢——N4-P2-3）。
+        const tmp = `${this.#persistFile}.tmp`;
+        await writeFile(tmp, JSON.stringify(records, null, 2), 'utf8');
+        await rename(tmp, this.#persistFile!);
+      } catch {
+        // 持久化失败不致命：任务仍可运行/查询，只是重启后丢失记录
+      }
+    });
+    // 前一次失败不阻塞后续（链尾 catch）
+    this.#persistChain = run.catch(() => {});
+    await run;
   }
 }
