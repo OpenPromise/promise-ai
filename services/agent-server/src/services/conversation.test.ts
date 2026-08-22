@@ -782,7 +782,14 @@ describe('ConversationService', () => {
     ]);
   });
 
-  it('声称"已派给小黑"但未调工具时，强制注入校验并补调 engineer.delegate', async () => {
+  // ── 派单不变量（反向锁定）──────────────────────────────────────────
+  // 派单已交回小夜自主决定：程序不再对回复文字做硬校验，也不再注入
+  // tool_choice=required 强制补调（旧守卫会把复述/条件句误判成"假派单"，
+  // 反而制造出用户没要求的派单）。派单确认由 weixin-bridge 在真实工具
+  // 调用时推送（🔧 已派给小黑），不依赖模型文字。以下两条锁定相反方向的
+  // 不变量：回复里出现派单表述、但用户没下达明确派单指令时，绝不自动派单。
+
+  it('回复含"已派给小黑"但用户未下达派单指令时不自动派单（只跑 1 轮 LLM）', async () => {
     const store = new InMemorySessionStore();
     const session = await store.createSession({ systemPrompt: '你是助理。' });
     let delegated = 0;
@@ -799,455 +806,25 @@ describe('ConversationService', () => {
     });
 
     let callSeq = 0;
-    let enforcePromptSeen = false;
-    let toolChoiceRequiredSeen = false;
+    let toolChoiceSeen: unknown = 'unset';
     const llm: LLMProvider = {
       name: 'fake',
       model: 'test',
       configured: true,
       async *chat(input: ChatInput): AsyncIterable<ChatChunk> {
         callSeq += 1;
-        if (callSeq === 1) {
-          // 第一轮：只输出"已派给小黑"文字，不调工具（旧 bug 行为）
-          yield { delta: '收到，已派给小黑！让它去分析 grokbuild 项目。' };
-          return;
-        }
-        if (callSeq === 2) {
-          // 第二轮：应看到系统校验提示，并真正调用 engineer.delegate
-          enforcePromptSeen = input.messages.some(
-            (m) => m.role === 'user' && m.content.includes('系统校验'),
-          );
-          toolChoiceRequiredSeen = input.toolChoice === 'required';
-          yield {
-            delta: '',
-            finishReason: 'tool_calls',
-            toolCalls: [
-              {
-                id: 'call_delegate',
-                name: 'engineer_delegate',
-                arguments: JSON.stringify({ task: '分析 grokbuild' }),
-              },
-            ],
-          };
-          return;
-        }
-        yield { delta: '小黑分析完了，汇报如下。' };
+        toolChoiceSeen = input.toolChoice;
+        // 闲聊回复里带完成态派单字样（旧守卫会据此强制补调派单工具）
+        yield { delta: '好的，收到！上次那活早已派给小黑，任务在后台跑着，有新需求随时喊我。' };
       },
       async generate(): Promise<GenerateResult> {
         return { text: '' };
       },
     };
-
     const service = new ConversationService({
       store,
       llm,
       tools,
-      approvals: new ApprovalRegistry(),
-      memory: new InMemoryMemoryStore(),
-    });
-    let finalText = '';
-    for await (const envelope of service.runChat({
-      sessionId: session.id,
-      userMessage: '让小黑分析一下 grokbuild 项目',
-    })) {
-      if (envelope.type === 'chat.done') {
-        finalText = (envelope.payload as { text?: string }).text ?? '';
-      }
-    }
-
-    expect(callSeq).toBe(3);
-    expect(enforcePromptSeen).toBe(true);
-    expect(toolChoiceRequiredSeen).toBe(true);
-    expect(delegated).toBe(1);
-    expect(finalText).toContain('小黑分析完了');
-  });
-
-  it('普通回复不含派单声称时不触发强制补调（不误伤）', async () => {
-    const store = new InMemorySessionStore();
-    const session = await store.createSession({ systemPrompt: '你是助理。' });
-    let callSeq = 0;
-    const llm: LLMProvider = {
-      name: 'fake',
-      model: 'test',
-      configured: true,
-      async *chat(): AsyncIterable<ChatChunk> {
-        callSeq += 1;
-        yield { delta: '好的，我看看。' };
-      },
-      async generate(): Promise<GenerateResult> {
-        return { text: '' };
-      },
-    };
-    const service = new ConversationService({
-      store,
-      llm,
-      tools: new ToolRegistry(),
-      approvals: new ApprovalRegistry(),
-      memory: new InMemoryMemoryStore(),
-    });
-    for await (const _ of service.runChat({
-      sessionId: session.id,
-      userMessage: '帮我看看',
-    })) {
-      // drain
-    }
-    expect(callSeq).toBe(1);
-  });
-
-  it('声称已派单但只调了无关工具时，同样拦截并强制补调 engineer.delegate', async () => {
-    const store = new InMemorySessionStore();
-    const session = await store.createSession({ systemPrompt: '你是助理。' });
-    let delegated = 0;
-    let unrelatedCalls = 0;
-    const tools = new ToolRegistry();
-    tools.register({
-      name: 'engineer.delegate',
-      description: '派给小黑',
-      inputSchema: { type: 'object', properties: { task: { type: 'string' } } },
-      permissionLevel: 1,
-      async execute() {
-        delegated += 1;
-        return { ok: true, data: { text: '小黑完成' } };
-      },
-    });
-    tools.register({
-      name: 'fs.readDir',
-      description: '列目录',
-      inputSchema: { type: 'object', properties: { path: { type: 'string' } } },
-      permissionLevel: 0,
-      async execute() {
-        unrelatedCalls += 1;
-        return { ok: true, data: { files: ['src'] } };
-      },
-    });
-
-    let callSeq = 0;
-    let toolChoiceRequiredSeen = false;
-    const llm: LLMProvider = {
-      name: 'fake',
-      model: 'test',
-      configured: true,
-      async *chat(input: ChatInput): AsyncIterable<ChatChunk> {
-        callSeq += 1;
-        if (callSeq === 1) {
-          // 第一轮：嘴上说"已派给小黑"，实际只调了无关工具 fs.readDir
-          yield { delta: '收到，已派给小黑！先看下仓库结构。' };
-          yield {
-            delta: '',
-            finishReason: 'tool_calls',
-            toolCalls: [
-              { id: 'call_read', name: 'fs_readDir', arguments: JSON.stringify({ path: '.' }) },
-            ],
-          };
-          return;
-        }
-        if (callSeq === 2) {
-          // 第二轮：被强制 required，必须真正调用 engineer.delegate
-          toolChoiceRequiredSeen = input.toolChoice === 'required';
-          yield {
-            delta: '',
-            finishReason: 'tool_calls',
-            toolCalls: [
-              {
-                id: 'call_delegate',
-                name: 'engineer_delegate',
-                arguments: JSON.stringify({ task: '分析 grokbuild' }),
-              },
-            ],
-          };
-          return;
-        }
-        yield { delta: '小黑已开工，结果稍后汇报。' };
-      },
-      async generate(): Promise<GenerateResult> {
-        return { text: '' };
-      },
-    };
-
-    const service = new ConversationService({
-      store,
-      llm,
-      tools,
-      approvals: new ApprovalRegistry(),
-      memory: new InMemoryMemoryStore(),
-    });
-    let finalText = '';
-    for await (const envelope of service.runChat({
-      sessionId: session.id,
-      userMessage: '让小黑分析一下 grokbuild 项目',
-    })) {
-      if (envelope.type === 'chat.done') {
-        finalText = (envelope.payload as { text?: string }).text ?? '';
-      }
-    }
-
-    expect(callSeq).toBe(3);
-    expect(toolChoiceRequiredSeen).toBe(true);
-    // 无关工具必须被拦截，一次都不能执行
-    expect(unrelatedCalls).toBe(0);
-    expect(delegated).toBe(1);
-    expect(finalText).toContain('小黑已开工');
-  });
-
-  it('DeepSeek 思考模式不支持 tool_choice 时自动降级重试并完成派单', async () => {
-    const store = new InMemorySessionStore();
-    const session = await store.createSession({ systemPrompt: '你是助理。' });
-    let delegated = 0;
-    const tools = new ToolRegistry();
-    tools.register({
-      name: 'engineer.delegate',
-      description: '派给小黑',
-      inputSchema: { type: 'object', properties: { task: { type: 'string' } } },
-      permissionLevel: 1,
-      async execute() {
-        delegated += 1;
-        return { ok: true, data: { text: '小黑完成' } };
-      },
-    });
-
-    let callSeq = 0;
-    let requiredAttemptSeen = false;
-    let degradedAttemptSeen = false;
-    const llm: LLMProvider = {
-      name: 'fake',
-      model: 'test',
-      configured: true,
-      async *chat(input: ChatInput): AsyncIterable<ChatChunk> {
-        callSeq += 1;
-        if (callSeq === 1) {
-          // 第一轮：只输出"已派给小黑"文字，不调工具（旧 bug 行为）
-          yield { delta: '收到，已派给小黑！让它写简历。' };
-          return;
-        }
-        if (callSeq === 2) {
-          // 第二轮：带 tool_choice=required，但思考模式模型直接 400 拒绝
-          requiredAttemptSeen = input.toolChoice === 'required';
-          throw new Error(
-            'deepseek API error 400: {"error":{"message":"Thinking mode does not support this tool_choice",' +
-              '"type":"invalid_request_error","param":null,"code":"invalid_request_error"}}',
-          );
-        }
-        if (callSeq === 3) {
-          // 降级重试：不带 tool_choice，系统校验提示仍在上下文，模型真正调工具
-          degradedAttemptSeen = input.toolChoice === undefined;
-          yield {
-            delta: '',
-            finishReason: 'tool_calls',
-            toolCalls: [
-              {
-                id: 'call_delegate',
-                name: 'engineer_delegate',
-                arguments: JSON.stringify({ task: '把测试文档改写成简历' }),
-              },
-            ],
-          };
-          return;
-        }
-        yield { delta: '小黑已开工，写完发你。' };
-      },
-      async generate(): Promise<GenerateResult> {
-        return { text: '' };
-      },
-    };
-
-    const service = new ConversationService({
-      store,
-      llm,
-      tools,
-      approvals: new ApprovalRegistry(),
-      memory: new InMemoryMemoryStore(),
-    });
-    let finalText = '';
-    for await (const envelope of service.runChat({
-      sessionId: session.id,
-      userMessage: '让小黑把测试文档改写成简历',
-    })) {
-      if (envelope.type === 'chat.done') {
-        finalText = (envelope.payload as { text?: string }).text ?? '';
-      }
-    }
-
-    expect(callSeq).toBe(4);
-    expect(requiredAttemptSeen).toBe(true);
-    expect(degradedAttemptSeen).toBe(true);
-    expect(delegated).toBe(1);
-    expect(finalText).toContain('小黑已开工');
-  });
-
-  it('本请求早前轮次已真调派单工具时，后续总结轮不再误拦（跨轮证据）', async () => {
-    const store = new InMemorySessionStore();
-    const session = await store.createSession({ systemPrompt: '你是助理。' });
-    let delegated = 0;
-    const tools = new ToolRegistry();
-    tools.register({
-      name: 'engineer.delegate',
-      description: '派给小黑',
-      inputSchema: { type: 'object', properties: { task: { type: 'string' } } },
-      permissionLevel: 1,
-      async execute() {
-        delegated += 1;
-        return { ok: true, data: { text: '小黑完成' } };
-      },
-    });
-
-    let callSeq = 0;
-    let enforcePromptSeen = false;
-    const llm: LLMProvider = {
-      name: 'fake',
-      model: 'test',
-      configured: true,
-      async *chat(input: ChatInput): AsyncIterable<ChatChunk> {
-        callSeq += 1;
-        if (callSeq === 1) {
-          // 第 1 轮：真正调用 engineer.delegate（派单成功）
-          yield {
-            delta: '',
-            finishReason: 'tool_calls',
-            toolCalls: [
-              {
-                id: 'call_delegate',
-                name: 'engineer_delegate',
-                arguments: JSON.stringify({ task: '换视觉模型' }),
-              },
-            ],
-          };
-          return;
-        }
-        // 第 2 轮：总结"已派给小黑"（无工具调用）——不应被误判为假派单
-        enforcePromptSeen = input.messages.some(
-          (m) => m.role === 'user' && m.content.includes('系统校验'),
-        );
-        yield { delta: '收到，已派给小黑！任务在后台跑着，干完我汇报。' };
-      },
-      async generate(): Promise<GenerateResult> {
-        return { text: '' };
-      },
-    };
-
-    const service = new ConversationService({
-      store,
-      llm,
-      tools,
-      approvals: new ApprovalRegistry(),
-      memory: new InMemoryMemoryStore(),
-    });
-    let finalText = '';
-    for await (const envelope of service.runChat({
-      sessionId: session.id,
-      userMessage: '让小黑把视觉模型换成 DeepSeek 的',
-    })) {
-      if (envelope.type === 'chat.done') {
-        finalText = (envelope.payload as { text?: string }).text ?? '';
-      }
-    }
-
-    // 只有 2 轮 LLM：第 2 轮总结没有被强制校验拦下
-    expect(callSeq).toBe(2);
-    expect(enforcePromptSeen).toBe(false);
-    expect(delegated).toBe(1);
-    expect(finalText).toContain('已派给小黑');
-  });
-
-  it('同一轮真调派单工具时，文字含完成态表述也不触发纠正（真派单不拦）', async () => {
-    const store = new InMemorySessionStore();
-    const session = await store.createSession({ systemPrompt: '你是助理。' });
-    let delegated = 0;
-    const tools = new ToolRegistry();
-    tools.register({
-      name: 'engineer.delegate',
-      description: '派给小黑',
-      inputSchema: { type: 'object', properties: { task: { type: 'string' } } },
-      permissionLevel: 1,
-      async execute() {
-        delegated += 1;
-        return { ok: true, data: { text: '小黑完成' } };
-      },
-    });
-
-    let callSeq = 0;
-    let enforcePromptSeen = false;
-    const llm: LLMProvider = {
-      name: 'fake',
-      model: 'test',
-      configured: true,
-      async *chat(input: ChatInput): AsyncIterable<ChatChunk> {
-        callSeq += 1;
-        enforcePromptSeen = input.messages.some(
-          (m) => m.role === 'user' && m.content.includes('系统校验'),
-        );
-        if (callSeq === 1) {
-          // 第 1 轮：文字声称"已派给小黑"且真正调用 engineer.delegate——不应被拦
-          yield { delta: '收到，已派给小黑！' };
-          yield {
-            delta: '',
-            finishReason: 'tool_calls',
-            toolCalls: [
-              {
-                id: 'call_delegate',
-                name: 'engineer_delegate',
-                arguments: JSON.stringify({ task: '分析 grokbuild' }),
-              },
-            ],
-          };
-          return;
-        }
-        // 第 2 轮：总结（无工具调用）——有真实调用作证据，也不拦
-        yield { delta: '小黑已开工，干完我汇报。' };
-      },
-      async generate(): Promise<GenerateResult> {
-        return { text: '' };
-      },
-    };
-
-    const service = new ConversationService({
-      store,
-      llm,
-      tools,
-      approvals: new ApprovalRegistry(),
-      memory: new InMemoryMemoryStore(),
-    });
-    let finalText = '';
-    for await (const envelope of service.runChat({
-      sessionId: session.id,
-      userMessage: '让小黑分析 grokbuild 项目',
-    })) {
-      if (envelope.type === 'chat.done') {
-        finalText = (envelope.payload as { text?: string }).text ?? '';
-      }
-    }
-
-    // 只跑 2 轮 LLM，全程无强制校验提示
-    expect(callSeq).toBe(2);
-    expect(enforcePromptSeen).toBe(false);
-    expect(delegated).toBe(1);
-    expect(finalText).toContain('小黑已开工');
-  });
-
-  it('闲聊/计划表述（"我派给小黑""这就派"）不触发强制补调（修复误报）', async () => {
-    const store = new InMemorySessionStore();
-    const session = await store.createSession({ systemPrompt: '你是助理。' });
-    let callSeq = 0;
-    let enforcePromptSeen = false;
-    const llm: LLMProvider = {
-      name: 'fake',
-      model: 'test',
-      configured: true,
-      async *chat(input: ChatInput): AsyncIterable<ChatChunk> {
-        callSeq += 1;
-        enforcePromptSeen = input.messages.some(
-          (m) => m.role === 'user' && m.content.includes('系统校验'),
-        );
-        // 未来计划/闲聊表述：不构成"声称已派单"
-        yield { delta: '好的，收到！有活随时喊我，我派给小黑；收到需求我这就派小黑去干。' };
-      },
-      async generate(): Promise<GenerateResult> {
-        return { text: '' };
-      },
-    };
-    const service = new ConversationService({
-      store,
-      llm,
-      tools: new ToolRegistry(),
       approvals: new ApprovalRegistry(),
       memory: new InMemoryMemoryStore(),
     });
@@ -1257,12 +834,14 @@ describe('ConversationService', () => {
     })) {
       // drain
     }
-    // 只跑 1 轮 LLM：计划/闲聊表述不触发强制校验补调
+
+    // 只跑 1 轮 LLM、没有自动派单，且对话不再用 tool_choice 做派单强制
     expect(callSeq).toBe(1);
-    expect(enforcePromptSeen).toBe(false);
+    expect(delegated).toBe(0);
+    expect(toolChoiceSeen).toBeUndefined();
   });
 
-  it('复述/引语/条件句（"我确实说了让小黑开干了，但那是条件句"）不触发自动派单（修复误报）', async () => {
+  it('复述/条件句（"我确实说了让小黑开干了，但那是条件句"）不自动派单', async () => {
     const store = new InMemorySessionStore();
     const session = await store.createSession({ systemPrompt: '你是助理。' });
     let delegated = 0;
@@ -1279,19 +858,15 @@ describe('ConversationService', () => {
     });
 
     let callSeq = 0;
-    let enforcePromptSeen = false;
     const llm: LLMProvider = {
       name: 'fake',
       model: 'test',
       configured: true,
-      async *chat(input: ChatInput): AsyncIterable<ChatChunk> {
+      async *chat(): AsyncIterable<ChatChunk> {
         callSeq += 1;
-        enforcePromptSeen = input.messages.some(
-          (m) => m.role === 'user' && m.content.includes('系统校验'),
-        );
-        // 复述用户的条件句（引语+过去时"说了…了"），不是 bot 自己的"已派单"声称
+        // 复述用户的条件句（引语 + 过去时"说了…了"），不是真的要派单
         yield {
-          delta: "校验收到——我确实说了'让小黑开干'了，但那是条件句，等你确认再派。",
+          delta: "我确实说了'让小黑开干'了，但那是条件句，等你确认再派。",
         };
       },
       async generate(): Promise<GenerateResult> {
@@ -1311,87 +886,9 @@ describe('ConversationService', () => {
     })) {
       // drain
     }
-    // 只跑 1 轮 LLM、无强制校验、没有自动派单
+
     expect(callSeq).toBe(1);
-    expect(enforcePromptSeen).toBe(false);
     expect(delegated).toBe(0);
-  });
-
-  it('完成态新表述"已经让小黑去做了"但未调工具时仍拦截（守卫不削弱）', async () => {
-    const store = new InMemorySessionStore();
-    const session = await store.createSession({ systemPrompt: '你是助理。' });
-    let delegated = 0;
-    const tools = new ToolRegistry();
-    tools.register({
-      name: 'engineer.delegate',
-      description: '派给小黑',
-      inputSchema: { type: 'object', properties: { task: { type: 'string' } } },
-      permissionLevel: 1,
-      async execute() {
-        delegated += 1;
-        return { ok: true, data: { text: '小黑完成' } };
-      },
-    });
-
-    let callSeq = 0;
-    let enforcePromptSeen = false;
-    const llm: LLMProvider = {
-      name: 'fake',
-      model: 'test',
-      configured: true,
-      async *chat(input: ChatInput): AsyncIterable<ChatChunk> {
-        callSeq += 1;
-        if (callSeq === 1) {
-          // 第一轮：完成态声称"已经让小黑去做了"，不调工具——应被拦
-          yield { delta: '收到，已经让小黑去做了。' };
-          return;
-        }
-        if (callSeq === 2) {
-          // 第二轮：被强制 required，真正调用 engineer.delegate
-          enforcePromptSeen = input.messages.some(
-            (m) => m.role === 'user' && m.content.includes('系统校验'),
-          );
-          yield {
-            delta: '',
-            finishReason: 'tool_calls',
-            toolCalls: [
-              {
-                id: 'call_delegate',
-                name: 'engineer_delegate',
-                arguments: JSON.stringify({ task: '分析 grokbuild' }),
-              },
-            ],
-          };
-          return;
-        }
-        yield { delta: '小黑分析完了，汇报如下。' };
-      },
-      async generate(): Promise<GenerateResult> {
-        return { text: '' };
-      },
-    };
-
-    const service = new ConversationService({
-      store,
-      llm,
-      tools,
-      approvals: new ApprovalRegistry(),
-      memory: new InMemoryMemoryStore(),
-    });
-    let finalText = '';
-    for await (const envelope of service.runChat({
-      sessionId: session.id,
-      userMessage: '让小黑分析一下 grokbuild 项目',
-    })) {
-      if (envelope.type === 'chat.done') {
-        finalText = (envelope.payload as { text?: string }).text ?? '';
-      }
-    }
-
-    expect(callSeq).toBe(3);
-    expect(enforcePromptSeen).toBe(true);
-    expect(delegated).toBe(1);
-    expect(finalText).toContain('小黑分析完了');
   });
 
   it('stops the loop when the same tool call repeats', async () => {

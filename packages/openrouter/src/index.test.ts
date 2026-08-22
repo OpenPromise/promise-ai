@@ -116,7 +116,7 @@ describe('OpenRouterProvider', () => {
     expect(dashscope.name).toBe('dashscope');
   });
 
-  it('toolChoice=required 时请求体携带 tool_choice（派单硬校验的 API 层支持）', async () => {
+  it('toolChoice=required 时请求体携带 tool_choice（LLM 层能力，供需要强制调用的调用方使用）', async () => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
