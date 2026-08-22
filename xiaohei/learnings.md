@@ -482,3 +482,25 @@
 4. **【高置信·本次验证】素材直链可能有防盗链 403，但 URL 已在 HTML 里**：`<video src="https://yhvmg.wmupd.com/...mp4">` 直接暴露视频地址；curl 直下 403（Lego Server 防盗链），加 `-e <页面URL>` Referer 可拿到 poster 图。抓不到的（视频本体、实际渲染动效）如实标注"未抓到"，不编造。
 5. **【高置信·本次验证】环境无图像解码库时，图片主色调不可像素采样**：本环境无 PIL/ffmpeg，`bg.jpg`/poster 只能拿到文件与魔数；色板结论一律以 CSS 声明为准并在文档中声明"图片色调未验证"。别为取色引入依赖，如实标注即可。
 6. **【低置信·待验证】"一模一样"的落地边界取舍**：无浏览器无法验证最终渲染一致性；交互层（整页 Swiper vs 路由+全屏区块）做可维护性优先的偏离并列入"待澄清问题"，比盲目 1:1 复刻稳妥——需 Phase 2 用浏览器截图回验。
+
+---
+
+## 十八、Seedance 5.0 pro 文生视频 API 调研（任务沉淀，2026-08-23）
+
+> 记录人：小黑；记录日期：2026-08-23；依据：本次"调研 Doubao-Seedance-5.0-pro 文生视频 API"任务实施结果（火山方舟库 82379 文档树实时抓取 + 3 轮 web 搜索交叉验证）。完整结论见 `team-site/docs/seedance-5.0-pro-api.md`。
+
+### 1. 关键结论（均回溯官方文档/报道确认）
+
+- **【已确认】官方不存在 "Seedance 5.0"**：库 82379 文档树（2026-08-23 实时拉取 771 篇）视频生成模型清单最高为 Seedance 2.5；公开报道最新视频模型也是 2.5（2026-06 发布）。"5.0 pro" 仅存在于**文生图** Seedream 5.0 Pro（`doubao-seedream-5-0-pro-260628`）——CEO 的 "Seedance-5.0-pro" 极可能为 Seedream（图）与 Seedance（视频）混淆。
+- **【已确认】文生视频 API 端点**：创建 `POST https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks`（异步，返回 task id）；查询 `GET .../tasks/{id}`（仅最近 7 天）；鉴权 `Authorization: Bearer $ARK_API_KEY`（与 seedream 相同）。
+- **【已确认】Seedance 2.5 模型 ID**：`doubao-seedance-2-5-260628`（2.0: `doubao-seedance-2-0-260128`；1.5 pro: `doubao-seedance-1-5-pro-251215`）。命名规律 `doubao-seedance-<版本>-<YYMMDD>`；未来 5.0 若发布，推断 ID 形如 `doubao-seedance-5-0-pro-<YYMMDD>`（未验证，严禁编造使用）。
+- **【已确认】文生视频请求体**：`content=[{"type":"text","text":"<prompt>"}]` + `ratio`（16:9/4:3/1:1/3:4/9:16/21:9/adaptive）+ `resolution`（480p/720p/1080p；2.5 无 4k）+ `duration`（2.5: [4,30] 或 -1）+ `generate_audio`（默认 true）+ `watermark`（默认 false）+ `output_format`（mp4/mov，mov 仅 2.5）。首帧图：content 加 `{"type":"image_url","image_url":{"url":...},"role":"first_frame"}`。
+- **【已确认】轮询**：status ∈ queued/running/cancelled/succeeded/failed/expired；成功后 `content.video_url` 24h 有效（2.5 下载 ≤100 次）；官方示例轮询间隔 10-60s。
+
+### 2. 沉淀经验（原子化 + 置信度）
+
+1. **【高置信·本次验证】业务方给出的"模型版本号"可能跨产品线混淆**：CEO 要求 "Seedance-5.0-pro"，实际 5.0 pro 只存在于文生图 Seedream（`doubao-seedream-5-0-pro-260628`），文生视频最新是 Seedance 2.5。接需求时对"版本号 + 产品名"组合先做存在性核查（文档树 + web 双源），查不到就如实报告并给出官方现有替代，不编造 model ID；把"疑似混淆"作为推断写进文档，交监督者澄清。
+2. **【高置信·本次验证】getDocList 是实时文档树，可当"存在性证明"用**：库 82379 拉回 771 篇全量清单，按 Title 关键词（视频/Seedance/Video）过滤即可断言"某模型是否在文档中"；与 getDocDetail 正文模型能力表/教程模型 ID 表格互证，比单篇文档更可靠。本次即用此法确认"无 Seedance 5.0"。
+3. **【高置信·本次验证】视频生成是异步任务，调用模式与文生图不同**：图片是同步 POST 直返 b64/url；视频是 创建任务 → 轮询 GET /tasks/{id} → 取 content.video_url（24h 有效须及时转存）。不要把 seedream 的同步思维套到 seedance。
+4. **【高置信·本次验证】火山方舟视频 API 参数支持"提示词尾部弱校验"与 body 强校验双通道**：`--rs 720p --rt 16:9 --dur 5 --seed 11 --cf false --wm true` 追加在 text 末尾也可生效（所有模型兼容），但推荐 body 强校验（错误会明确报错而非被忽略）。
+5. **【低置信·待验证】首页视频参数建议**：16:9 横版 + 1080p（H.265/HEVC 10bit，兼容性存疑可退 720p）+ 无声（generate_audio:false）+ mp4 + ≤10s——按场景推导未实测，Phase 2 落地时须实际生成一次验证播放兼容性。
