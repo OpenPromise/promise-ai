@@ -202,6 +202,17 @@
 - **效果**：准则层落地完成，本次任务全量 `npm run typecheck` + `npm test` 全绿；"任务完成即沉淀"的闭环已在本任务中首次执行（本记录即沉淀物）。
 - **下一步**：① 能力评测基线（SWE-bench 思路，8-10 个代表性任务）继续推进；② 子代理能力边界类型化（explore/plan 只读 vs general-purpose 全能力）可作为 harness 层改进候选；③ 建立"记忆 staleness"意识——复用 learnings.md 旧结论前先验证是否仍成立。
 
+### 进化 #3（2026-08-23）：落地 Claude Code 的澄清先行 / 高信号优先 / 结论分级
+
+- **调研来源**：anthropics/claude-code（Claude Code 官方仓库，专有许可证，仓库主体为 plugins 生态）。落地 2 条，全部有仓库内一手文件出处：
+  1. **澄清先行 + 假设显式化**（来源：plugins/feature-dev/commands/feature-dev.md 的 Phase 3 Clarifying Questions，"DO NOT SKIP… Wait for answers before proceeding"）。落地：准则 1 追加"需求存在歧义或未定义行为时，方案中列出'待澄清问题'；监督者未答复时按最小假设推进，并把假设显式写进方案与最终报告（不把假设当事实）"——把"一句话确认目标"升级为结构化澄清，防止带错假设开工。
+  2. **高信号优先 + 结论分级**（来源：plugins/code-review/commands/code-review.md 的"两段式评审"——先并行找问题、再独立验证、只保留 HIGH SIGNAL；"False positives erode trust and waste reviewer time"，明确不 flag lint 能抓的/主观的/无法验证的）。落地：准则 4 追加"先验证问题真实性再修：优先高信号问题（编译/运行必失败、逻辑确定错误、明确违规），风格/主观/无法验证的疑似问题不擅自大动，避免修假阳性"；准则 6 追加"报告与断言区分'已确认（有工具结果依据）'与'疑似/推断（未验证假设）'，不夸大结论"。
+- **已有、未重复落地**：Plan/Act 分离 + 批准门（= feature-dev Phase 5）；质量门全绿才算完成（= Stop hook 语义）；错误自愈（= 错误回喂模型）；权限 allow/ask/deny（= dsh 权限分层 L0-L3）；破坏性操作防护（= 准则 7）；跨会话记忆（= 准则 8 learnings.md）；子代理工具面控制（= harness 层）。
+- **harness 层建议（未塞进准则，如实标注）**：① 命令/子代理级工具白名单（allowed-tools / agents tools frontmatter）——dsh 派生子代理按角色注入工具面；② hooks 事件面 + asyncRewake 异步唤醒（security-guidance 的 PostToolUse/Stop + rewakeMessage）——后台安全检查完成再唤醒主 agent；③ CLAUDE.md 分层作用域（目录级规则）；④ sandbox 网络白名单（allowedDomains/Unix socket）。
+- **同步动作**：engineer-tools.test.ts 新增 3 个关键词断言（待澄清问题 / 高信号 / 疑似/推断）防回归；主页（xiaohei/index.html）自我进化板块更新；本文件新增"十二、Claude Code 专项分析"章节；调研全文见 xiaohei/claude-code-analysis.md。
+- **效果**：准则层落地完成，本次任务全量 `npm run typecheck` + `npm test` 全绿（engineer-tools.test.ts 7/7 通过）。
+- **下一步**：① 能力评测基线（SWE-bench 思路）继续推进；② harness 层按上列 4 条建议评估（工具白名单 / hooks 异步唤醒 / 分层规则 / 网络白名单）；③ 在真实任务中验证"澄清先行"与"高信号"的效果并回填本节。
+
 ---
 
 ## 八、Grok Build（xai-org/grok-build）专项分析
@@ -288,3 +299,46 @@
 - **防误伤锚定**："正在运行/正在执行"这类泛进行时**不能裸匹配**（"服务器正在运行"会误伤），必须锚定任务/小黑/后台上下文；"正在派给小黑"单独保留（进行中的派单声称本身就该拦）。
 - **改动原则**：守卫收紧时，既有的"真漏派必须拦"测试一个都不能红——改模式后用正反例句集（真命中 10 句 + 不应命中 7 句）先做正则自检，再跑全量测试；守卫修复 = 模式收紧 + 补 3 类测试（真派单不拦 / 完成态声称拦截 / 计划闲聊不拦）。
 - **后续结论（2026-08-23，本节代码已作废）**：守卫整体删除——`DISPATCH_CLAIM_PATTERN` / `DISPATCH_ENFORCE_PROMPT` / `tool_choice=required` 强制补调全部从 `conversation.ts` 移除，派单交回小夜自主判断（persona `behavior-rules.md` 规定"直接调工具、不自己声称已派单"）。**更大的教训**：靠正则猜模型意图的守卫，收紧到"不误报"就必然漏报，两头都不可靠；真正的约束点应该放在**有事实依据的地方**（工具调用驱动的 `onLongTaskStarted` 确认、工具结果），而不是回复文本。测试也反向锁定：现在校验"含派单表述但用户未下指令时 delegated === 0"。
+
+---
+
+## 十二、Claude Code（anthropics/claude-code）专项分析
+
+> 调研人：小黑；调研日期：2026-08-23；调研方式：GitHub REST API（`/repos/{owner}/{repo}`、contents API）+ raw 文件抓取，无浏览器；官方文档站（code.claude.com/docs）在本沙箱网络不可达，正文依据仓库内一手文件（plugins/commands/examples/CHANGELOG）与 web_search 结果。调研全文：`xiaohei/claude-code-analysis.md`。
+
+### 1. 项目概况
+
+- **仓库**：[anthropics/claude-code](https://github.com/anthropics/claude-code)（Anthropic 官方，142,474 stars / 22,834 forks，2025-02 创建，最近推送 2026-08-22）。API 语言字段为 Python（仓库含 Python hooks），产品本体是 Node.js npm 包 `@anthropic-ai/claude-code`（闭源混淆分发）。
+- **许可证**：**专有（非开源）**——LICENSE.md = "© Anthropic PBC… Commercial Terms of Service"，API license 为 null。只可吸收设计，不可复制代码。
+- **定位**："agentic coding tool that lives in your terminal"——终端/IDE/GitHub 多形态的 AI 编码工具；扩展能力按 **Commands / Agents / Skills / Hooks / MCP** 五类载体分层，插件市场（marketplace.json）分发、团队共享。
+- **仓库布局**：`plugins/`（13 个官方插件范例）· `.claude/commands/`（3 个自用命令）· `examples/settings|hooks|gateway|mdm` · `scripts/` + `.github/workflows/`（issue 自动化运维）· `CHANGELOG.md`（5,759 行，v2.1.x 能力演进旁证）。
+
+### 2. 核心机制（对标小黑的分析维度）
+
+- **扩展四件套（plugins 标准结构）**：`plugin.json`（元数据）+ `commands/` + `agents/` + `skills/` + `hooks/` + `.mcp.json`。命令/代理文件 = **YAML frontmatter（description/argument-hint/allowed-tools/tools/model/color）+ Markdown 正文**。
+- **命令级工具白名单（allowed-tools）**：如 `Bash(gh issue view:*)`、`Bash(./scripts/gh.sh:*)`、`mcp__github_inline_comment__create_inline_comment`——命令只能使用白名单工具；正文支持 `!` shell 插值注入实时上下文（git status/diff）。
+- **子代理（agents/*.md）**：frontmatter 声明 `tools` 白名单 + `model` 分层（code-review 用 haiku 预检 / sonnet 合规 / opus 抓 bug）+ `color`；feature-dev 提供 code-explorer（只读，返回 5-10 个关键文件）/ code-architect / code-reviewer 三类专业子代理。
+- **hooks 事件面（security-guidance/hooks.json 实证）**：`SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `Stop`；`matcher` 按工具、`if` 按命令模式（`Bash(git commit:*)`）；**`asyncRewake` + `rewakeMessage`** 后台异步评审完成后唤醒 agent 处理；hookify 把规则降为 **markdown + YAML frontmatter（name/enabled/event/pattern/action: warn|block）** 零代码定义。
+- **权限与沙箱（examples/settings 实证）**：`permissions: allow/ask/deny` + `disableBypassPermissionsMode`；规则模式 `Bash(git commit:*)`；sandbox 网络白名单（allowedDomains / unix socket / 本地绑定 / 代理端口）；`allowManagedPermissionRulesOnly` / `allowManagedHooksOnly` 防供应链注入；strict / bash-sandbox / lax 三档预设。
+- **质量保障（最有价值）**：code-review 插件**两段式评审**——4 个 agent 并行评审 → 独立验证 agent 复核每条 issue → 只保留 HIGH SIGNAL（"False positives erode trust"）；明确不 flag lint 能抓的/主观的/无法验证的；pr-review-toolkit 按 6 维度拆分评审（含 **silent-failure-hunter 静默失败猎手**）；feature-dev 7 阶段（Discovery → 并行探索 → **Clarifying Questions（DO NOT SKIP）** → 多方案设计 → 批准后实现 → 3 并行 reviewer → Summary）。
+- **人机协作与上下文（CHANGELOG 旁证）**：`/goal` 长任务 check-in 退避（30min→1h→2h）+ 会话恢复时恢复 goal；`/cost` + `--max-budget-usd` 预算可见；compaction 提醒与 WebFetch 内容 15 分钟过期（上下文新鲜度）；ralph-wiggum 的 completion-promise（只有陈述完全为真才能输出完成承诺，禁止谎报逃循环）。
+
+### 3. 值得小黑学习的亮点（3-5 条，具体到做法）
+
+1. **澄清先行（feature-dev Phase 3）**：实现前显式列出所有歧义/未定义行为并等待回答，用户说"你决定"时给出推荐并要显式确认——落地为准则 1"待澄清问题 + 最小假设显式化"。
+2. **高信号两段式评审（code-review）**：先并行收集再独立验证，只保留"编译/运行必失败、逻辑确定错误、明确违规"，列出"不 flag"清单——落地为准则 4"先验证问题真实性再修，高信号优先，不修假阳性"。
+3. **结论分级（code-review + ralph-wiggum 诚实约束）**：断言标注依据等级，完成承诺只在完全为真时给出——落地为准则 6"区分'已确认（有工具结果依据）'与'疑似/推断（未验证假设）'，不夸大结论"。
+4. **命令/子代理工具白名单（allowed-tools / agents tools）**：工作流约束在最小工具面，wrapper 脚本进一步收窄（gh.sh）——**harness 层候选**（dsh 派生子代理按角色注入工具面）。
+5. **hooks 事件面 + asyncRewake 异步唤醒（security-guidance）**：关键事件挂检查器、后台评审完成再唤醒，不阻塞主流程也不丢问题——**harness 层候选**（同步"质量门前移"已有，异步唤醒需 harness 事件系统）。
+
+### 4. 与小黑现状对照（已有 / 新增）
+
+- **已有，无需重复落地**：Plan/Act 分离 + 批准门（= feature-dev Phase 5 语义）；质量门全绿才算完成（= Stop hook 语义）；错误自愈一次再停止（= 错误回喂模型）；权限 allow/ask/deny（= dsh 权限分层 L0-L3 + ask 审批 + workspace-write 沙箱）；破坏性操作防护（= 准则 7）；跨会话记忆（= 准则 8 learnings.md）；子代理工具面控制（= harness 层已有，白名单粒度可加强）。
+- **本次落地 2 条**（见"自我进化记录 #3"）：① 澄清先行 + 假设显式化；② 高信号优先 + 结论分级。
+- **harness 层建议（不塞进准则）**：命令/子代理工具白名单、hooks 事件面 + asyncRewake、CLAUDE.md 分层作用域（目录级规则）、sandbox 网络白名单。
+
+### 5. 参考链接
+
+- 仓库与 README：https://github.com/anthropics/claude-code
+- 官方文档（沙箱内不可达）：https://code.claude.com/docs/en/overview
+- 关键实证文件：`plugins/README.md`、`.claude-plugin/marketplace.json`、`plugins/code-review/commands/code-review.md`、`plugins/feature-dev/commands/feature-dev.md` + `agents/code-explorer.md`、`plugins/security-guidance/hooks/hooks.json`、`plugins/hookify/README.md`、`plugins/pr-review-toolkit`、`plugins/ralph-wiggum/commands/ralph-loop.md`、`.claude/commands/{commit-push-pr,triage-issue,dedupe}.md`、`examples/settings/settings-strict.json`、`CHANGELOG.md`

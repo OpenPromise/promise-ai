@@ -23,6 +23,10 @@ describe('buildXiaoHeiTask', () => {
     expect(task).toContain('规划期只读');
     expect(task).toContain('永久/不可恢复');
     expect(task).toContain('learnings.md');
+    // 自我进化 #3（Claude Code）：澄清先行 / 高信号优先 / 结论分级
+    expect(task).toContain('待澄清问题');
+    expect(task).toContain('高信号');
+    expect(task).toContain('疑似/推断');
     // 需求原文原样出现在任务单里
     expect(task).toContain(request);
     // 监督者语境
