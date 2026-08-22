@@ -420,3 +420,26 @@
 2. **runDshHeadless 两种用法**：同步（createCodingTool 模式，阻塞等结果）与异步（EngineerTaskRunner 模式，后台 + 事件）。选型看任务形态：单发指令等结果用同步，长任务/不阻塞对话用异步。
 3. **测试不触达 dsh**：子代理工具测试只覆盖"缺参/空参/目录不存在"等前置校验与静态属性（name/permissionLevel/schema），有效任务执行不测（会真实 spawn dsh）——与 engineer-tools.test.ts 异步注入 runner 不同，ops 是同步工具无法注入，靠前置校验兜底。
 4. **新静态路由的隐藏坑**：加路由只是第一步，`auth.ts` 的免 token 名单漏加会让页面在 token 模式下 401——测试用 `app.inject` 走 token 配置用例才能暴露。
+
+---
+
+## 十五、火山引擎 Seedream 文生图 API 接入（任务沉淀，2026-08-22）
+
+> 记录人：小黑；记录日期：2026-08-22；依据：本次"生成小黑二次元形象图"任务实施结果。
+
+### 1. 官方文档定位（关键事实，均回溯官方文档确认）
+
+- 火山方舟（库 82379）文档树：`API参考/图片生成 API` = **1541523**；`Base URL及鉴权` = **1298459**；`Doubao Seedream 5.0 pro 教程` = **2582774**。用户给的 1541594 实际是"获取 API Key 并配置"。
+- **端点**：`POST https://ark.cn-beijing.volces.com/api/v3/images/generations`（数据面 Base URL）。
+- **鉴权**：Header `Authorization: Bearer $ARK_API_KEY`（API Key 签名鉴权；Access Key 鉴权时 model 需换 Endpoint ID）。
+- **模型 ID**（以官方教程表格为准）：`doubao-seedream-5-0-pro-260628`（5.0 lite: `doubao-seedream-5-0-260128`；4.5: `doubao-seedream-4-5-251128`；4.0: `doubao-seedream-4-0-250828`）。
+- **size 校验（5.0 pro）**：显式 `宽x高` 时总像素 ∈ [921600(1280x720), 4624220(2048x2048x1.1025)]、宽高比 ∈ [1/16, 16]；`1024x1024`（1048576 像素，1:1）合法。也可用档位 `1K/1.5K/2K`（默认 2K）+ prompt 里描述宽高比。
+- **响应**：`response_format` = `url`（24h 有效，须及时下载）/ `b64_json`；`output_format` = `png`/`jpeg`（5.0 pro 支持）；`usage.generated_images`/`output_tokens`（= 宽×高/256 取整，1024x1024=4096 token）。
+
+### 2. 沉淀经验（原子化 + 置信度）
+
+1. **【高置信·本次验证】火山引擎文档抓正文**：docs.volcengine.com 是 SPA，curl 只能拿壳；正文走 `GET /api/doc/getDocDetail?LibraryID=<库ID>&DocumentID=<文档ID>&lang=zh`，无需登录。发现途径：从 CDN（portal.volccdn.com/obj/volcfe-scm/doccenter/static/js/main.*.js）里 grep `getDocDetail`/`getDocList` 得出端点；用 `getDocList?LibraryID=82379` 遍历文档树（ParentID 指针 + Title 过滤）定位真实文档。
+2. **【高置信·本次验证】URL 文档 ID 可能与内容不符**：用户给的 1541594 实为"获取 API Key 并配置"（也是有用信息：鉴权配置），真正的文生图 API 文档是 1541523。定位方法同经验 1。
+3. **【高置信·本次验证】Seedream 5.0 pro 文生图最小可用调用**：body `{model:"doubao-seedream-5-0-pro-260628", prompt, size:"1024x1024", output_format:"png", response_format:"b64_json", watermark:false, optimize_prompt_options:{mode:"standard"}}` → HTTP 200，`data[0].b64_json` 解码即 PNG。本次 32s 返回 2.2MB 图。
+4. **【高置信·本次验证】key 安全模式**：调用脚本放 /tmp 不入库，key 只经 `export VOLC_API_KEY=...` 环境变量注入（脚本读 `process.env`），调用后 unset；提交前 `grep -rn "ark-"` 扫全仓 + `git check-ignore` 确认派单记录目录（data/ 已在 .gitignore）不会入库。
+5. **【低置信·待验证】无图像输入能力时的图片验证替代方案**：当前模型 read_image 不可用时，用 python 校验 PNG magic bytes（89 50 4E 47）+ IHDR 宽高 + IDAT 字节量（真实图像 IDAT 大、纯色图极小）+ 生成 API 返回的 size/output_format 字段交叉验证；无法替代真看图，视觉细节 QA 受限时须在报告中如实标注。
