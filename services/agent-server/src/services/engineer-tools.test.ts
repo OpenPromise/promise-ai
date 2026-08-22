@@ -27,6 +27,11 @@ describe('buildXiaoHeiTask', () => {
     expect(task).toContain('待澄清问题');
     expect(task).toContain('高信号');
     expect(task).toContain('疑似/推断');
+    // 自我进化 #4（ECC）：评审四问门禁 / 零发现有效 / 学习沉淀置信度 / 记忆信任边界
+    expect(task).toContain('四问门禁');
+    expect(task).toContain('零发现');
+    expect(task).toContain('置信度');
+    expect(task).toContain('未审查上下文');
     // 需求原文原样出现在任务单里
     expect(task).toContain(request);
     // 监督者语境

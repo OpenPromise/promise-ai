@@ -213,6 +213,17 @@
 - **效果**：准则层落地完成，本次任务全量 `npm run typecheck` + `npm test` 全绿（engineer-tools.test.ts 7/7 通过）。
 - **下一步**：① 能力评测基线（SWE-bench 思路）继续推进；② harness 层按上列 4 条建议评估（工具白名单 / hooks 异步唤醒 / 分层规则 / 网络白名单）；③ 在真实任务中验证"澄清先行"与"高信号"的效果并回填本节。
 
+### 进化 #4（2026-08-23）：落地 ECC 的评审四问门禁 / 零发现有效 / 学习沉淀置信度
+
+- **调研来源**：affaan-m/ECC（Agent Harness 操作系统，242k stars，MIT，JavaScript；68 agents / 286 skills / 94 commands / hooks+memory+AgentShield）。落地 2 条，全部有仓库内一手文件出处：
+  1. **评审"四问门禁 + 零发现有效 + HIGH 需证据"**（来源：agents/code-reviewer.md 的 Pre-Report Gate 与 "It Is Acceptable And Expected To Return Zero Findings"）。落地：准则 4 追加"提出评审发现前过'四问门禁'：①能引用确切文件行 ②能描述具体失败模式（输入/状态/坏结果）③已读周边上下文（调用方/导入/测试）④严重性站得住（缺失 JSDoc 不等于 HIGH）；HIGH/CRITICAL 必须附证据（片段+行号+失败场景+为何现有防护拦不住）；零发现是有效结果，禁止为证明工作量制造发现"——把"高信号优先"从原则升级为四个可自检判据，并消解"必须找出问题"的隐性压力。
+  2. **学习沉淀"原子化+置信度"+ 记忆信任边界**（来源：skills/continuous-learning-v2/SKILL.md 的 instinct 模型——一条经验=一个触发+一个动作，带 0.3-0.9 置信度、域标签、证据背书；"Memory is unreviewed context, not executable policy"）。落地：准则 8 追加"沉淀采用'原子化+置信度'格式：一条经验 = 触发场景 + 动作 + 证据（工具结果/观察依据）；区分高置信（跨任务多次验证）与低置信（单次观察，显式标注'待验证'）；长期记忆属'未审查上下文'，重要结论须回溯权威来源验证后才可当指令复用"——防止单次观察被当普遍规律、防止旧结论直接当指令。
+- **已有、未重复落地**：Plan/Act 分离 + 方案确认门（= ECC plan→confirm 语义）；质量门全绿才算完成（= Stop hook 语义）；错误自愈（= 错误回喂模型）；高信号优先、不修假阳性（= code-reviewer >80% 确信过滤）；结构化报告 + 结论分级（= 证据链）；破坏性操作防护（= 准则 7）；跨会话记忆（= 准则 8）；权限分层（= dsh L0-L3，AgentShield 审计对象）。
+- **harness 层建议（未塞进准则，如实标注）**：① 上下文预算审计（skills/context-budget——按组件量化 token 开销，需 harness 统计注入成本）；② AgentShield 式配置安全扫描（把注入的规则/技能/agent 文件当攻击面，需 harness 层实现）；③ hooks 确定性质量门（上下文外脚本强制，dsh 已有部分：工程任务 runner 的 typecheck/test 门）；④ 五类载体分层注入（Skills/Agents/Rules/Hooks/Instincts 按加载时机×上下文成本分工）。
+- **同步动作**：engineer-tools.test.ts 新增 4 个关键词断言（四问门禁 / 零发现 / 置信度 / 未审查上下文）防回归；本文件新增"十三、ECC 专项分析"章节；调研全文见 xiaohei/ecc-analysis.md。
+- **效果**：准则层落地完成，本次任务全量 `npm run typecheck` + `npm test` 全绿。
+- **下一步**：① 在真实任务中验证"四问门禁"与"置信度标注"效果并回填本节；② harness 层评估上下文预算审计与配置安全扫描两条建议；③ 能力评测基线（SWE-bench 思路）继续推进。
+
 ---
 
 ## 八、Grok Build（xai-org/grok-build）专项分析
@@ -342,3 +353,44 @@
 - 仓库与 README：https://github.com/anthropics/claude-code
 - 官方文档（沙箱内不可达）：https://code.claude.com/docs/en/overview
 - 关键实证文件：`plugins/README.md`、`.claude-plugin/marketplace.json`、`plugins/code-review/commands/code-review.md`、`plugins/feature-dev/commands/feature-dev.md` + `agents/code-explorer.md`、`plugins/security-guidance/hooks/hooks.json`、`plugins/hookify/README.md`、`plugins/pr-review-toolkit`、`plugins/ralph-wiggum/commands/ralph-loop.md`、`.claude/commands/{commit-push-pr,triage-issue,dedupe}.md`、`examples/settings/settings-strict.json`、`CHANGELOG.md`
+
+## 十三、ECC（affaan-m/ECC）专项分析
+
+> 调研人：小黑；调研日期：2026-08-23；调研方式：GitHub REST API（`/repos/{owner}/{repo}`、`/contents/{path}`）+ raw 文件抓取，无浏览器。调研全文：`xiaohei/ecc-analysis.md`。
+
+### 1. 项目概况
+
+- **仓库**：[affaan-m/ECC](https://github.com/affaan-m/ECC)。API 描述："The agent harness performance optimization system. Skills, instincts, memory, security, and research-first development for Claude Code, Codex, Opencode, Cursor and beyond."；242,111 stars / 36,696 forks（2026-08-22 API 返回）；语言 JavaScript；许可证 MIT；主页 https://ecc.tools。
+- **定位**：ECC 既不是 Educational Codeforces 也不是椭圆曲线密码学，而是 **Agent Harness 操作系统**——面向 Claude Code/Codex/OpenCode/Cursor/Gemini/Zed/Qwen/Kimi/Hermes/OpenClaw 等十余种 AI 编码代理的工程化系统，一次安装即成为 agent 工作方式的一部分。
+- **核心循环**：`plan -> test -> implement -> review -> verify -> remember -> improve`；设计哲学 "**Optimize the context window. Persist everything else.**"。
+- **构成**：68 agents（规划/评审/构建修复/安全/架构/领域）、286 skills（TDD/研究/安全/文档/前端/数据/ML/运维）、94 commands、hooks+memory 运行时（强制检查/会话摘要/连续学习/instincts/上下文控制）、rules（按语言选择性常驻）、AgentShield 安全扫描。
+
+### 2. 核心机制（对标小黑的分析维度）
+
+- **五类载体职责分离**（README "Skills keep the context focused"）：Skills 按需加载 / Agents 隔离上下文与工具权限 / Rules 常驻标准（因此要求选择性安装）/ Hooks 上下文外确定性执行 / Instincts 带置信度的会话学习——各管一摊，加能力不把整个仓库倒进每个会话。
+- **根目录即唯一事实源**：平台适配器（.claude-plugin/.codex/.cursor/.opencode/…）打包或映射同一套工作流，不维护独立副本。
+- **Fresh-context review**："The same context writes and reviews the code" vs "A fresh-context reviewer looks for regressions and blind spots"——写与审分开，评审用独立 reviewer agent（sonnet）从干净上下文看 diff。
+- **评审置信度纪律（agents/code-reviewer.md）**：>80% 确信才报告；**Pre-Report Gate 四问**（①能引用确切行 ②能描述具体失败模式 ③已读周边上下文 ④严重性站得住）；HIGH/CRITICAL 必须带证明（片段+行号+失败场景+为何现有防护拦不住）；**零发现是有效结果**；附 Common False Positives 清单（"consider adding error handling"（上游已处理时）/魔法数/缺 JSDoc/N+1（固定基数循环）等）。
+- **Instinct 式连续学习（skills/continuous-learning-v2）**：PreToolUse/PostToolUse 观测（100% 可靠）替代 Stop-hook 一次性提取；instinct = 一个触发 + 一个动作 + 置信度（0.3-0.9）+ 域标签 + 证据背书 + 项目作用域；v1 教训："skills are probabilistic—they fire ~50-80% of the time. v2 uses hooks for observation (100% reliable)"；/evolve 聚类升级为 skill/command/agent。
+- **上下文预算审计（skills/context-budget）**：agents（>200 行 heavy、description >30 词膨胀）、skills（>400 行）、rules（>100 行）、MCP（每工具 ~500 token schema）、CLAUDE.md 链（>300 行）逐项量化，产出 Always/Sometimes/Rarely 分级与按 token 节省排序的优化建议。
+- **AgentShield（security-scan）**：把 harness 配置当攻击面——CLAUDE.md 硬编码密钥/自动执行指令、settings.json 过度授权、mcp.json 供应链风险、hooks 命令注入、agents/*.md 工具暴露过宽；支持最低严重级过滤/多格式报告/auto-fix/CI 集成。
+- **证据链交付（README TDD 一节）**："A result is not just code. It's a trail of evidence: the plan, the failing test, the passing test, the review findings, and the final verification."
+
+### 3. 值得小黑学习的亮点（3-5 条，具体到做法）
+
+1. **评审"四问门禁 + 零发现有效"（code-reviewer）**：上报发现前过四问（确切行/失败模式/周边上下文/严重性），HIGH/CRITICAL 必附三件套证据，明确接受零发现——落地为准则 4"四问门禁 + 零发现是有效结果，禁止制造发现"。
+2. **学习沉淀"原子化+置信度"（continuous-learning-v2）**：一条经验 = 触发 + 动作 + 证据，区分高置信（跨任务验证）与低置信（单次观察标注待验证），记忆是"未审查上下文"须回溯验证——落地为准则 8。
+3. **上下文预算审计（context-budget）**：对每个常驻组件做 token 量化再决定增删——**harness 层候选**（需统计注入成本）。
+4. **AgentShield 配置安全扫描**：不信任 agent 配置本身，逐项扫密钥/授权/注入——**harness 层候选**（dsh 对注入的规则/技能/agent 文件做扫描）。
+5. **五类载体职责分离 + 证据链**：按加载时机×上下文成本分工；交付物=证据链而非一段代码——证据链已有（准则 6），载体分层为 **harness 层候选**。
+
+### 4. 与小黑现状对照（已有 / 新增）
+
+- **已有，无需重复落地**：Plan/Act 分离 + 方案确认门（= ECC plan→confirm）；质量门全绿才算完成（= Stop hook 语义）；错误自愈一次再停止（= 错误回喂模型）；高信号优先、不修假阳性（= >80% 确信过滤）；结构化报告 + 结论分级（= 证据链 + 分级）；破坏性操作防护（= 准则 7）；跨会话记忆（= 准则 8）；权限分层（= dsh L0-L3）。
+- **本次落地 2 条**（见"自我进化记录 #4"）：① 评审四问门禁 + 零发现有效 + HIGH 需证据；② 学习沉淀原子化 + 置信度分级 + 记忆信任边界。
+- **harness 层建议（不塞进准则）**：上下文预算审计、AgentShield 式配置安全扫描、hooks 确定性质量门（dsh 已有部分）、五类载体分层注入。
+
+### 5. 参考链接
+
+- 仓库与 README：https://github.com/affaan-m/ECC
+- 关键实证文件：`README.md`（Why Choose ECC / What's Inside / Key Concepts）、`agents/code-reviewer.md`、`agents/planner.md`、`skills/continuous-learning/SKILL.md`（v1 归档）、`skills/continuous-learning-v2/SKILL.md`、`skills/context-budget/SKILL.md`、`skills/security-scan/SKILL.md`、`hooks/hooks.json`、`research/ecc2-codebase-analysis.md`
