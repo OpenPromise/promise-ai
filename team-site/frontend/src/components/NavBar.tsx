@@ -1,30 +1,39 @@
-import { NavLink } from 'react-router-dom';
+import { SECTIONS } from '../lib/sections';
 
-const LINKS = [
-  { to: '/', label: '首页' },
-  { to: '/news', label: '情报速递' },
-  { to: '/roles', label: '角色介绍' },
-  { to: '/world', label: '世界全景' },
-  { to: '/city', label: '都市映像' },
-];
-
-export default function NavBar() {
+/**
+ * 顶栏：对齐参考站——logo 左、导航居中；hover/当前板块青色提亮发光。
+ * 板块切换 = 点击 scrollIntoView（参考站 headerNav 按钮 slideTo 的等价实现）。
+ */
+export default function NavBar({
+  active,
+  onNavigate,
+}: {
+  active: string;
+  onNavigate: (id: string) => void;
+}) {
   return (
     <header className="nav">
-      <NavLink to="/" className="nav-logo" end>
+      <a
+        className="nav-logo"
+        href="#home"
+        onClick={(e) => {
+          e.preventDefault();
+          onNavigate('home');
+        }}
+      >
         <span className="nav-logo-mark">AI°</span>
         <span className="nav-logo-text">世界第一 AI 工作室</span>
-      </NavLink>
+      </a>
       <nav className="nav-links" aria-label="主导航">
-        {LINKS.map((link) => (
-          <NavLink
-            key={link.to}
-            to={link.to}
-            end={link.to === '/'}
-            className={({ isActive }) => `nav-link${isActive ? ' is-active' : ''}`}
+        {SECTIONS.map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            className={`nav-link${active === s.id ? ' is-active' : ''}`}
+            onClick={() => onNavigate(s.id)}
           >
-            {link.label}
-          </NavLink>
+            {s.label}
+          </button>
         ))}
       </nav>
     </header>

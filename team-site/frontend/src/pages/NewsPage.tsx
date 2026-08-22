@@ -11,7 +11,13 @@ const TABS: { key: NewsType; label: string }[] = [
   { key: 'complaint', label: '谁发牢骚了' },
 ];
 
-/** 情报速递：类型 Tab + 动态时间线（数据来自 /api/news，失败回退静态兜底） */
+/** 单 Tab 最多展示条数（参考站每频道 5 条；保证全屏内放得下） */
+const MAX_PER_TAB = 5;
+
+/**
+ * 情报速递：对齐参考站 pageNews——左右装饰细线 + Tab + 斜切徽章行列表
+ * （徽章/标题/日期，标题 hover 提亮，行底 #313131 分割线）。
+ */
 export default function NewsPage() {
   const [tab, setTab] = useState<NewsType>('all');
   const [items, setItems] = useState<NewsItem[] | null>(null);
@@ -27,18 +33,18 @@ export default function NewsPage() {
     };
   }, [tab]);
 
+  const list = items?.slice(0, MAX_PER_TAB) ?? [];
+
   return (
-    <section className="page news-page">
-      <div className="page-inner">
-        <SectionHead
-          kicker="NEWS"
-          title="情报速递"
-          desc="做了什么、谁入职了、谁发牢骚了——团队动态，随时同步。"
-        />
+    <section id="news" className="page-sec news-page">
+      <div className="news-inner">
+        <div className="section-lines" aria-hidden="true" />
+        <SectionHead kicker="NEWS" title="情报速递" desc="做了什么、谁入职了、谁发牢骚了——团队动态，随时同步。" />
         <div className="tabs" role="tablist" aria-label="情报类型">
           {TABS.map((t) => (
             <button
               key={t.key}
+              type="button"
               role="tab"
               aria-selected={tab === t.key}
               className={`tab${tab === t.key ? ' is-active' : ''}`}
@@ -52,16 +58,15 @@ export default function NewsPage() {
           {items === null ? (
             <p className="loading-text">加载中…</p>
           ) : (
-            items.map((n) => (
-              <article key={n.id} className={`news-card${n.pinned ? ' is-pinned' : ''}`}>
-                <div className="news-meta">
-                  <TypeBadge type={n.type} />
-                  <time className="news-date">{n.date}</time>
-                  {n.pinned && <span className="news-pin">置顶</span>}
+            list.map((n) => (
+              <article key={n.id} className={`news-item-row${n.pinned ? ' is-pinned' : ''}`}>
+                <TypeBadge type={n.type} />
+                <div className="news-title-col">
+                  <h3 className="news-title">{n.title}</h3>
+                  {n.content && <p className="news-summary">{n.content}</p>}
                 </div>
-                <h3 className="news-title">{n.title}</h3>
-                {n.content && <p className="news-content">{n.content}</p>}
-                <span className="news-author">—— {n.author}</span>
+                {n.pinned && <span className="news-pin">置顶</span>}
+                <time className="news-date">{n.date.slice(5).replace('-', '/')}</time>
               </article>
             ))
           )}

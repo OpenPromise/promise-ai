@@ -605,3 +605,27 @@
 5. **【高置信·本次验证】pgrep -f 按"命令行子串"匹配，会误命中命令行内嵌同文本的无关进程**（本环境 harness 进程命令行含任务全文，内含 'node src/server.js'）：进程发现用锚定正则 `pgrep -f '^node src/server\.js$'`。证据：宽松模式返回 7030(harness)，锚定后唯一命中 7438。
 6. **【低置信·本次验证】官方 deb 解包运行 nginx 仅限受限沙箱的替代方案**：无 systemd/日志轮转/安全更新自动跟进；标准主机仍应 `apt-get install -y nginx` 系统安装（本沙箱不可行的根因是系统目录不可写 + 无审批通道）。
 7. **【低置信·待验证】公网可达性最终确认需外部视角**：容器内对自身公网 IP 超时可能叠加 hairpin NAT 不支持的因素，无法区分"安全组未放行"与"宿主未映射"；放行后应由外部机器/浏览器访问 http://122.152.209.182/ 复核。
+
+
+---
+
+## 二十三、团队官网 Phase 5：UI 对齐参考站重构（任务沉淀，2026-08-22）
+
+> 记录人：小黑；依据：本次"官网 UI 对齐《异环》官网"任务实施结果（curl 复抓参考站 CSS/JS、typecheck/build/测试/SSR 冒烟均有工具结果）。
+
+### 1. 关键结论（均有工具结果依据）
+
+- **【已确认】交互从"路由翻页"改为"单页全屏 scroll-snap 翻页"**：html/body overflow:hidden + 单一滚动容器（height:100dvh + overflow-y:auto + scroll-snap-type:y mandatory + 隐藏滚动条）+ 5 个 section（height:100dvh + scroll-snap-align:start + scroll-snap-stop:always），零新依赖；IntersectionObserver(root=滚动容器, threshold:0.5) 驱动顶栏高亮与 hash 深链同步。
+- **【已确认】旧链接兼容**：`/news` 等旧路由路径、`#news` hash、`?nav=N` 均映射到对应板块（`src/lib/sections.ts` 注册表 + 启动时解析），nginx 未改（try_files 兜底 + hash 深链）。
+- **【已确认】视觉对齐以参考站 CSS 实际声明为准**（main260813.css 复抓）：斜切实色徽章（skew(-15deg)+内层反切）、行列表底边框 #313131、标题 #dfdfdf→hover #7ce3f2、缩略导航边框 #454545/active #89ddea、分页点 active 青色 + outline #b8b8b8、字母波浪加载页（textWavy translateY）。
+- **【已确认】质量门全绿**：frontend typecheck ✓、build ✓（dist 已重建）、backend npm test 10/10 ✓、SSR 冒烟 8/8 ✓。
+
+### 2. 沉淀经验（原子化 + 置信度）
+
+1. **【高置信·本次验证】CSS scroll-snap 是"整页翻页"的零依赖实现范式**：触发场景=要对齐参考站全屏 Swiper 翻页又不引库；动作=body overflow:hidden + 单滚动容器 `scroll-snap-type:y mandatory` + section `scroll-snap-align:start; scroll-snap-stop:always` + 滚动条隐藏 + IO 驱动状态；证据=本任务 typecheck/build 通过、SSR 冒烟 8/8（无浏览器实测，交互手感留真机复核）。
+2. **【高置信·本次验证】路由页面改单页 section 后旧 URL 兼容方案**：触发场景=重构后 `/news` 等旧路径会 404/落地不准；动作=注册表保留 path↔id 映射，启动时按 hash > pathname > ?nav=N 解析并 `scrollIntoView('auto')`（加载页覆盖期间定位，淡出即到位），nginx try_files 兜底无需改；证据=sections.ts + nginx 零改动。
+3. **【高置信·本次验证】无浏览器环境的 SSR 冒烟测试法**：触发场景=需要验证 React 组件树/结构类名但没有无头浏览器；动作=`react-dom/server.renderToString(<App/>)` + esbuild 打包；注意 `--format=esm` 会因 react-dom/server 动态 require("stream") 报错，须用 `--format=cjs`；数据区（useEffect 异步加载）在 SSR 下渲染"加载中"占位属预期，断言占位存在即可证明组件挂载无异常；证据=esbuild ESM 报错 → CJS 通过，8/8 断言全过。
+4. **【高置信·本次验证】游戏官网 UI 语言的可复现 CSS 模式清单**：斜切徽章（父 skew(-15deg) + 内层 span skew(15deg) 反切保文字正向）、行列表（底边框 #313131 + 标题 #dfdfdf→hover #7ce3f2）、缩略导航（边框 #454545、active #89ddea、名称底条 rgba(28,28,28,.68)）、分页点（inactive #616161+outline #373737，active #50e5fb+outline #b8b8b8）、字母波浪加载（textWavy translateY + 逐字 delay）；证据=main260813.css 逐条对照落地 tokens.css。
+5. **【低置信·待验证】scroll-snap + 100dvh 移动端真机手感**：dvh 兼容（100vh 回退已写）、iOS 弹性滚动与 snap 冲突未实测；建议部署后真机走查（参考站移动端也是独立横滑版，我们是竖滑 snap，属于有意偏离）。
+6. **【低置信·本次验证】minify 产物里模板拼接类名不以字面量出现**：`className={`type-badge type-${type}`}` 编译后是 `type-badge type-${k}`，grep 产物验证类名要按前缀匹配，避免误判缺失；证据=产物 grep 'type-badge type-${k}' 命中。
+7. **【低置信·本次验证】组件顶层访问 window/location 的函数要加 `typeof window` 守卫**：resolveInitialSection 在 useState 初始化时调用，SSR/Node 环境无 window 会崩；加守卫后 SSR 冒烟通过；证据=守卫前 SSR 冒烟 ReferenceError 风险（本次直接预防性加上，未复现崩溃）。

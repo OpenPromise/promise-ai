@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react';
-import type { CSSProperties } from 'react';
 import { fetchRoles } from '../api/client';
 import type { Role } from '../api/client';
 import SectionHead from '../components/SectionHead';
 
-/** 角色介绍：左侧竖排角色导航 + 主区卡片（参考站 roleNav + roleSwiper 基因） */
+/**
+ * 角色介绍：对齐参考站 pageRole——
+ * 左侧竖排角色缩略导航 + 整屏氛围背景（选中角色对应 world-* 图）+ 大图立绘 + 底部信息条。
+ * 切换：缩略图点击 / 左右箭头；背景随选中角色切换（world 图，加载失败自动留暗底）。
+ */
 export default function RolesPage() {
   const [roles, setRoles] = useState<Role[] | null>(null);
   const [active, setActive] = useState(0);
@@ -23,40 +26,48 @@ export default function RolesPage() {
   }, []);
 
   const role = roles?.[active];
+  const worldBg = role ? `/assets/worlds/${role.id}.png` : undefined;
+  const count = roles?.length ?? 0;
+  const prev = () => setActive((a) => (count ? (a + count - 1) % count : a));
+  const next = () => setActive((a) => (count ? (a + 1) % count : a));
 
   return (
-    <section className="page roles-page">
-      <div className="page-inner roles-inner">
-        <SectionHead
-          kicker="MEMBERS"
-          title="角色介绍"
-          desc="三位成员，三种颜色，同一个梦想。"
-        />
+    <section id="roles" className="page-sec roles-page">
+      <div className="roles-stage" style={worldBg ? { backgroundImage: `url(${worldBg})` } : undefined}>
+        <div className="roles-veil" />
+        <div className="section-lines" aria-hidden="true" />
+        <SectionHead kicker="MEMBERS" title="角色介绍" desc="三位成员，三种颜色，同一个梦想。" />
         {roles === null ? (
           <p className="loading-text">加载中…</p>
         ) : (
-          <div className="roles-body">
+          <>
             <nav className="roles-nav" aria-label="成员切换">
               {roles.map((r, i) => (
                 <button
                   key={r.id}
                   type="button"
                   className={`roles-nav-item${i === active ? ' is-active' : ''}`}
-                  style={i === active ? ({ '--role-accent': r.accent } as CSSProperties) : undefined}
+                  aria-label={`${r.name}：${r.title}`}
                   onClick={() => setActive(i)}
                 >
-                  <span className="roles-nav-name">{r.name}</span>
-                  <span className="roles-nav-title">{r.title}</span>
+                  <img src={r.avatarUrl} alt="" loading="lazy" />
+                  <span>{r.name}</span>
                 </button>
               ))}
             </nav>
             {role && (
-              <div className="role-card" key={role.id}>
+              <div className="roles-main" key={role.id}>
+                <button className="roles-arrow roles-prev" onClick={prev} aria-label="上一个角色">
+                  ‹
+                </button>
                 <div className="role-figure">
                   <img src={role.avatarUrl} alt={`${role.name} 形象图`} loading="lazy" />
                 </div>
-                <div className="role-info">
-                  <div className="role-head">
+                <button className="roles-arrow roles-next" onClick={next} aria-label="下一个角色">
+                  ›
+                </button>
+                <div className="role-info-bar">
+                  <div className="role-info-head">
                     <h3 className="role-name" style={{ color: role.accent }}>
                       {role.name}
                     </h3>
@@ -68,14 +79,14 @@ export default function RolesPage() {
                     </span>
                   </div>
                   <p className="role-bio">{role.bio}</p>
-                  <div className="role-dream">
+                  <p className="role-dream">
                     <span className="role-dream-label">个人梦想</span>
-                    <p className="role-dream-text">{role.dream}</p>
-                  </div>
+                    <span className="role-dream-text">{role.dream}</span>
+                  </p>
                 </div>
               </div>
             )}
-          </div>
+          </>
         )}
       </div>
     </section>

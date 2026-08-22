@@ -51,4 +51,16 @@
   /* 6. 导航栏 */
   --nav-bg: rgba(13, 13, 13, 0.72);
   --nav-height: 64px;
+
+  /* 7. 参考站细节色（逆向自 main260813.css，2026-08-22 复抓确认） */
+  --color-title-text: #dfdfdf; /* 列表标题（参考站 .newsItem .title） */
+  --color-line-strong: #313131; /* 行分割线（.newsCont .newsItem 底边框） */
+  --color-frame: #363636; /* 板块边框（.newsSwiper） */
+  --color-thumb-border: #454545; /* 缩略图边框（.pageViewNav .swiper-slide） */
+  --color-halo: #b8b8b8; /* 高亮描边（分页点 outline） */
+  --color-overlay: rgba(28, 28, 28, 0.68); /* 缩略图名称底条（.pageViewNav .name） */
+  --color-badge-cyan: #7ce3f2; /* 做了什么徽章底（.newsItem .type.gamenews） */
+  --color-badge-cyan-text: #313131;
+  --color-badge-pink: #fe5a95; /* 牢骚徽章底（.gamebroad） */
+  --color-badge-purple: #7958cb; /* 入职徽章底（.gameevent） */
 }
