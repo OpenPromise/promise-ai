@@ -28,6 +28,31 @@ describe('ApprovalRegistry request-scoped grants', () => {
     // 其它会话的授权不受影响
     expect(registry.isRequestApproved('req-b', fp)).toBe(true);
   });
+
+  /**
+   * 归属会话与指纹集合存在同一条记录里，驱逐时不可能只删一半。
+   * 说明：早前的两表实现（#requestApproved / #requestSession）在 LRU 驱逐后
+   * 会留下无上限的陈旧归属记录，但那是纯内存泄漏、公开 API 观测不到，
+   * 因此本用例锁的是"驱逐 + 重新授权后按归属清理仍正确"这一可观测行为，
+   * 泄漏本身由单条记录的结构保证（而非本用例）消除。
+   */
+  it('驱逐并重新授权后，clearForSession 仍按归属精确清理', () => {
+    const registry = new ApprovalRegistry();
+    const fp = 'server.shell|{"command":"ls"}';
+    registry.rememberRequestApproval('req-evicted', 's-old', fp);
+    // 灌满上限，把 req-evicted 挤出去
+    for (let i = 0; i < 200; i += 1) {
+      registry.rememberRequestApproval(`req-filler-${i}`, 's-filler', fp);
+    }
+    expect(registry.isRequestApproved('req-evicted', fp)).toBe(false);
+
+    // 同一个 requestId 在新会话下重新获批：归属必须跟着换成新会话
+    registry.rememberRequestApproval('req-evicted', 's-new', fp);
+    registry.clearForSession('s-old');
+    expect(registry.isRequestApproved('req-evicted', fp)).toBe(true);
+    registry.clearForSession('s-new');
+    expect(registry.isRequestApproved('req-evicted', fp)).toBe(false);
+  });
 });
 
 describe('ApprovalRequest.expiresAt', () => {

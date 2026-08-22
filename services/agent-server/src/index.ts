@@ -1,8 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import path from 'node:path';
 import { loadConfig } from '@personal-ai/config';
 import { FilePersonaProvider } from '@personal-ai/core';
 import { ElevenLabsSTT, ElevenLabsTTS } from '@personal-ai/elevenlabs';
@@ -29,6 +26,7 @@ import {
 import { ToolRegistry, createBuiltinTools } from '@personal-ai/tools';
 import { buildApp } from './app.js';
 import { ApprovalRegistry } from './services/approval.js';
+import { resolveSearchRoots } from './services/search-roots.js';
 import { ConversationService } from './services/conversation.js';
 import { TaskService, validateCronSchedule } from './services/task-service.js';
 import { ReminderService } from './services/reminder-service.js';
@@ -68,40 +66,11 @@ async function readHostUptimeSeconds(): Promise<number | null> {
 /**
  * 文件搜索根（N4-P1-1）：Linux/容器不再 exec powershell 枚举盘符
  * （容器里必失败且同步阻塞 10 秒），改走显式配置或默认根。
+ * 解析逻辑在 services/search-roots.ts（可测试）。
  */
-function resolveSearchRoots(): string[] {
-  // 显式配置优先（FILESYSTEM_SEARCH_ROOTS，逗号分隔）
-  const configured = process.env.FILESYSTEM_SEARCH_ROOTS?.split(',')
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => path.resolve(entry));
-  if (configured && configured.length > 0) return configured;
-
-  // Windows 本地开发：枚举盘符（C:\ D:\ …）让文件工具全盘可用
-  if (process.platform === 'win32') {
-    try {
-      const output = execFileSync(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-Command', '(Get-PSDrive -PSProvider FileSystem).Root'],
-        { encoding: 'utf8', windowsHide: true, timeout: 10_000 },
-      );
-      const roots = output
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => /^[A-Za-z]:\\$/.test(line));
-      if (roots.length > 0) return roots;
-    } catch {
-      // fall through to defaults
-    }
-  }
-
-  // Linux/容器：默认根（仅保留存在的目录）
-  return [process.cwd(), '/projects', '/app']
-    .map((entry) => path.resolve(entry))
-    .filter((entry) => existsSync(entry));
-}
-
-const searchRoots = resolveSearchRoots();
+const searchRoots = resolveSearchRoots({
+  configured: process.env.FILESYSTEM_SEARCH_ROOTS,
+});
 console.log(`[filesystem] search roots: ${searchRoots.join(', ')}`);
 
 // 记忆嵌入：百炼 text-embedding-v4（中文语义检索质量更好），

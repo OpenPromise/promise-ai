@@ -38,6 +38,12 @@ interface PendingApproval {
   timer: NodeJS.Timeout;
 }
 
+/** 一次请求的任务级授权：归属会话 + 已放行的参数指纹集合。 */
+interface RequestGrant {
+  sessionId: string;
+  fingerprints: Set<string>;
+}
+
 /**
  * Stable serialization of tool arguments: object keys are sorted so the same
  * call produced with different key order still matches one fingerprint.
@@ -82,10 +88,13 @@ export type ApprovalRespondResult = 'resolved' | 'not_found' | 'forbidden';
 export class ApprovalRegistry {
   readonly #pending = new Map<string, PendingApproval>();
   readonly #approved = new Map<string, Set<string>>();
-  /** 任务级（单次请求）授权：requestId -> 已放行的工具名集合。 */
-  readonly #requestApproved = new Map<string, Set<string>>();
-  /** requestId → sessionId：会话关闭时按归属清理任务级授权（N4-P2-2）。 */
-  readonly #requestSession = new Map<string, string>();
+  /**
+   * 任务级（单次请求）授权：requestId -> { 归属会话, 已放行的参数指纹 }。
+   * sessionId 与指纹集合放在同一条记录里（而不是两个并行 Map），
+   * 驱逐/清理时不可能只删一半——#requestSession 式的并行表没有独立上限，
+   * 漏删一次就是无界增长（等于把 N-P1-6 换个 Map 重演）。
+   */
+  readonly #requestApproved = new Map<string, RequestGrant>();
   readonly #timeoutMs: number;
   readonly #rememberApprovals: boolean;
 
@@ -163,7 +172,7 @@ export class ApprovalRegistry {
   /** 该请求（一次用户指令的多步工具循环）内该参数指纹是否已放行（N4-P2-1）。 */
   isRequestApproved(requestId: string | undefined, fingerprint: string): boolean {
     if (!requestId) return false;
-    return this.#requestApproved.get(requestId)?.has(fingerprint) ?? false;
+    return this.#requestApproved.get(requestId)?.fingerprints.has(fingerprint) ?? false;
   }
 
   /**
@@ -181,24 +190,22 @@ export class ApprovalRegistry {
       const oldest = this.#requestApproved.keys().next().value;
       if (oldest !== undefined) this.#requestApproved.delete(oldest);
     }
-    let fingerprints = this.#requestApproved.get(requestId);
-    if (!fingerprints) {
-      fingerprints = new Set();
-      this.#requestApproved.set(requestId, fingerprints);
-      this.#requestSession.set(requestId, sessionId);
+    let grant = this.#requestApproved.get(requestId);
+    if (!grant) {
+      grant = { sessionId, fingerprints: new Set() };
+      this.#requestApproved.set(requestId, grant);
     }
-    if (fingerprints.size >= MAX_APPROVED_REQUEST_TOOLS) {
-      const oldestFingerprint = fingerprints.keys().next().value;
-      if (oldestFingerprint !== undefined) fingerprints.delete(oldestFingerprint);
+    if (grant.fingerprints.size >= MAX_APPROVED_REQUEST_TOOLS) {
+      const oldestFingerprint = grant.fingerprints.keys().next().value;
+      if (oldestFingerprint !== undefined) grant.fingerprints.delete(oldestFingerprint);
     }
-    fingerprints.add(fingerprint);
+    grant.fingerprints.add(fingerprint);
   }
 
   /** 请求结束（成功/失败/超轮数）后清理任务级授权，避免跨请求泄漏。 */
   clearForRequest(requestId: string | undefined): void {
     if (!requestId) return;
     this.#requestApproved.delete(requestId);
-    this.#requestSession.delete(requestId);
   }
 
   /** Remembers an approved call so an identical one can auto-run. */
@@ -224,11 +231,8 @@ export class ApprovalRegistry {
   clearForSession(sessionId: string): void {
     this.#approved.delete(sessionId);
     // 会话关闭时清理该会话在途请求的任务级授权（N4-P2-2）
-    for (const [requestId, owner] of this.#requestSession) {
-      if (owner === sessionId) {
-        this.#requestApproved.delete(requestId);
-        this.#requestSession.delete(requestId);
-      }
+    for (const [requestId, grant] of this.#requestApproved) {
+      if (grant.sessionId === sessionId) this.#requestApproved.delete(requestId);
     }
     for (const [requestId, entry] of this.#pending) {
       if (entry.request.sessionId === sessionId) {

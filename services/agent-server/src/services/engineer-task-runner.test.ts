@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -227,5 +227,91 @@ describe('EngineerTaskRunner 崩溃恢复与并发上限', () => {
     expect(runner.get(second.id)?.status).toBe('success');
     expect(runner.get(third.id)?.status).toBe('success');
     expect(active).toBe(0);
+  });
+});
+
+/**
+ * N4-P2-3：#persist 早前直接 writeFile 最终文件、且无写序列化。
+ *
+ * 注意这两个用例是回归护栏，不是能复现旧 bug 的红检：实测下来旧实现在
+ * Node/NTFS 上很难从公开 API 观测到截断（并发 writeFile 会收敛到"最后一次写
+ * 完整落盘"，连并发读者也抓不到半成品）。真正的风险窗口是**进程在 write 中途
+ * 被杀**，那需要 kill -9 级别的注入才能稳定复现，不适合放进单测。
+ * 因此这里锁住修复后可断言的性质：落盘内容完整、快照是最新的、rename 后
+ * 不留 .tmp、以及写失败不致命。
+ */
+describe('EngineerTaskRunner 持久化原子性与写序列化（N4-P2-3）', () => {
+  it('多任务同时完成时任务表是完整 JSON 且为最新快照，不残留 .tmp', async () => {
+    const persistDir = await mkdtemp(path.join(tmpdir(), 'engineer-tasks-'));
+    const file = path.join(persistDir, 'engineer-tasks.json');
+    try {
+      const release: Array<() => void> = [];
+      const runner = makeRunner({
+        persistDir,
+        maxConcurrent: 12,
+        // 输出足够长，让每次序列化的字节数差异明显（截断才可观测）
+        runTask: () =>
+          new Promise((resolve) => {
+            release.push(() =>
+              resolve({ stdout: 'R'.repeat(4000), stderr: '', timedOut: false, exitCode: 0 }),
+            );
+          }),
+      });
+
+      const tasks = [];
+      for (let i = 0; i < 12; i += 1) {
+        tasks.push(await runner.delegate(`并发任务 ${i}`.repeat(30)));
+      }
+      await new Promise((r) => setTimeout(r, 20));
+
+      // 同一 tick 内全部 finish → 12 次 #persist 并发进入写队列
+      for (const done of release) done();
+      await new Promise((r) => setTimeout(r, 80));
+
+      // 落盘内容完整可解析
+      const parsed = JSON.parse(await readFile(file, 'utf8')) as Array<{ id: string }>;
+      expect(parsed).toHaveLength(12);
+      // 关键性质：快照在写队列串行化后仍是最新的（每次写入在队列内重新读
+      // 任务表，而不是入队时的旧快照），12 个任务都已 success。
+      expect(parsed.every((record) => (record as { status?: string }).status === 'success')).toBe(
+        true,
+      );
+      const restarted = makeRunner({
+        persistDir,
+        runTask: async () => {
+          throw new Error('不应该再执行');
+        },
+      });
+      const interrupted = await restarted.loadPersisted();
+      expect(interrupted).toHaveLength(0);
+      for (const task of tasks) {
+        expect(restarted.get(task.id)?.status).toBe('success');
+      }
+
+      // rename 之后不该留下 .tmp 中间文件
+      const leftovers = await readdir(persistDir);
+      expect(leftovers).toEqual(['engineer-tasks.json']);
+    } finally {
+      await rm(persistDir, { recursive: true, force: true });
+    }
+  });
+
+  it('写入失败（持久化目录被占为普通文件）不致命，任务仍可查询', async () => {
+    const base = await mkdtemp(path.join(tmpdir(), 'engineer-tasks-'));
+    // 用一个普通文件占住 persistDir，mkdir/writeFile 必失败
+    const persistDir = path.join(base, 'blocked');
+    await writeFile(persistDir, 'not a directory', 'utf8');
+    try {
+      const runner = makeRunner({
+        persistDir,
+        runTask: async () => ({ stdout: '完成', stderr: '', timedOut: false, exitCode: 0 }),
+      });
+      const task = await runner.delegate('持久化会失败的任务');
+      await new Promise((r) => setTimeout(r, 20));
+      // 持久化失败被吞掉，但内存态仍然正确（不影响运行/查询）
+      expect(runner.get(task.id)?.status).toBe('success');
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
   });
 });
