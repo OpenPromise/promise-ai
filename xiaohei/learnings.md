@@ -463,3 +463,22 @@
 4. **【高置信·本次验证】`/xiaohei/*` 通配符匹配 `/xiaohei/`（空捕获）但不匹配 `/xiaohei`（无尾斜杠）**：保留原精确路由 `GET /xiaohei`，通配符里 `raw === ''` 时回落 index.html，两个入口行为一致。
 5. **【高置信·本次验证】二进制断言用 `response.rawPayload`**：`app.inject` 的 `response.body` 是 utf8 字符串（二进制会被转坏），断言 PNG 魔数要用 `rawPayload.subarray(0,4)`（Buffer）。
 6. **【低置信·待验证】参考实现不存在时的处理**：任务背景提到的 `routes/chess.ts`（safePath+MIME 参考实现）在本仓库与 git 历史中均不存在——先全局 grep（`safePath|MIME|image/png`）确认，再按描述的模式自建最小实现（`static-assets.ts` 共享工具），并把偏差写进最终报告；不要假设文件存在而直接引用。
+
+---
+
+## 十七、游戏官网风格逆向分析方法（团队官网 Phase 1 沉淀，2026-08-22）
+
+> 记录人：小黑；记录日期：2026-08-22；依据：本次"分析 https://yh.wanmei.com/main.html（《异环》官网）"任务实施结果。
+
+### 1. 背景
+
+需要"一模一样风格"复刻一个游戏官网时，不能只凭肉眼/截图做设计规范——要落到可复用的 Design Tokens 与结构清单。本次用纯 curl + 文本工具完成逆向，无需浏览器。
+
+### 2. 沉淀经验（原子化 + 置信度）
+
+1. **【高置信·本次验证】游戏官网一般不是 SPA，curl 能拿到完整 HTML 骨架 + CSS + JS**：`main.html` 34.8KB 直接含全部 DOM 结构与资源 URL；相比 docs.volcengine.com 那种 SPA 壳（见经验 §十五-1），游戏官网静态页友好得多。抓取顺序：HTML → 引用的主 CSS（`style/main*.css`）→ 主 JS（`js/main*.js`，内含 `?nav=N` 直达页码等交互逻辑）→ 数据 JS（`include/newsData*.js`，直接暴露真实数据结构）。
+2. **【高置信·本次验证】CSS hex 频次统计是快速还原色板的第一招**：`grep -oE '#[0-9a-fA-F]{3,8}' css | sort | uniq -c | sort -rn` 得到"主深底 #1d1d1d ×4、强调青 #7ce3f2/#50e5fb、点缀粉 #fe5a95"的完整清单；再按用途归类即得 Design Tokens。比肉眼截图取色快且可引用文件行号。
+3. **【高置信·本次验证】DOM 骨架解析用 python 正则打标签序**：strip script/style 后按标签出现顺序输出 `tag + class`，几秒得到"loading → header → 全屏 Swiper 五板块 → footer → pop"的板块树；结合 CSS 中 `position:absolute` + rem 定位声明（如 `.roleNav{left:1.2rem;top:50%}`）即可还原版式手法。
+4. **【高置信·本次验证】素材直链可能有防盗链 403，但 URL 已在 HTML 里**：`<video src="https://yhvmg.wmupd.com/...mp4">` 直接暴露视频地址；curl 直下 403（Lego Server 防盗链），加 `-e <页面URL>` Referer 可拿到 poster 图。抓不到的（视频本体、实际渲染动效）如实标注"未抓到"，不编造。
+5. **【高置信·本次验证】环境无图像解码库时，图片主色调不可像素采样**：本环境无 PIL/ffmpeg，`bg.jpg`/poster 只能拿到文件与魔数；色板结论一律以 CSS 声明为准并在文档中声明"图片色调未验证"。别为取色引入依赖，如实标注即可。
+6. **【低置信·待验证】"一模一样"的落地边界取舍**：无浏览器无法验证最终渲染一致性；交互层（整页 Swiper vs 路由+全屏区块）做可维护性优先的偏离并列入"待澄清问题"，比盲目 1:1 复刻稳妥——需 Phase 2 用浏览器截图回验。
