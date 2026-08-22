@@ -28,6 +28,7 @@ function loadXiaoheiHtml(): Promise<string> {
 export function registerXiaoheiRoutes(app: FastifyInstance): void {
   app.get('/xiaohei', async (_request, reply) => {
     const html = await loadXiaoheiHtml();
+    reply.header('Cache-Control', 'no-cache, max-age=0, must-revalidate');
     return reply.type('text/html; charset=utf-8').send(html);
   });
 

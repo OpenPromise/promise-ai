@@ -46,6 +46,9 @@ export async function sendStaticFile(
   try {
     const body = await readFile(filePath);
     const type = MIME_TYPES[extname(filePath).toLowerCase()] ?? 'application/octet-stream';
+    // 不缓存：此前 401 错误响应会被浏览器缓存住（无 Cache-Control 时），
+    // 修好服务端后用户仍看到旧 401。no-cache 让浏览器每次都向服务器验证。
+    reply.header('Cache-Control', 'no-cache, max-age=0, must-revalidate');
     return reply.type(type).send(body);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
