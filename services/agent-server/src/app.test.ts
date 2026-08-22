@@ -399,6 +399,37 @@ describe('agent-server', () => {
     expect(response.body).toContain('小优');
   });
 
+  it('serves xiaohei static assets: /xiaohei/avatar.png as image/png', async () => {
+    const app = build();
+    const response = await app.inject({ method: 'GET', url: '/xiaohei/avatar.png' });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('image/png');
+    // PNG 魔数（89 50 4E 47），确认返回的是真实图片字节而非错误 JSON。
+    expect(response.rawPayload.subarray(0, 4).toString('hex')).toBe('89504e47');
+  });
+
+  it('serves xiaohei trailing slash as index.html', async () => {
+    const app = build();
+    const response = await app.inject({ method: 'GET', url: '/xiaohei/' });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/html');
+  });
+
+  it('rejects path traversal and missing files in the xiaohei static route', async () => {
+    const app = build();
+    // 编码的 .. 段（find-my-way 会解码）不得借静态路由读根目录外文件。
+    const traversal = await app.inject({ method: 'GET', url: '/xiaohei/..%2Fpackage.json' });
+    expect(traversal.statusCode).toBe(404);
+    const missing = await app.inject({ method: 'GET', url: '/xiaohei/nope.png' });
+    expect(missing.statusCode).toBe(404);
+  });
+
+  it('registers the xiaoyou static route (missing asset -> 404, not 401/500)', async () => {
+    const app = build();
+    const response = await app.inject({ method: 'GET', url: '/xiaoyou/avatar.png' });
+    expect(response.statusCode).toBe(404);
+  });
+
   it('creates a session with the persona system prompt', async () => {
     const app = build();
     const response = await app.inject({

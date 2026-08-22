@@ -20,6 +20,13 @@ const EXEMPT_PATHS = new Set([
   '/xiaoyou',
 ]);
 
+/**
+ * 免 token 的路径前缀（只放行子路径）：/xiaohei/avatar.png 等浏览器直取的
+ * 静态资源。必须带尾斜杠且逐项前缀匹配，避免 /xiaohei-other 之类被误豁免。
+ * 含 .. 段（路径穿越）的请求一律不豁免（见 isAuthExemptPath）。
+ */
+const EXEMPT_PATH_PREFIXES = ['/xiaohei/', '/xiaoyou/'];
+
 /** hooks 有自己的 HOOK_SECRET + 恒定时间比较，外部系统无法带 API token。 */
 const HOOK_PATH_PREFIX = '/api/hooks/';
 
@@ -28,7 +35,13 @@ export type ApiAuthMode = 'token' | 'open' | 'closed';
 /** 该请求路径是否免 token。 */
 export function isAuthExemptPath(url: string): boolean {
   const path = url.split('?')[0] ?? '';
+  // 路径穿越不豁免：带 .. 段的请求交给路由层处理（静态路由另有 safePath 兜底），
+  // 防止 /xiaohei/../api/sessions 之类的拼接借子路径豁免绕过鉴权。
+  if (path.split('/').includes('..')) return false;
   if (EXEMPT_PATHS.has(path)) return true;
+  // 子路径豁免：/xiaohei/avatar.png、/xiaoyou/** 等静态资源（带尾斜杠前缀，不误伤
+  // /xiaohei-other；穿越已在上面拦截）。
+  if (EXEMPT_PATH_PREFIXES.some((prefix) => path.startsWith(prefix))) return true;
   // /api/hooks/:name —— 必须真有一段 name，且不能再往下钻。
   if (path.startsWith(HOOK_PATH_PREFIX)) {
     const name = path.slice(HOOK_PATH_PREFIX.length);

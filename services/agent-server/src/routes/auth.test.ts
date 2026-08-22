@@ -13,6 +13,20 @@ describe('isAuthExemptPath', () => {
     expect(isAuthExemptPath('/xiaohei')).toBe(true);
   });
 
+  it('欢迎页子路径豁免：/xiaohei/*、/xiaoyou/* 静态资源（头像图等）', () => {
+    expect(isAuthExemptPath('/xiaohei/')).toBe(true);
+    expect(isAuthExemptPath('/xiaohei/avatar.png')).toBe(true);
+    expect(isAuthExemptPath('/xiaohei/avatar.png?v=2')).toBe(true);
+    expect(isAuthExemptPath('/xiaoyou')).toBe(true);
+    expect(isAuthExemptPath('/xiaoyou/avatar.png')).toBe(true);
+  });
+
+  it('子路径豁免不误伤：/xiaohei-other 之类的路径仍要鉴权', () => {
+    expect(isAuthExemptPath('/xiaohei-other')).toBe(false);
+    expect(isAuthExemptPath('/xiaohei-other/avatar.png')).toBe(false);
+    expect(isAuthExemptPath('/xiaoyou-extra')).toBe(false);
+  });
+
   it('会话/聊天/审批/事件/语音一律不豁免', () => {
     expect(isAuthExemptPath('/api/sessions')).toBe(false);
     expect(isAuthExemptPath('/api/sessions/abc/chat')).toBe(false);
