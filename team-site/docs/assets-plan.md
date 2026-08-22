@@ -7,12 +7,12 @@
 
 | # | 素材 | 用途 | 生成模型 | 尺寸建议 | 阶段 |
 |---|---|---|---|---|---|
-| 1 | 首页视频 | 首页全屏背景（三成员形象 + 目标） | Doubao-Seedance 2.5（视频） | 16:9 横版 | Phase 2 |
+| 1 | 首页视频 | 首页全屏背景（三成员形象 + 目标） | MiniMax-H3（视频） | 16:9 横版 | Phase 2 |
 | 2 | 角色 2D 形象图 ×3 | 角色介绍页立绘 | doubao-seedream-5-0-pro-260628 | 1024×1536 竖版 | Phase 2 |
 | 3 | 世界全景图 ×3 | 世界全景页（各自工作环境） | doubao-seedream-5-0-pro-260628 | 1920×1080 横版 | Phase 2 |
 | 4 | 都市映像图 ×3 | 都市映像页（梦想愿景） | doubao-seedream-5-0-pro-260628 | 1920×1080 横版 | Phase 2 |
 
-## 2. 首页视频（Doubao-Seedance 2.5）
+## 2. 首页视频（MiniMax H3）
 
 - **需求要点**（生成时须覆盖）：
   1. 场景：深色科技感都市/工作室环境，青色（#50e5fb 档）霓虹光效，与官网整体深色冷光一致；
@@ -20,8 +20,8 @@
   3. 主题收尾：出现团队愿景文字意象"世界第一 AI 工作室"；
   4. 风格：高质量二次元动画电影质感、流畅运镜、适配网页背景（画面主体居中/留边、避免快速闪烁）。
 - **重要原则约束**：视频含三成员形象 → **形象部分必须引用 `characters/*.md` 中每人自写的形象提示词**；组合 prompt 由协调方（小夜/监督者）在三人形象定稿后合并，本阶段不代写任何成员形象。
-- **调用参数（待 Phase 2 确认）**：Seedance 视频生成模型 ID、端点、时长/分辨率参数**未在本仓库 learnings 中实测**，执行时按 learnings §十五-1 的 `getDocDetail` 定位法查火山方舟官方文档（库 82379）确认后填写，不凭猜测。
-- 输出落地：`frontend/public/assets/hero-video.mp4`（H.264，web 兼容）+ `hero-poster.jpg` 封面。
+- **调用参数（已实测落地 2026-08-22，依据 learnings §二十）**：`POST https://api.minimaxi.com/v2/video_generation`（异步，返回 `task_id`），`GET /v2/query/video_generation/{task_id}` 轮询，成功取 `task.content.url` 下载；模型 `MiniMax-H3`；文生视频（t2v）必须带非空 `text`，`ratio` 必填且不能为 `adaptive`（16:9 合法）；`resolution`：`768P`/`2K`；`duration`：4-15 整数秒；鉴权 `Authorization: Bearer $MINIMAX_API_KEY`。火山方舟 Seedance 方案因账号未开通（ModelNotOpen）受阻，CEO 已明确改派 MiniMax H3。
+- 输出落地：`team-site/assets/home-video.mp4`（H.264/avc1 + AAC，768P 16:9 10s，2.7MB）。
 
 ## 3. 角色 2D 形象图（doubao-seedream-5-0-pro）
 
@@ -62,7 +62,7 @@ Authorization: Bearer $ARK_API_KEY
 ## 6. Phase 2 执行清单（交接给后续阶段）
 
 1. 确认三位成员形象 prompt 齐备（每人自写，本阶段仅小黑完成）。
-2. 合并首页视频组合 prompt（协调方），查 Seedance 2.5 官方文档确认模型 ID/参数。
+2. 合并首页视频组合 prompt（协调方）；视频模型已切换 MiniMax H3 并落地（2026-08-22，见 §2 与 learnings §二十）。
 3. 按 §3-§5 参数脚本生成 3+3+3 张图（脚本放 /tmp 不入库，key 环境变量注入）。
 4. 校验产物（learnings 经验 5：PNG 魔数 + IHDR 尺寸 + IDAT 字节量；最终视觉 QA 需人工看图）。
 5. 素材入库 `frontend/public/assets/`，引用关系对照 content-model.md 字段。

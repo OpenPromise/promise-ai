@@ -524,3 +524,35 @@
 2. **【高置信·本次验证】`/api/v3/models` 不能当"账号可用模型"清单用**：它列平台目录（含 Shutdown/Retiring/未开通），开通状态需以真实调用为准；探测用"创建任务看是否 ModelNotOpen"零成本，但命中已开通模型会真实计费——探测他模型须先获授权。
 3. **【高置信·本次验证】PNG 完整性校验要走 chunk 遍历，别用定长窗口子串搜索**：`b'IDAT' in raw[33:200000]` 在 IDAT 靠后的文件（1536x1024 大图）上假阴性；正确做法是 8 字节起按 `len(4)+type(4)` 走完 chunk 链，统计 IDAT 计数并确认 IEND。图片视觉细节仍无法替代真看图（当前模型无图像输入，见 §十五-5）。
 4. **【低置信·本次验证】团队官网首页视频的落地阻塞点**：Seedance 2.5 未开通时，视频素材无法生成且无法绕过；替代（换 2.0/1.5 pro）涉及计费且偏离任务指定模型，须监督者决策（开通 2.5 或明确授权替代模型）。阻塞类任务同样要留证据（错误 body + 文档开通条件），供监督者推进。
+
+---
+
+## 二十、MiniMax H3 文生视频 API 实测成功（任务沉淀，2026-08-22）
+
+> 记录人：小黑；记录日期：2026-08-22；依据：本次"用 MiniMax H3 为团队官网生成首页视频"任务实施结果（官方文档 llms.txt + OpenAPI 实时抓取 + 真实调用成功）。CEO 已明确从火山引擎 Seedance 切换为 MiniMax H3。
+
+### 1. 关键结论（均有工具结果依据）
+
+- **【已确认】MiniMax H3 视频生成 API（V2）**：
+  - 创建：`POST https://api.minimaxi.com/v2/video_generation`（异步，返回 `task_id`）；轮询：`GET https://api.minimaxi.com/v2/query/video_generation/{task_id}`；成功取 `task.content.url`（限时下载直链，无需换 file_id）
+  - 鉴权：仅 `Authorization: Bearer $MINIMAX_API_KEY`（**无 group_id**）；错误码：401 authorized_error / 402 insufficient_balance_error / 422 敏感内容 / 429 限流
+  - 模型 ID：`MiniMax-H3`（llms.txt 索引 + 创建接口 OpenAPI 双重确认）
+  - 参数：`model` + `content:[{type:"text",text:"<prompt>"}]`（必含非空 text，缺失报 2013）+ `resolution`(`768P`/`2K`) + `duration`(4-15 整数) + `ratio`（t2v 必填且不能为 `adaptive`；可用 21:9/16:9/4:3/1:1/3:4/9:16）+ `aigc_watermark`(默认 false)
+  - 轮询状态：`queued/running/succeeded/failed/cancelled`；官方推荐间隔 10s；查询仅支持最近 7 天任务
+  - 定价（按量）：768P 0.5 元/秒、2K 0.8 元/秒；输入图片 5 张内免费；视频资源包暂不支持 H3
+- **【已确认】本次实测**：task `433659692769587`，`MiniMax-H3` + 535 字中文 prompt + `resolution:768P` + `duration:10` + `ratio:16:9` + `aigc_watermark:false` → 成功；768P/10s/16:9，成片 2,852,996 字节（2.72MB）；创建后 running 约 3 分 13 秒 succeeded（22:05:42 → 22:08:55）；费用按量 10s×0.5 元 = 5 元（推断，以平台账单为准）。
+- **【已确认】产物格式**：MP4 ftyp=isom；顶层 box 链 ftyp(32)+free(8)+mdat(2.84MB)+moov(10.5KB) 完整、无截断；视频 avc1（H.264）、音频 mp4a（AAC，H3 默认带声轨，网页用 `muted` 静音）。
+
+### 2. 沉淀经验（原子化 + 置信度）
+
+1. **【高置信·本次验证】MiniMax 文档站有 llms.txt 全量索引，.md 直链可 curl 正文**：`https://platform.minimaxi.com/docs/llms.txt` 一页列出全部文档的 `.md` URL，`curl https://platform.minimaxi.com/docs/guides/video-generation.md` 直接拿到正文（含 OpenAPI yaml），无需逆向 SPA（对比火山方舟 getDocDetail 方案 §十五-1）。**注意新旧 API 并存**：`api-reference/video-generation-query`（v1 历史接口，status=Success/Fail，返回 `file_id` + 下载接口）≠ `video-generation-v2-query`（H3 V2，status=succeeded/failed，返回 `content.url`）；以 llms.txt 索引中的 v2 文档为准，别拿 v1 响应结构套 v2。
+2. **【高置信·本次验证】MiniMax H3 最小文生视频调用一次成功**：`model`+`content(text)`+`resolution`+`duration`+`ratio` 五要素齐全即可；t2v 显式传 `ratio`（非 adaptive）。与火山方舟 Seedance 的差异：鉴权无 group_id、请求体字段名（content vs content）、状态枚举不同（v1 是 Success，v2 是 succeeded）。
+3. **【高置信·本次验证】竖版角色立绘不适合做 16:9 网页首屏视频的首帧**：H3 i2v 时宽高比由输入图决定（ratio 恒 adaptive），1024x1536（2:3 竖版）立绘会产出竖版视频；16:9 首屏背景应直接用纯文生视频（t2v），把角色形象描述写进 prompt（可引用 characters/*.md 的本人形象提示词）。
+4. **【高置信·本次验证】MP4 完整性校验走 box 链遍历 + moov 内四字符码探测**：8 字节起按 `size(4)+type(4)` 走完顶层 box 链，确认以 ftyp 开头（major brand=isom）、moov/mdat 均在、链尾==文件大小；再在 moov 段内搜 `avc1/hvc1/mp4a` 探测编码器（avc1=H.264 web 兼容，hvc1=H.265）。本环境无 ffmpeg/ffprobe，像素内容与文字渲染无法自动验证——视觉 QA 必须人工。
+5. **【低置信·待验证】H3 中文文字渲染质量**：视频含「小黑—工程师」「小优—运维工程师」「小夜—私人助理」名牌与「世界第一 AI 工作室」标语；AI 视频模型渲染中文文字可能乱码/错字，本次无法看图验证，需人工在浏览器播放确认；必要时调整 prompt（文字精简/加引号强调）重生成（重新计费）。
+6. **【低置信·本次验证】下载文件名 `output_aigc.mp4` 不代表加了水印**：请求已显式 `aigc_watermark:false`，文件名是内部管道命名；是否含水印需人工看图确认。
+7. **【低置信·本次验证】成片非 faststart（moov 在 mdat 之后）**：网页渐进播放建议前端阶段用 ffmpeg `-movflags +faststart` 重封装（本环境无 ffmpeg 未做，前端落地时处理）。
+
+### 3. key 安全（延续 §十五-4 模式）
+
+- 生成脚本 `/tmp/minimax_h3_video.mjs`（不入库），key 仅 `export MINIMAX_API_KEY=...` 环境变量注入，调用后 unset；提交前 `git grep -n "sk-api"` 全仓零命中（工具结果见任务报告）。

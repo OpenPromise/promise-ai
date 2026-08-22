@@ -6,7 +6,7 @@
 ## 阶段边界
 
 - **Phase 1（当前）**：参考网站分析 + 技术方案 + 设计规范 + 素材规划 + 小黑自画像（**只做分析与文档，不写代码、不生成素材、不碰 API key**）。
-- Phase 2：素材生成（Seedance 视频 + Seedream 形象图/场景图，见 `docs/assets-plan.md`）+ 前端实现。
+- Phase 2：素材生成（MiniMax H3 视频 + Seedream 形象图/场景图，见 `docs/assets-plan.md`）+ 前端实现。
 - Phase 3：SpringBoot 内容 API。
 - Phase 4：nginx 部署。
 
@@ -26,4 +26,4 @@
 1. **角色形象提示词每人自写自己的**：小黑 ✅（本阶段完成）；小优、小夜由本人自写（后续阶段，任何人不得代写）。
 2. **导航栏**：首页 / 情报速递 / 角色介绍 / 世界全景 / 都市映像（**无登录、无充值中心、无下载**）。
 3. **设计基调**：深色（#1d1d1d 系）+ 青色主强调（#50e5fb）+ 首屏背景视频，忠实参考站风格；标题切图改 CSS 文字、整页 Swiper 改路由 + 全屏区块（可维护性优先，偏离点见 architecture.md §6）。
-4. **素材**：首页视频 = Doubao-Seedance 2.5；形象图/场景图 = doubao-seedream-5-0-pro-260628（参数依据 learnings §十五 实测经验）。
+4. **素材**：首页视频 = MiniMax H3（模型 `MiniMax-H3`，参数依据 learnings §二十 实测经验）；形象图/场景图 = doubao-seedream-5-0-pro-260628（参数依据 learnings §十五 实测经验）。
