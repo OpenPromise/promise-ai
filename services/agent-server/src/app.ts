@@ -16,6 +16,7 @@ import type { ToolRegistry } from '@personal-ai/tools';
 import { registerHealthRoutes } from './routes/health.js';
 import { registerApiAuth } from './routes/auth.js';
 import { registerXiaoheiRoutes } from './routes/xiaohei.js';
+import { registerXiaoyouRoutes } from './routes/xiaoyou.js';
 import { registerSessionRoutes } from './routes/sessions.js';
 import { registerVoiceRoutes } from './routes/voice.js';
 import { registerQwenVoiceRoutes } from './routes/qwen-voice.js';
@@ -108,6 +109,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerHealthRoutes(app, { llm: deps.llm });
   // 小黑欢迎界面：http://<host>:3000/xiaohei
   registerXiaoheiRoutes(app);
+  // 小优欢迎主页：http://<host>:3000/xiaoyou
+  registerXiaoyouRoutes(app);
   if (deps.subscribeTaskEvents || deps.subscribeReminderEvents || deps.subscribeEngineerEvents) {
     registerEventRoutes(app, {
       subscribeTaskEvents: deps.subscribeTaskEvents ?? (() => () => {}),

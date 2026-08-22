@@ -17,6 +17,7 @@ const EXEMPT_PATHS = new Set([
   '/health',
   // 浏览器直接打开的静态欢迎页，无数据无副作用。
   '/xiaohei',
+  '/xiaoyou',
 ]);
 
 /** hooks 有自己的 HOOK_SECRET + 恒定时间比较，外部系统无法带 API token。 */

@@ -394,3 +394,29 @@
 
 - 仓库与 README：https://github.com/affaan-m/ECC
 - 关键实证文件：`README.md`（Why Choose ECC / What's Inside / Key Concepts）、`agents/code-reviewer.md`、`agents/planner.md`、`skills/continuous-learning/SKILL.md`（v1 归档）、`skills/continuous-learning-v2/SKILL.md`、`skills/context-budget/SKILL.md`、`skills/security-scan/SKILL.md`、`hooks/hooks.json`、`research/ecc2-codebase-analysis.md`
+
+---
+
+## 十四、团队建设：招了小优（运维工程师子代理 ops.delegate）
+
+> 记录人：小黑；记录日期：2026-08-22；依据：本次"招新"任务实施结果。
+
+### 1. 团队现状
+
+- **小夜（助理）**：服务器老大、监督者，负责派单与汇报闭环。
+- **小黑（engineer.delegate）**：工程师子代理，专业严肃，负责开发/改代码（异步派单，`services/agent-server/src/services/engineer-tools.ts` + `engineer-task-runner.ts`）。
+- **小优（ops.delegate）**：新招的运维工程师子代理（DevOps/SRE），女性，调皮可爱型（"皮归皮，活要漂亮"），负责管理整个服务器：监控、部署、巡检、故障处理、安全、自动化；权限为全权限（danger-full-access），与小夜同级，但小夜是她的上级。
+
+### 2. 实现要点（复用与差异）
+
+- **复用 dsh 底盘**：小优同样由 `runDshHeadless` 驱动（`coding-tool.ts` 导出），`XIAO_YOU_PROMPT` 注入运维人格与工作准则，`buildXiaoYouTask` 包装任务单——与小黑同构，成本极低。
+- **关键差异 1：权限模式**。小黑走 `workspace-write`（工作区沙箱）；小优管整台服务器，走 `danger-full-access`（全权限）。`RunDshOptions.permissionMode` 类型就是 `'workspace-write' | 'danger-full-access'`，直接用字面量即可。
+- **关键差异 2：同步 vs 异步**。engineer.delegate 用 `EngineerTaskRunner` 异步派单（立即返回 taskId，后台跑、事件推送）；ops.delegate 直接同步 `await runDshHeadless`（如 `createCodingTool` 模式），调用后阻塞到小优跑完返回结构化报告，`timeoutMs` 放宽到 1 小时。理由：运维任务通常是单发指令等结果（"巡检一下""看下磁盘"），同步语义简单直接；若后续需要并发/后台跑长任务，可仿 EngineerTaskRunner 演化。
+- **路由与主页**：`/xiaoyou` 静态欢迎页（`routes/xiaoyou.ts`，ESM 用 `import.meta.url` 向上 4 级定位 `/app/xiaoyou`），与 `/xiaohei` 同一套懒加载+缓存写法；**静态欢迎页必须加进 `auth.ts` 的 `EXEMPT_PATHS` 免 token 名单**（精确匹配），否则浏览器直接打开会 401——这是本次踩到的一个坑（先跑测试 500/401 才意识到）。
+
+### 3. 沉淀经验（高置信：本次已验证）
+
+1. **新子代理落地五件套**：人格 Prompt（`buildXxxTask` 包装）→ Tool 注册（`index.ts`）→ 专属文件夹 + 欢迎主页 → 路由 + auth 免 token 名单 → 测试 + CHANGELOG + 记忆沉淀。按此清单可快速复制第三个子代理。
+2. **runDshHeadless 两种用法**：同步（createCodingTool 模式，阻塞等结果）与异步（EngineerTaskRunner 模式，后台 + 事件）。选型看任务形态：单发指令等结果用同步，长任务/不阻塞对话用异步。
+3. **测试不触达 dsh**：子代理工具测试只覆盖"缺参/空参/目录不存在"等前置校验与静态属性（name/permissionLevel/schema），有效任务执行不测（会真实 spawn dsh）——与 engineer-tools.test.ts 异步注入 runner 不同，ops 是同步工具无法注入，靠前置校验兜底。
+4. **新静态路由的隐藏坑**：加路由只是第一步，`auth.ts` 的免 token 名单漏加会让页面在 token 模式下 401——测试用 `app.inject` 走 token 配置用例才能暴露。

@@ -36,6 +36,7 @@ import {
   createEngineerTool,
 } from './services/engineer-tools.js';
 import { EngineerTaskRunner } from './services/engineer-task-runner.js';
+import { createOpsTool } from './services/ops-tools.js';
 import { createSelfTools } from './services/self-tools.js';
 import { recoverInterruptedSessions } from './services/restart-recovery.js';
 import { createWeixinTools } from './services/weixin-tools.js';
@@ -345,6 +346,10 @@ const engineerTaskRunner = new EngineerTaskRunner({
 const interruptedEngineerTasks = await engineerTaskRunner.loadPersisted();
 toolRegistry.register(createEngineerTool(engineerTaskRunner));
 toolRegistry.register(createEngineerStatusTool(engineerTaskRunner));
+// ops.delegate：把服务器运维任务派给"小优"（专属运维工程师子代理）同步执行——
+// 全权限（danger-full-access）驱动 dsh 管理整台服务器（监控/部署/巡检/故障/安全/自动化），
+// 权限与小夜同级；小优是小夜手下的运维专员。
+toolRegistry.register(createOpsTool());
 // server.shell：容器内终端（L3）——"云服务器即她的世界"的自主操作入口。
 toolRegistry.register(createServerShellTool());
 // system.status：服务器健康巡检（L0 只读）——定时任务自主监控用。

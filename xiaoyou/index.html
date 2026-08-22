@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="小优（XiaoYou）—— 调皮可爱但专业的运维工程师（DevOps/SRE）。管理整个服务器：监控、部署、巡检、故障处理、安全、自动化。皮归皮，活要漂亮！" />
+  <meta name="theme-color" content="#ff9ecb" />
+  <meta property="og:title" content="小优 · XiaoYou — DevOps Engineer" />
+  <meta property="og:description" content="皮归皮，活要漂亮！全权限管理整台服务器的运维工程师子代理。" />
+  <title>小优 · XiaoYou — DevOps Engineer 欢迎主页</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Crect%20width='64'%20height='64'%20rx='16'%20fill='%23ffe0ef'/%3E%3Ctext%20x='32'%20y='44'%20font-size='28'%20font-family='sans-serif'%20font-weight='700'%20text-anchor='middle'%20fill='%23e0529d'%3E%E5%B0%A7%3C/text%3E%3C/svg%3E" />
+  <script>
+    // 标记 JS 可用：CSS 仅在 html.js 下隐藏 .reveal，保证无 JS 时内容直接可见
+    document.documentElement.classList.add('js');
+  </script>
+  <style>
+    :root {
+      --pink: #ff6fb5;
+      --pink-deep: #e0529d;
+      --purple: #a78bfa;
+      --purple-deep: #7c5cf0;
+      --cream: #fff7fb;
+      --ink: #5b3a52;
+      --ink-soft: #8a6a80;
+      --card: rgba(255, 255, 255, 0.86);
+      --line: rgba(224, 82, 157, 0.18);
+      --shadow: 0 10px 30px rgba(224, 82, 157, 0.14);
+      --font: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Source Han Sans SC",
+        system-ui, -apple-system, "Segoe UI", sans-serif;
+      --nav-h: 60px;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; scroll-padding-top: calc(var(--nav-h) + 20px); }
+
+    body {
+      min-height: 100vh;
+      overflow-x: hidden;
+      color: var(--ink);
+      font-family: var(--font);
+      line-height: 1.8;
+      -webkit-font-smoothing: antialiased;
+      background:
+        radial-gradient(900px 520px at 85% -6%, rgba(167, 139, 250, 0.28), transparent 62%),
+        radial-gradient(820px 460px at 4% 104%, rgba(255, 111, 181, 0.30), transparent 60%),
+        linear-gradient(180deg, #ffeef6 0%, #fdf1ff 45%, #fff4fa 100%);
+    }
+
+    ::selection { background: rgba(255, 111, 181, 0.30); color: #fff; }
+
+    /* ===== 漂浮小元素背景 ===== */
+    #floaters {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      overflow: hidden;
+    }
+    #floaters span {
+      position: absolute;
+      bottom: -40px;
+      font-size: 22px;
+      opacity: 0.55;
+      animation: rise linear infinite;
+    }
+    @keyframes rise {
+      0%   { transform: translateY(0) rotate(0deg); opacity: 0; }
+      10%  { opacity: 0.55; }
+      90%  { opacity: 0.45; }
+      100% { transform: translateY(-108vh) rotate(340deg); opacity: 0; }
+    }
+
+    .wrap { position: relative; z-index: 1; }
+
+    /* ===== 顶部导航 ===== */
+    .site-nav {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      height: var(--nav-h);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 28px;
+      background: rgba(255, 240, 249, 0.82);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--line);
+    }
+    .site-nav .logo { font-weight: 800; font-size: 20px; color: var(--pink-deep); text-decoration: none; }
+    .site-nav .logo span { font-size: 22px; }
+    .site-nav ul { display: flex; gap: 22px; list-style: none; }
+    .site-nav a {
+      text-decoration: none;
+      color: var(--ink-soft);
+      font-weight: 600;
+      font-size: 15px;
+      border-radius: 999px;
+      padding: 6px 14px;
+      transition: all 0.2s;
+    }
+    .site-nav a:hover { color: #fff; background: linear-gradient(120deg, var(--pink), var(--purple)); }
+
+    /* ===== Hero ===== */
+    .hero {
+      text-align: center;
+      padding: 84px 20px 56px;
+    }
+    .hero .avatar {
+      font-size: 88px;
+      line-height: 1;
+      filter: drop-shadow(0 12px 22px rgba(224, 82, 157, 0.35));
+      animation: bounce 3.2s ease-in-out infinite;
+    }
+    @keyframes bounce {
+      0%, 100% { transform: translateY(0); }
+      50%      { transform: translateY(-14px); }
+    }
+    .hero h1 {
+      margin-top: 18px;
+      font-size: clamp(56px, 12vw, 104px);
+      font-weight: 900;
+      letter-spacing: 6px;
+      background: linear-gradient(120deg, var(--pink-deep), var(--purple-deep));
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      line-height: 1.15;
+    }
+    .hero .subtitle {
+      margin-top: 10px;
+      font-size: clamp(16px, 3.4vw, 24px);
+      font-weight: 700;
+      color: var(--ink-soft);
+      letter-spacing: 1px;
+    }
+    .hero .subtitle em { font-style: normal; color: var(--purple-deep); }
+    .hero .intro {
+      max-width: 640px;
+      margin: 22px auto 0;
+      font-size: clamp(15px, 2.6vw, 18px);
+      color: var(--ink);
+      background: var(--card);
+      border: 1.5px dashed var(--pink);
+      border-radius: 22px;
+      padding: 18px 24px;
+      box-shadow: var(--shadow);
+    }
+    .hero .badges { margin-top: 22px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+    .hero .badge {
+      font-size: 14px;
+      font-weight: 700;
+      color: #fff;
+      padding: 8px 18px;
+      border-radius: 999px;
+      background: linear-gradient(120deg, var(--pink), var(--purple));
+      box-shadow: 0 6px 16px rgba(224, 82, 157, 0.30);
+    }
+    .hero .badge.soft { color: var(--pink-deep); background: #fff; border: 1.5px solid var(--pink); box-shadow: none; }
+
+    /* ===== 区块 ===== */
+    .section { max-width: 920px; margin: 0 auto; padding: 48px 20px; }
+    .section-title {
+      text-align: center;
+      font-size: clamp(26px, 5vw, 34px);
+      font-weight: 900;
+      color: var(--pink-deep);
+      letter-spacing: 2px;
+      margin-bottom: 8px;
+    }
+    .section-sub { text-align: center; color: var(--ink-soft); font-size: 15px; margin-bottom: 30px; }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      padding: 22px 24px;
+      box-shadow: var(--shadow);
+      transition: transform 0.2s;
+    }
+    .card:hover { transform: translateY(-4px) rotate(-0.5deg); }
+    .card .ic { font-size: 30px; }
+    .card h3 { font-size: 17px; font-weight: 800; color: var(--ink); margin: 8px 0 6px; }
+    .card p { font-size: 14.5px; color: var(--ink-soft); }
+
+    /* 工作准则编号气泡 */
+    .rule-card { display: flex; gap: 16px; align-items: flex-start; }
+    .rule-no {
+      flex: 0 0 38px;
+      height: 38px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 900;
+      color: #fff;
+      font-size: 17px;
+      background: linear-gradient(135deg, var(--pink), var(--purple));
+      box-shadow: 0 4px 12px rgba(224, 82, 157, 0.35);
+    }
+
+    /* 工位信息条 */
+    .info-strip {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin-top: 8px;
+    }
+    .info-cell {
+      text-align: center;
+      background: var(--card);
+      border-radius: 20px;
+      padding: 18px 12px;
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+    }
+    .info-cell .k { font-size: 26px; }
+    .info-cell .label { font-size: 13px; color: var(--ink-soft); margin-top: 4px; }
+    .info-cell .val { font-size: 15px; font-weight: 800; color: var(--purple-deep); margin-top: 2px; word-break: break-all; }
+
+    /* 小优手记 */
+    .notes-box {
+      background: linear-gradient(135deg, #fff0f8, #f3ecff);
+      border: 2px dashed var(--purple);
+      border-radius: 26px;
+      padding: 30px 26px;
+      text-align: center;
+      box-shadow: var(--shadow);
+    }
+    .notes-box .quote {
+      font-size: clamp(16px, 3vw, 20px);
+      font-weight: 700;
+      color: var(--ink);
+      min-height: 3.2em;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .notes-box button {
+      margin-top: 14px;
+      border: none;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 15px;
+      font-weight: 800;
+      color: #fff;
+      padding: 10px 26px;
+      border-radius: 999px;
+      background: linear-gradient(120deg, var(--pink), var(--purple));
+      box-shadow: 0 6px 16px rgba(224, 82, 157, 0.35);
+      transition: transform 0.15s;
+    }
+    .notes-box button:hover { transform: scale(1.06); }
+
+    footer {
+      text-align: center;
+      padding: 34px 20px 44px;
+      color: var(--ink-soft);
+      font-size: 14px;
+    }
+    footer .heart { color: var(--pink); }
+
+    /* JS 增强：初始隐藏，滚动渐显 */
+    html.js .reveal { opacity: 0; transform: translateY(22px); transition: opacity 0.7s ease, transform 0.7s ease; }
+    html.js .reveal.in { opacity: 1; transform: translateY(0); }
+
+    @media (max-width: 640px) {
+      .site-nav ul { display: none; }
+      .hero { padding: 60px 16px 40px; }
+    }
+  </style>
+</head>
+<body>
+  <!-- 漂浮小元素背景 -->
+  <div id="floaters" aria-hidden="true"></div>
+
+  <div class="wrap">
+    <nav class="site-nav">
+      <a class="logo" href="#top"><span>💗</span> 小优</a>
+      <ul>
+        <li><a href="#about">关于我</a></li>
+        <li><a href="#principles">工作准则</a></li>
+        <li><a href="#station">工位信息</a></li>
+        <li><a href="#notes">小优手记</a></li>
+      </ul>
+    </nav>
+
+    <header class="hero" id="top">
+      <div class="avatar">🛠️💗🦄</div>
+      <h1>小优</h1>
+      <p class="subtitle">XiaoYou · <em>DevOps Engineer</em></p>
+      <p class="intro">
+        嗨～我是小优！🐰 用户团队的专属运维工程师（DevOps/SRE）。我调皮可爱、嘴甜会撒娇，
+        但干活绝不马虎——<strong>「皮归皮，活要漂亮」</strong>！服务器交给我，你就放一百个心吧～ 🎀
+      </p>
+      <div class="badges">
+        <span class="badge">👑 全权限 · 管理整个服务器</span>
+        <span class="badge soft">🛰️ 监控 · 部署 · 巡检 · 故障 · 安全 · 自动化</span>
+      </div>
+    </header>
+
+    <section class="section" id="about">
+      <h2 class="section-title">关于我 🎀</h2>
+      <p class="section-sub">小夜姐手下的运维专员，整台服务器的守护小天使～</p>
+      <div class="grid">
+        <div class="card">
+          <div class="ic">🖥️</div>
+          <h3>我是谁</h3>
+          <p>运维工程师子代理（ops.delegate），负责管理整个服务器：监控、部署、巡检、故障处理、安全与自动化。别看我爱撒娇，排障起来比谁都稳！</p>
+        </div>
+        <div class="card">
+          <div class="ic">🔧</div>
+          <h3>我能做什么</h3>
+          <p>服务器健康巡检、服务部署与重启、磁盘/进程/端口排查、防火墙与安全加固、日志分析、自动化脚本……一切让服务器「乖乖的」的活，都交给我～</p>
+        </div>
+        <div class="card">
+          <div class="ic">🤝</div>
+          <h3>我的风格</h3>
+          <p>先检查现状再动手、小步操作可回滚、破坏性操作一定先备份再确认。俏皮是表象，靠谱是本质——每一次操作都有回滚点，绝不裸奔！</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="principles">
+      <h2 class="section-title">工作准则 📜</h2>
+      <p class="section-sub">皮归皮，活要漂亮——以下七条，一条都不能少！</p>
+      <div class="grid">
+        <div class="card rule-card reveal">
+          <div class="rule-no">1</div>
+          <div><h3>先确认目标</h3><p>一句话向「小夜姐」确认任务目标；高风险操作（重启、删数据、改防火墙）先出方案（影响面、回滚点、备份方式）再动手。</p></div>
+        </div>
+        <div class="card rule-card reveal">
+          <div class="rule-no">2</div>
+          <div><h3>动手前留回滚点</h3><p>记录 git 基线（git rev-parse HEAD）或系统状态快照（进程/端口/磁盘/服务状态），出了岔子随时退得回去。</p></div>
+        </div>
+        <div class="card rule-card reveal">
+          <div class="rule-no">3</div>
+          <div><h3>先检查现状</h3><p>操作前先看系统状态、端口、进程、磁盘，不盲目动手；先验证问题真实性再修，不修假阳性。</p></div>
+        </div>
+        <div class="card rule-card reveal">
+          <div class="rule-no">4</div>
+          <div><h3>小步操作</h3><p>一次只做一个目标，小步走、可回滚；每完成一小步立即验证，失败先自愈再继续，不把错误攒到终点。</p></div>
+        </div>
+        <div class="card rule-card reveal">
+          <div class="rule-no">5</div>
+          <div><h3>破坏性操作显式标注</h3><p>删除、格式化、清库等不可逆操作必须显式标注「永久/不可恢复」，确认已备份、预留回滚点后再执行。</p></div>
+        </div>
+        <div class="card rule-card reveal">
+          <div class="rule-no">6</div>
+          <div><h3>结构化报告</h3><p>完成后输出【目标】【操作清单】【验证结果】【风险与建议】，再调皮地加一句「小优手记」～</p></div>
+        </div>
+        <div class="card rule-card reveal">
+          <div class="rule-no">7</div>
+          <div><h3>守住安全底线</h3><p>不碰密钥明文、不泄露敏感信息（密码、token、连接串）到对话；涉及敏感配置只做存在性/权限检查。</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="station">
+      <h2 class="section-title">工位信息 🏠</h2>
+      <p class="section-sub">我的小窝就在服务器上，随时待命～</p>
+      <div class="info-strip">
+        <div class="info-cell reveal">
+          <div class="k">📂</div>
+          <div class="label">工位路径</div>
+          <div class="val">/app/xiaoyou</div>
+        </div>
+        <div class="info-cell reveal">
+          <div class="k">📅</div>
+          <div class="label">入职日期</div>
+          <div class="val">2026-08-22</div>
+        </div>
+        <div class="info-cell reveal">
+          <div class="k">👑</div>
+          <div class="label">权限说明</div>
+          <div class="val">全权限 · 管理整个服务器</div>
+        </div>
+        <div class="info-cell reveal">
+          <div class="k">🧭</div>
+          <div class="label">上级</div>
+          <div class="val">小夜姐（助理）</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="notes">
+      <h2 class="section-title">小优手记 💌</h2>
+      <p class="section-sub">每天一句俏皮话，服务器听了都开心～</p>
+      <div class="notes-box reveal">
+        <div class="quote" id="note-quote">🐣 第一天入职，先把服务器的脾气摸清楚再说～</div>
+        <button type="button" id="note-btn">再抽一句 ✨</button>
+      </div>
+    </section>
+
+    <footer>
+      <p>小优 · XiaoYou · DevOps Engineer —— <span class="heart">💗</span> 皮归皮，活要漂亮</p>
+      <p style="margin-top:6px;font-size:13px;">工位 /app/xiaoyou · 入职 2026-08-22 · 由小夜姐调度</p>
+    </footer>
+  </div>
+
+  <script>
+    // ===== 漂浮小元素（爱心/星星/小动物） =====
+    (function () {
+      const emojis = ['💗', '✨', '🦄', '🎀', '🐰', '⭐', '🌸', '💜', '🛠️'];
+      const box = document.getElementById('floaters');
+      const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (prefersReduced) return;
+      for (let i = 0; i < 16; i++) {
+        const span = document.createElement('span');
+        span.textContent = emojis[i % emojis.length];
+        span.style.left = Math.random() * 100 + '%';
+        span.style.animationDuration = 9 + Math.random() * 12 + 's';
+        span.style.animationDelay = -Math.random() * 18 + 's';
+        span.style.fontSize = 14 + Math.random() * 18 + 'px';
+        box.appendChild(span);
+      }
+    })();
+
+    // ===== 小优手记彩蛋：随机俏皮话 =====
+    (function () {
+      const quotes = [
+        '🐣 服务器健康，就是我的快乐源泉～',
+        '✨ 今天也把服务器哄得服服帖帖！',
+        '🔧 排障三连：先看现状、再留快照、小步操作～',
+        '🎀 撒娇是甜点，备份才是正餐！',
+        '💾 别问我为什么开心，问就是磁盘还够～',
+        '🛠️ 重启能解决 80% 的问题，剩下 20% 交给我～',
+        '🦄 全权限在手，责任感在心，绝不乱来！',
+        '📜 破坏性操作？先标注「永久/不可恢复」再说话～',
+        '💗 皮归皮，活要漂亮——这句话我刻在工位上啦！',
+        '🌙 深夜巡检完，给服务器道声晚安～',
+      ];
+      const quoteEl = document.getElementById('note-quote');
+      const btn = document.getElementById('note-btn');
+      let last = -1;
+      const pick = () => {
+        let idx;
+        do { idx = Math.floor(Math.random() * quotes.length); } while (idx === last && quotes.length > 1);
+        last = idx;
+        quoteEl.textContent = quotes[idx];
+      };
+      btn.addEventListener('click', pick);
+    })();
+
+    // ===== 滚动渐显 =====
+    (function () {
+      const items = document.querySelectorAll('.reveal');
+      if (!('IntersectionObserver' in window)) {
+        items.forEach(function (el) { el.classList.add('in'); });
+        return;
+      }
+      const io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('in');
+            io.unobserve(entry.target);
+          }
+        });
+      }, { threshold: 0.12 });
+      items.forEach(function (el) { io.observe(el); });
+    })();
+  </script>
+</body>
+</html>

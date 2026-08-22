@@ -391,6 +391,14 @@ describe('agent-server', () => {
     expect(response.body).toContain('小黑工程师');
   });
 
+  it('serves the xiaoyou welcome page', async () => {
+    const app = build();
+    const response = await app.inject({ method: 'GET', url: '/xiaoyou' });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/html');
+    expect(response.body).toContain('小优');
+  });
+
   it('creates a session with the persona system prompt', async () => {
     const app = build();
     const response = await app.inject({
@@ -2123,7 +2131,7 @@ describe('API 共享 token 鉴权（N-P0-1）', () => {
     expect(wrong.statusCode).toBe(401);
   });
 
-  it('/health、/xiaohei、/api/hooks/:name 保持免 token（探活、静态页、hooks 自带 HOOK_SECRET）', async () => {
+  it('/health、/xiaohei、/xiaoyou、/api/hooks/:name 保持免 token（探活、静态页、hooks 自带 HOOK_SECRET）', async () => {
     const hooks = {
       async handle() {},
     } as unknown as HookService;
@@ -2142,6 +2150,7 @@ describe('API 共享 token 鉴权（N-P0-1）', () => {
 
     expect((await app.inject({ method: 'GET', url: '/health' })).statusCode).toBe(200);
     expect((await app.inject({ method: 'GET', url: '/xiaohei' })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/xiaoyou' })).statusCode).toBe(200);
     // hooks 端点不被 API token 拦截，但仍由 HOOK_SECRET 把关
     const noSecret = await app.inject({ method: 'POST', url: '/api/hooks/github', payload: {} });
     expect(noSecret.statusCode).toBe(401);
