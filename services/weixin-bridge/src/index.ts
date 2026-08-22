@@ -107,6 +107,7 @@ async function startRelay(): Promise<void> {
       persist: () => stateStore.save(),
       vision: { apiKey: process.env.DASHSCOPE_API_KEY, model: visionModel },
       filesDir,
+      apiToken: agentApiToken,
       log: (message) => {
         log(message);
         lastEventAt = Date.now();
