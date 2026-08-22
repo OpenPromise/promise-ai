@@ -1,0 +1,17 @@
+{
+  "name": "team-site-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "世界第一 AI 工作室官网内容 API（Node.js + Express 5，MVP 内存静态数据）",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}
