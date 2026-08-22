@@ -9,3 +9,6 @@ coverage/
 .DS_Store
 weixin-files/
 data/
+
+# 部署运行时产物（nginx 解包二进制/apt 缓存/日志），不入库
+.deploy/
