@@ -18,6 +18,7 @@ import {
 } from './files.js';
 import { FileJobManager } from './jobs.js';
 import { checkBridgeAuth } from './auth.js';
+import { DEFAULT_VISION_ENDPOINT, DEFAULT_VISION_MODEL } from './vision.js';
 
 try {
   const { config } = await import('dotenv');
@@ -32,7 +33,8 @@ const stateDir = process.env.WEIXIN_STATE_DIR ?? path.join(os.homedir(), '.weixi
 const channelVersion = process.env.WEIXIN_CHANNEL_VERSION ?? '0.1.0';
 const botAgent = process.env.WEIXIN_BOT_AGENT ?? 'PromiseAi/0.1.0';
 const baseUrl = process.env.WEIXIN_BASE_URL ?? undefined;
-const visionModel = process.env.WEIXIN_VISION_MODEL ?? 'qwen3.8-max';
+const visionModel = process.env.WEIXIN_VISION_MODEL ?? DEFAULT_VISION_MODEL;
+const visionEndpoint = process.env.WEIXIN_VISION_ENDPOINT ?? DEFAULT_VISION_ENDPOINT;
 const filesDir = process.env.WEIXIN_FILES_DIR ?? path.join(stateDir, 'files');
 /** 桥自身端点的共享 token（未配置时受保护端点全拒）。 */
 const bridgeToken = process.env.BRIDGE_TOKEN?.trim() || undefined;
@@ -105,7 +107,11 @@ async function startRelay(): Promise<void> {
       client,
       state: account,
       persist: () => stateStore.save(),
-      vision: { apiKey: process.env.DASHSCOPE_API_KEY, model: visionModel },
+      vision: {
+        apiKey: process.env.DEEPSEEK_API_KEY,
+        model: visionModel,
+        endpoint: visionEndpoint,
+      },
       filesDir,
       apiToken: agentApiToken,
       log: (message) => {

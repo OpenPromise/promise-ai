@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ILinkClient, WeixinMessage } from './ilink.js';
 import { buildReplyMessage, extractInboundText, STALE_TOKEN_ERRCODE } from './ilink.js';
 import { markdownToPlain, splitLongText } from './markdown.js';
-import { describeImageWithDashScope } from './vision.js';
+import { describeImage } from './vision.js';
 import { saveLibraryFile } from './files.js';
 import type { AccountState } from './state.js';
 
@@ -12,8 +12,8 @@ export interface RelayOptions {
   state: AccountState;
   /** 持久化 state（syncBuf / peerSessions 变化后调用）。 */
   persist: () => Promise<void>;
-  /** 收图理解：DashScope 视觉模型配置（apiKey / model）。 */
-  vision?: { apiKey?: string; model?: string; fetchImpl?: typeof fetch };
+  /** 收图理解：视觉模型配置（apiKey / model / endpoint，默认 DeepSeek 官方 API）。 */
+  vision?: { apiKey?: string; model?: string; endpoint?: string; fetchImpl?: typeof fetch };
   /** 文件库目录：微信发来的文件自动保存到这里，供按名发送。 */
   filesDir?: string;
   /** 单轮对话总上限（毫秒）；默认 5 分钟，可用 WEIXIN_CHAT_TIMEOUT_MS 覆盖。 */
@@ -595,9 +595,10 @@ async function handleInboundMessage(msg: WeixinMessage, options: RelayOptions): 
         fullUrl: media?.full_url,
         aesKeyBase64,
       });
-      description = await describeImageWithDashScope({
+      description = await describeImage({
         apiKey: options.vision?.apiKey,
         model: options.vision?.model,
+        endpoint: options.vision?.endpoint,
         imageBytes: bytes,
         fetchImpl: options.vision?.fetchImpl ?? fetchImpl,
       });

@@ -71,8 +71,9 @@ npm run dev            # 启动 Agent Server（默认 :3000）
 - `VOICE_TTS_ENABLED=false`：**只识别不说话**——Qwen ASR 继续识别你的语音，
   回复以文字显示（s2s 端到端语音需 TTS 开启才启用）
 
-仍在使用 Qwen 模型的位置：Qwen ASR（语音识别）、记忆嵌入
-`text-embedding-v4`、微信收图理解 `WEIXIN_VISION_MODEL`（qwen3.8-max）。
+仍在使用 Qwen 模型的位置：Qwen ASR（语音识别）、记忆嵌入 `text-embedding-v4`。
+微信收图理解已切到 DeepSeek 官方视觉模型（`WEIXIN_VISION_MODEL` 默认
+`deepseek-v4-flash-vision-exp`，走 `DEEPSEEK_API_KEY`）。
 
 全权限模式：`AUTO_APPROVE_ALL=true` 时所有工具（含 L2/L3：终端、电源、
 删除等）自动执行，不弹确认；权限系统保留，随时可回退。
@@ -331,8 +332,9 @@ iLink CDN（AES-128-ECB 加密上传，`novac2c.cdn.weixin.qq.com`）→ 微信�
 ### 微信收图理解 + 事件推送
 
 - **收图理解**：用户给 bot 发图片，桥自动下载解密后交给视觉模型
-  （DashScope，`WEIXIN_VISION_MODEL` 默认 `qwen3.8-max`）描述，再连同
-  描述一起发给大脑回复
+  （DeepSeek 官方 API，`WEIXIN_VISION_MODEL` 默认 `deepseek-v4-flash-vision-exp`，
+  `WEIXIN_VISION_ENDPOINT` 默认 `https://api.deepseek.com/chat/completions`）描述，
+  再连同描述一起发给大脑回复
 - **提醒/任务推送**：weixin-bridge 订阅 `/api/events`，提醒与定时任务结果
   自动推送到已登录的微信对端（⏰ 提醒 / ✅❌ 任务结果）
 

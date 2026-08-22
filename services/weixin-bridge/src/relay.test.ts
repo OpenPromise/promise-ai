@@ -604,7 +604,7 @@ describe('runWeixinRelay', () => {
           JSON.stringify({ type: 'chat.token', payload: { delta: '收到，图片已看懂' } }),
         ]);
       }
-      if (u.includes('dashscope.aliyuncs.com')) {
+      if (u.includes('api.deepseek.com')) {
         return new Response(
           JSON.stringify({ choices: [{ message: { content: '一只小猫在窗台上' } }] }),
           { status: 200 },
@@ -621,7 +621,7 @@ describe('runWeixinRelay', () => {
         persist: async () => {},
         vision: {
           apiKey: 'sk-test',
-          model: 'qwen3.8-max',
+          model: 'deepseek-v4-flash-vision-exp',
           fetchImpl: fetchImpl as unknown as typeof fetch,
         },
         log: () => {},
