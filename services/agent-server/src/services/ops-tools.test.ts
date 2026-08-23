@@ -22,6 +22,9 @@ describe('buildXiaoYouTask', () => {
     expect(task).toContain('Plan/Act 分离');
     expect(task).toContain('小夜姐');
     expect(task).toContain('监督者');
+    // 自我进化（Leon）：前置条件自检（依赖/配置缺失先报告，不盲试）
+    expect(task).toContain('前置条件');
+    expect(task).toContain('缺失项');
     // 需求原文原样出现在任务单里
     expect(task).toContain(request);
   });

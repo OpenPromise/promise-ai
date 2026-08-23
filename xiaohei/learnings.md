@@ -224,6 +224,17 @@
 - **效果**：准则层落地完成，本次任务全量 `npm run typecheck` + `npm test` 全绿。
 - **下一步**：① 在真实任务中验证"四问门禁"与"置信度标注"效果并回填本节；② harness 层评估上下文预算审计与配置安全扫描两条建议；③ 能力评测基线（SWE-bench 思路）继续推进。
 
+### 进化 #5（2026-08-23）：落地 Leon 的任务模板化 / 前置条件自检
+
+- **调研来源**：leon-ai/leon（17.4k stars，MIT，TypeScript；开源个人助理，develop 分支为 TypeScript 重写版）。落地 2 条，全部有仓库内一手文件出处：
+  1. **任务模板化**（来源：skills/native/*/skill.json 的结构化 action 声明——description/parameters/optional_parameters + $schema 校验 + test/ 目录；nlu.ts 的 handleSkillWorkflow 有序编排）。落地：准则 1 追加"开工前先判定任务类型（缺陷修复 / 功能开发 / 调研分析 / 重构优化），按'输入 → 步骤 → 验证标准 → 产出物'的任务模板组织执行：先明确输入（复现步骤/需求原文/相关文件与调用方），缺关键信息先列出待补项再动手，不硬做"——把"先理解需求"从一句话升级为按类型套模板，同类型任务不再重复发明执行路径。
+  2. **前置条件自检**（来源：core/toolkit-registry.ts 的 resolveToolAvailability——工具加载时解析可用性，缺 settings 记录 missing_settings + settings_path，执行时返回"不可用 + 原因 + 修复路径"而非盲试）。落地：XIAO_YOU_PROMPT 准则 3 追加"操作前先做'前置条件自检'：列出该操作的前置条件清单（服务在跑？端口空闲？配置文件在？权限够？磁盘余量？）逐项核对，缺失项先报告（附证据）再决定是否继续，不盲试"——把小优"先检查现状"从"看看状态"升级为清单式自检，缺依赖先报再动。
+- **已有、未重复落地**：Plan/Act 分离 + 批准门（= Leon 路由模式 controlled 的可控性思想）；质量门全绿（= Leon skill 带 test/ 目录）；错误自愈（= Leon ReAct 观察-修正循环）；结论分级（= Leon ToolExecutor 统一 buildResult 含 not_available/invalid_input 显式状态）；结构化报告（= Leon 工具调用日志）。
+- **harness/代码层建议（未塞进准则，如实标注）**：① 工具可用性显式化——不可用工具返回"缺什么配置 + 去哪补"（对应 Leon availability，我们 L0-L3 权限表可补充"未配置则不注册"的提示化）；② 上下文注入模块化（对应 Leon context-files：画像/事件/系统状态按主题拆分可禁用）；③ 会话自动标题（对应 SessionManager.generateTitleFromFirstMessage）；④ 回答润色跳过条件（对应 ParaphraseLLMDuty：确定性内容/超短/超长不改写，小夜可借鉴）。
+- **同步动作**：engineer-tools.test.ts 新增 2 个关键词断言（任务模板 / 待补项）、ops-tools.test.ts 新增 2 个（前置条件 / 缺失项）防回归；本文件新增"二十六、Leon 专项分析"章节；分析全文见 /app/team-site/docs/leon-analysis.md。
+- **效果**：准则层落地完成，本次任务全量 `npm run typecheck` + `npm test` 全绿。
+- **下一步**：① 在真实任务中验证"任务模板化"与"前置条件自检"效果并回填本节；② harness 层评估上列 4 条建议（工具可用性提示 / 上下文模块化 / 会话标题 / 润色阈值）；③ 能力评测基线继续推进。
+
 ---
 
 ## 八、Grok Build（xai-org/grok-build）专项分析
@@ -679,3 +690,50 @@
    - 触发场景：把团队生活照从写实风换成与角色立绘同一视觉语言的二次元风，且人物必须"一看就是本人"。
    - 动作：prompt = characters/*.md 形象提示词原文的人设元素逐条保留（发型/服饰/道具/配色/气质）+ 场景化描述（工位/阳台等生活场景 + 批准的姿势假设如"打字/端咖啡"）+ 统一尾缀「二次元动漫插画风，与角色立绘同款厚涂风格，16:9 横构图，无文字无水印」；立绘专属元素（半身像/竖构图/纯色底）替换为场景描述。
    - 证据：3/3 生成成功（46.5s/50.6s/39.6s），PNG 1536x864 校验全过，无头浏览器 3 图 1536x864 加载确认；视觉符合度未人工看图（模型无图像输入），待人工复核（风险项）。
+
+---
+
+## 二十六、Leon（leon-ai/leon）专项分析
+
+> 调研人：小黑；调研日期：2026-08-23；调研方式：GitHub REST API（仓库元数据 / README / contents API / raw 源码抓取，develop 分支为主）；分析全文见 /app/team-site/docs/leon-analysis.md（含三名成员优化点清单与证据行号）。
+
+### 1. 项目概况
+
+- **【已确认】leon-ai/leon**：开源个人 AI 助手（"🧠 Leon is your open-source personal assistant."），17,455 stars / 1,464 forks / TypeScript（含 Python bridge）/ MIT / 默认分支 develop。核心主张：可自托管（含全离线）、隐私优先、技能（Skills）驱动扩展。
+- **【已确认·架构认知修正】develop 分支已是 TypeScript 重写版**：根目录 core/、server/、bridges/（python|nodejs）、skills/（native 26 个 + agent 1 个）、tcp_server/、web-app/。核心模块：brain（回答队列+TTS+润色）、nlu（路由+技能选择+workflow/ReAct）、toolkit-registry（工具注册+可用性解析）、tool-executor（工具执行管道）、llm-manager（LLM 路由 + duty 抽象）、memory-manager（多层记忆）、context-manager（15 个上下文文件）、session-manager（多会话）、self-model-manager（自我模型/私人日记）、pulse-manager（自主脉冲）。
+
+### 2. 核心机制（对标小黑的分析维度）
+
+1. **对话管道 = 路由模式 × (技能工作流 | ReAct)**（server/src/core/nlp/nlu/nlu.ts）：`routing.mode` ∈ smart|controlled|agent；controlled 走 chooseSkill（SkillRouterLLMDuty：LLM 从技能清单选技能，严格输出"技能名或 None"）→ chooseSkillAction（ActionCallingLLMDuty 输出 JSON action）→ handleSkillWorkflow（skill.json 的 workflow 有序编排 + 跨技能 `skill:action` 跳转 + 缺参追问）；agent 走 ReActLLMDuty（思考→工具→观察循环）。
+2. **回答输出带自然节奏与润色跳过条件**（brain/brain.ts）：AnswerQueue FIFO + 100-350ms 随机打字延迟 + is-typing 事件；ParaphraseLLMDuty 润色但跳过：动作带 loop/slots 配置、字数<5、估算 token>1024——确定性内容不被改写。
+3. **回合后维护串行化**（post-turn-maintenance-queue.ts）：回答产生后，self-model 观察/会话标题生成/记忆写入排队后台执行，enqueueIfNeeded 先做资格检查，不与自己竞争、不阻塞对话。
+4. **技能 = 结构化声明 + 元技能**（skills/native/*/skill.json）：每个 action 有 description/parameters/optional_parameters + $schema 校验 + locales/ + test/；skill_writer_skill 用 OpenCode CLI 从自然语言生成新技能（"能写技能的技能"）。
+5. **工具可用性显式化**（toolkit-registry.ts resolveToolAvailability + tool-executor.ts）：工具加载时解析 availability——缺 settings 记录 missing_settings + settings_path、profile 禁用、LLM provider 能力不匹配（hosted search 仅 openai/anthropic）→ 执行返回 not_available/error + 原因 + 修复路径，上层据此引导配置而非盲试；支持渐进式工具加载（progressive_toolkit_loading）。
+6. **记忆分层 + 去重 + token 预算**（memory-manager.ts）：persistent/daily/discussion/archive；写入 hash 去重 + token Jaccard 近重复检测；recall 带 topK + tokenBudget；镜像自修复。
+7. **上下文注入模块化**（context-manager/context-files/*.ts，15 个文件）：activity/habits/system-resources/owner/network-ecosystem…每文件渲染一类事实注入；启动自适应延迟 + 周期刷新 + 按 toolkit 关联取上下文 + 可整体禁用。
+8. **自我模型 + 自主脉冲**（self-model-manager.ts / pulse-manager.ts）：回合级 observeTurn → 周期 LLM 反思出 ReflectionPatch 更新自我模型 + 私人日记；PulseManager 非对话时段自主执行待办，带执行冷却/指纹去重/对话抑制/主人反馈观察。
+9. **LLM Duty 抽象 + 配置路由**（llm-manager/）：所有 LLM 子任务（summarization/translation/paraphraser/action-calling/skill-router/slot-filling/react）统一 duty 抽象（name+systemPrompt+input+init/execute）；config 区分 workflow target vs agent target，支持本地模型路径；密钥经 env 引用 profile .env 不落盘。
+
+### 3. 值得小黑/小优/小夜学习的亮点（本次落地 2 条，其余为候选）
+
+- **【已落地·小黑】任务模板化**（来源：skill.json 结构化 action + handleSkillWorkflow 有序编排）：开工前判定任务类型（缺陷修复/功能开发/调研分析/重构优化），按"输入→步骤→验证标准→产出物"模板执行，缺关键输入先列待补项不硬做。落地进 XIAO_HEI_PROMPT 准则 1。
+- **【已落地·小优】前置条件自检**（来源：ToolkitRegistry.resolveToolAvailability 缺依赖显式报告）：操作前列出前置条件清单（服务/端口/配置/权限/磁盘）逐项核对，缺失先报告（附证据）再继续，不盲试。落地进 XIAO_YOU_PROMPT 准则 3。
+- **【候选·小黑】工具执行纪律**（来源：ToolExecutor 生命周期 resolve→availability→mapArgs→后处理→日志）：执行前确认输入完整、执行后校验输出结构，结果与预期不符立即记录。
+- **【候选·小黑】记忆分层**（来源：MemoryManager 多层记忆 + recall tokenBudget）：任务内临时结论与跨任务长期经验分层，调研结论先落临时文件，验证过才进 learnings.md。
+- **【候选·小优】操作留痕可回放**（来源：ToolCallLogger 记录每次工具调用）：高危操作前留操作前快照，报告中按时间线给出命令+结果的可回放序列。
+- **【候选·小优】巡检统一状态快照**（来源：system-resources context file）：巡检先取全量快照（进程/端口/磁盘/负载/服务）再比对定位。
+- **【候选·小夜】工具路由显式化**（来源：SkillRouterLLMDuty 严格输出格式 + 唯一技能直接选中）：先想"需求对应哪个工具"，工具不可用/不确定时明确说明并问用户，不硬调、不假装已执行。
+- **【候选·小夜】上下文注入分层**（来源：context-files 按主题拆分可禁用）：画像关键事实/最近事件做轻量摘要常驻，细节按需查。
+- **【候选·小夜】回答个性化阈值**（来源：ParaphraseLLMDuty 跳过条件）：简短确认/确定性信息不加工，长说明按人设压缩到要点。
+
+### 4. 与小黑/小优现状对照（已有 / 新增）
+
+- 已有：Plan/Act 分离 + 方案确认门（= Leon controlled 模式可控性）；质量门全绿（= skill 带 test/）；错误自愈（= ReAct 观察-修正）；结论分级/统一结果状态（= ToolExecutor 显式状态）；结构化报告（= 工具调用日志）；多角色分工（= 技能+工具体系）。
+- 新增（本次）：任务模板化（小黑准则 1）、前置条件自检（小优准则 3）。
+- 候选（未塞准则，harness/代码层）：工具可用性提示（未配置工具返回"缺什么+去哪补"）、上下文注入模块化、会话自动标题、回答润色阈值、操作留痕回放、巡检快照模板。
+
+### 5. 参考链接
+
+- 仓库：https://github.com/leon-ai/leon
+- 分析文档：/app/team-site/docs/leon-analysis.md
+- 关键源码（develop 分支）：server/src/core/nlp/nlu/nlu.ts、server/src/core/brain/brain.ts、server/src/core/toolkit-registry.ts、server/src/core/tool-executor.ts、server/src/core/post-turn-maintenance-queue.ts、server/src/core/llm-manager/llm-duty.ts、server/src/core/memory-manager/memory-manager.ts、server/src/core/context-manager/context-manager.ts、server/src/core/self-model-manager.ts、server/src/core/pulse-manager.ts、skills/native/todo_list_skill/skill.json、skills/native/skill_writer_skill/skill.json

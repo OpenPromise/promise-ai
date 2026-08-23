@@ -32,6 +32,9 @@ describe('buildXiaoHeiTask', () => {
     expect(task).toContain('零发现');
     expect(task).toContain('置信度');
     expect(task).toContain('未审查上下文');
+    // 自我进化 #5（Leon）：任务模板化（按任务类型组织 输入→步骤→验证→产出）
+    expect(task).toContain('任务模板');
+    expect(task).toContain('待补项');
     // 需求原文原样出现在任务单里
     expect(task).toContain(request);
     // 监督者语境

@@ -32,6 +32,7 @@ export function registerXiaoyeRoutes(app: FastifyInstance): void {
   app.get('/xiaoye/*', async (request, reply) => {
     try {
       const file = safeResolve(xiaoyeRoot, request.url);
+      if (!file) return reply.code(404).send('Not found');
       return await sendStaticFile(reply, file);
     } catch {
       return reply.code(404).send('Not found');
