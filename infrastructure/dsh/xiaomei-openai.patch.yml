@@ -1,0 +1,25 @@
+# 小美专用 DSH overlay：只覆盖她的默认模型，不改变小夜/小黑/小优的路由。
+# OPENAI_API_KEY 由容器环境注入；未配置时请求会明确失败，不会回退到 DeepSeek。
+- id: llm-pi-ai
+  config:
+    providers:
+      openai:
+        displayName: OpenAI
+        apiKeyEnv: OPENAI_API_KEY
+        models:
+          - id: gpt-4.1
+            name: GPT-4.1
+            contextWindow: 1048576
+            maxTokens: 32768
+- id: agent-default-model
+  config:
+    provider: openai
+    model: gpt-4.1
+- id: web
+  disabled: true
+- id: web-search-deepseek
+  disabled: true
+- id: tool-web
+  disabled: true
+- id: llm-deepseek
+  disabled: true

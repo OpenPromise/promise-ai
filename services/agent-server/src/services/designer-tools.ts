@@ -3,6 +3,11 @@ import { access } from 'node:fs/promises';
 import type { PermissionLevel, Tool, ToolContext, ToolResult } from '@personal-ai/tools';
 import { runDshHeadless, type DshRunResult } from './coding-tool.js';
 
+const XIAO_MEI_DSH_PATCH =
+  process.env.XIAOMEI_DSH_PATCH ??
+  path.resolve(process.cwd(), 'infrastructure/dsh/xiaomei-openai.patch.yml');
+const XIAO_MEI_OPENAI_MODEL = process.env.XIAOMEI_OPENAI_MODEL ?? 'gpt-4.1';
+
 /**
  * designer.delegate：把产品设计/UX/UI/视觉设计任务派给"小美"（专属
  * Product/UI/Visual Designer 子代理）执行。与 engineer.delegate（异步派单）、
@@ -70,6 +75,7 @@ export function createDesignerTool(): Tool {
       '不是"网页 UI 生成器"。由助理（小夜）作为监督者调用。' +
       '这是同步任务：调用后等待小美跑完（通常 30 秒到数分钟），直接返回结构化报告。' +
       '小美以工作区权限（workspace-write）读写 /app 下的设计文档与 Design System，不改生产代码。' +
+      '她使用独立的 OpenAI Provider 路由（需要 OPENAI_API_KEY），不会回退到 DeepSeek。' +
       'directory 用 /app 等持久目录。' +
       '轻量问题（查文件、看状态）不要用此工具，用 filesystem / terminal 等轻量工具。',
     inputSchema: {
@@ -105,6 +111,14 @@ export function createDesignerTool(): Tool {
       if (task.trim().length > 20_000) {
         return { ok: false, error: '任务文本超过 20000 字符，请拆分任务后重试' };
       }
+      try {
+        await access(XIAO_MEI_DSH_PATCH);
+      } catch {
+        return {
+          ok: false,
+          error: `小美 OpenAI 路由配置不存在：${XIAO_MEI_DSH_PATCH}`,
+        };
+      }
       const timeoutMs = Math.min(Math.max(1, Math.floor(timeoutMinutes)), 60) * 60 * 1000;
       let run: DshRunResult;
       try {
@@ -113,6 +127,8 @@ export function createDesignerTool(): Tool {
           timeoutMs,
           // 小美只产出设计文档/Design System/Spec：工作区权限即可，不触达系统级操作。
           permissionMode: 'workspace-write',
+          // 独立 patch 将 dsh 默认模型切到 OpenAI；不会改小夜主模型或小黑/小优。
+          patchPath: XIAO_MEI_DSH_PATCH,
           signal: context.signal,
         });
       } catch (error) {
@@ -138,7 +154,9 @@ export function createDesignerTool(): Tool {
         ok: true,
         data: {
           text: (stdout.trim() || stderr.trim()).slice(0, 40_000),
-          backend: 'dsh',
+          backend: 'dsh-pi-ai/openai',
+          provider: 'openai',
+          model: XIAO_MEI_OPENAI_MODEL,
         },
       };
     },

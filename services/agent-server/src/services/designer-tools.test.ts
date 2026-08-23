@@ -96,13 +96,18 @@ describe('createDesignerTool', () => {
     const tool = createDesignerTool();
     const result = await tool.execute({ task: '设计注册页', directory: '/app' }, { sessionId: 's1' });
     expect(result.ok).toBe(true);
-    const data = result.data as { text: string; backend: string };
+    const data = result.data as { text: string; backend: string; provider?: string; model?: string };
     expect(data.text).toContain('【DESIGN_SPEC】');
-    expect(data.backend).toBe('dsh');
+    expect(data.backend).toBe('dsh-pi-ai/openai');
+    expect(data.provider).toBe('openai');
+    expect(data.model).toBe('gpt-4.1');
     // 小美以工作区权限运行，不做系统级操作
     expect(runDshHeadlessMock).toHaveBeenCalledWith(
       expect.stringContaining('小美'),
-      expect.objectContaining({ permissionMode: 'workspace-write' }),
+      expect.objectContaining({
+        permissionMode: 'workspace-write',
+        patchPath: expect.stringContaining('xiaomei-openai.patch.yml'),
+      }),
     );
   });
 

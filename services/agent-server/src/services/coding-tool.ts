@@ -59,6 +59,8 @@ export interface RunDshOptions {
   cwd: string;
   timeoutMs: number;
   permissionMode: 'workspace-write' | 'danger-full-access';
+  /** 可选：额外 dsh patch，用于为特定子代理选择独立 Provider/模型。 */
+  patchPath?: string;
   /** 可选：逐段实时接收子进程输出，不等待进程结束。 */
   onData?: DshOutputCallback;
   /** 可选：外部取消（上层 abort）时终止整个进程组。 */
@@ -171,7 +173,10 @@ export async function runDshHeadless(
       exitCode: 1,
     };
   }
-  return runChild(process.execPath, [dshBin, '--profile', 'headless', task], {
+  const args = [dshBin, '--profile', 'headless'];
+  if (options.patchPath) args.push('--patch', options.patchPath);
+  args.push(task);
+  return runChild(process.execPath, args, {
     cwd: options.cwd,
     timeoutMs: options.timeoutMs,
     env: { ...process.env, DSH_PERMISSION_MODE: options.permissionMode },
