@@ -68,7 +68,7 @@ export default function App() {
       <LoadingOverlay />
       <NavBar active={active} onNavigate={go} />
       <main className="site-scroll" ref={scrollRef}>
-        <HomePage onExplore={() => go('news')} />
+        <HomePage />
         <NewsPage />
         <RolesPage />
         <WorldPage />

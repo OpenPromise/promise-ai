@@ -319,7 +319,7 @@ button {
   background: var(--color-accent-dim);
 }
 
-/* ---------- 首页（参考站 pageIndex：全屏视频 + 底部黑色渐变 + Slogan + 滚动提示） ---------- */
+/* ---------- 首页（纯净视频区：全屏视频 + 底部黑色渐变，无标题/副标语/按钮/滚动提示） ---------- */
 .hero {
   background: #0d0d0d;
 }
@@ -339,106 +339,6 @@ button {
   background:
     linear-gradient(0deg, rgba(0, 0, 0, 0.9) 0%, rgba(0, 0, 0, 0.25) 26%, transparent 55%),
     linear-gradient(180deg, rgba(13, 13, 13, 0.5) 0%, transparent 26%);
-}
-
-.hero-content {
-  position: absolute;
-  left: 50%;
-  top: 46%;
-  transform: translate(-50%, -50%);
-  text-align: center;
-  width: min(860px, 92vw);
-  z-index: 2;
-}
-
-.hero-kicker {
-  font-family: var(--font-mono);
-  color: var(--color-accent);
-  letter-spacing: 0.4em;
-  font-size: var(--fs-caption);
-  text-shadow: 0 0 16px var(--color-accent-dim);
-}
-
-.hero-title {
-  font-size: clamp(2.4rem, 7.5vw, 4.2rem);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  margin: var(--space-5) 0;
-  text-shadow: 0 0 48px var(--color-accent-dim), 0 2px 12px rgba(0, 0, 0, 0.6);
-}
-
-.hero-slogan {
-  color: var(--color-text-2);
-  font-size: clamp(1rem, 2vw, 1.2rem);
-  max-width: 44ch;
-  margin: 0 auto var(--space-7);
-}
-
-.hero-scroll {
-  position: absolute;
-  bottom: 40px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--color-text-2);
-  z-index: 2;
-  animation: heroHint 2.4s ease-in-out infinite;
-}
-
-@keyframes heroHint {
-  0%,
-  100% {
-    transform: translate(-50%, 0);
-    opacity: 0.85;
-  }
-  50% {
-    transform: translate(-50%, 10px);
-    opacity: 1;
-  }
-}
-
-.hero-scroll-mouse {
-  display: block;
-  width: 22px;
-  height: 36px;
-  border: 1.5px solid var(--color-text-3);
-  border-radius: var(--radius-full);
-  position: relative;
-}
-
-.hero-scroll-mouse i {
-  position: absolute;
-  top: 7px;
-  left: 50%;
-  width: 3px;
-  height: 7px;
-  margin-left: -1.5px;
-  border-radius: 2px;
-  background: var(--color-accent);
-  box-shadow: 0 0 8px var(--color-accent);
-  animation: scrollDot 1.6s ease-in-out infinite;
-}
-
-@keyframes scrollDot {
-  0% {
-    transform: translateY(0);
-    opacity: 1;
-  }
-  70% {
-    transform: translateY(12px);
-    opacity: 0;
-  }
-  100% {
-    opacity: 0;
-  }
-}
-
-.hero-scroll-text {
-  font-size: var(--fs-caption);
-  letter-spacing: 0.18em;
 }
 
 /* ---------- 情报速递（1:1 参考站 pageNews，逆向见 docs/navbar-news-1to1.md §4）
@@ -1642,10 +1542,6 @@ button {
 
   .world-thumb-name {
     display: none;
-  }
-
-  .hero-title {
-    margin: var(--space-3) 0;
   }
 }
 
