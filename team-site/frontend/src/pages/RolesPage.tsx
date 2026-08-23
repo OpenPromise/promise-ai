@@ -1,6 +1,29 @@
 import { useEffect, useState } from 'react';
 import { fetchRoles } from '../api/client';
 import type { Role } from '../api/client';
+import { resolveRoleHome } from '../lib/roleHome';
+
+/**
+ * 个人主页链接（角色信息区）：
+ * - live → 青色描边可点链接，同窗口跳转（如 /xiaohei、/xiaoyou）
+ * - building → 「建设中」徽章，不可点、无 href（小夜主页未上线，杜绝 404 入口）
+ */
+function RoleHomeLink({ role }: { role: Role }) {
+  const home = resolveRoleHome(role);
+  if (!home) return null;
+  if (home.homeStatus === 'building') {
+    return (
+      <span className="role-home-badge" aria-label="个人主页建设中">
+        个人主页 · 建设中
+      </span>
+    );
+  }
+  return (
+    <a className="role-home-link" href={home.homeUrl}>
+      个人主页 ↗
+    </a>
+  );
+}
 
 /**
  * 角色介绍：1:1 复刻异环官网 pageRole（2026-08-23 逆向，详见 docs/roles-1to1.md）
@@ -80,6 +103,7 @@ export default function RolesPage() {
                         <span className="role-dream-text">{r.dream}</span>
                       </p>
                     </div>
+                    <RoleHomeLink role={r} />
                     <button
                       type="button"
                       className="role-more"

@@ -16,6 +16,8 @@ export interface NewsItem {
   pinned?: boolean;
 }
 
+export type RoleHomeStatus = 'live' | 'building';
+
 export interface Role {
   id: string;
   name: string;
@@ -24,6 +26,10 @@ export interface Role {
   avatarUrl: string;
   dream: string;
   accent?: string;
+  /** 个人主页相对路径（同窗口跳转；后端可不返回，前端按 id 兜底） */
+  homeUrl?: string;
+  /** 主页状态：live 可点 / building 建设中（不渲染 href，杜绝 404 入口） */
+  homeStatus?: RoleHomeStatus;
 }
 
 export interface World {
@@ -179,6 +185,8 @@ const FALLBACK_ROLES: Role[] = [
     avatarUrl: '/assets/roles/xiaohei.png',
     dream: '成为世界第一的 AI 工程师——用专业、可靠、不吹牛的交付，让「世界第一 AI 工作室」这个名号成为事实，而不是口号。',
     accent: '#34d399',
+    homeUrl: '/xiaohei',
+    homeStatus: 'live',
   },
   {
     id: 'xiaoyou',
@@ -188,6 +196,8 @@ const FALLBACK_ROLES: Role[] = [
     avatarUrl: '/assets/roles/xiaoyou.png',
     dream: '成为世界第一的运维小天使——让「世界第一 AI 工作室」的服务器永不宕机、永远元气满满；团队在台前冲向世界之巅，我在幕后稳稳托住脚下的地基。',
     accent: '#fe5a95',
+    homeUrl: '/xiaoyou',
+    homeStatus: 'live',
   },
   {
     id: 'xiaoye',
@@ -197,6 +207,8 @@ const FALLBACK_ROLES: Role[] = [
     avatarUrl: '/assets/roles/xiaoye.png',
     dream: '成为世界上最懂用户的私人助理——把「世界第一 AI 工作室」的每个人都连接起来，让技术有温度，让陪伴成为习惯。',
     accent: '#7958cb',
+    homeUrl: '/xiaoye',
+    homeStatus: 'building',
   },
 ];
 

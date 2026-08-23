@@ -25,7 +25,12 @@ export default function NavBar({
           onNavigate('home');
         }}
       >
-        <span className="nav-logo-mark">AI°</span>
+        <img
+          className="nav-logo-img"
+          src="/assets/logo.png"
+          alt="世界第一 AI 工作室"
+          loading="eager"
+        />
         <span className="nav-logo-text">世界第一 AI 工作室</span>
       </a>
       <nav className="nav-links" aria-label="主导航">
