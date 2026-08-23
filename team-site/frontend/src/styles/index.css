@@ -161,7 +161,10 @@ button {
   padding: var(--space-6) 0;
 }
 
-/* ---------- 顶栏（1:1 参考站 .header：实底 #1d1d1d 固定条 + 居中紧贴黑底白字按钮组，逆向见 docs/navbar-news-1to1.md §3） ---------- */
+/* ---------- 顶栏（1:1 参考站 .header：一条完整 fixed 顶栏 = logo + 导航 + 右品牌字标，浑然一体）
+ * 逆向见 docs/navbar-news-1to1.md §3（2026-08-23 复扒）：
+ * - .header：实底 #1d1d1d、高 118 设计稿(4.6vw)、背景图 header.png(664×144 品牌字标) no-repeat 100% 0
+ * - 导航按钮：背景透明（sprite 仅文字像素）、紧贴无间距、三态切图换色（灰→白→青），零光晕 ---------- */
 .nav {
   position: fixed;
   top: 0;
@@ -169,13 +172,15 @@ button {
   right: 0;
   z-index: 100;
   height: var(--nav-height);
-  display: flex;
-  align-items: center;
-  padding: 0 clamp(16px, 4.6vw, 118px) 0 clamp(16px, 6.6vw, 170px); /* 参考 .logo left 170px 设计稿 */
   background: var(--nav-bg);
+  /* 参考站 .header 背景：品牌字标图 header.png 664×144 贴右侧（100% 0）；我们用文字装饰元素占位（.nav-brand） */
 }
 
 .nav-logo {
+  position: absolute;
+  left: clamp(16px, 6.64vw, 170px); /* 参考 .logo left 170px 设计稿 */
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -194,7 +199,6 @@ button {
   border: 1px solid var(--color-accent);
   border-radius: var(--radius-sm);
   padding: 1px 6px;
-  box-shadow: 0 0 12px var(--color-accent-dim);
 }
 
 .nav-logo-text {
@@ -203,7 +207,27 @@ button {
   letter-spacing: 0.08em;
 }
 
-/* 参考站 .headerNav：绝对居中、按钮紧贴无间距、黑底白字 */
+/* 右品牌字标（参考站 .header 背景图 header.png 贴 100% 0；尺寸 664×144 设计稿 ≈ 26vw×5.6vw） */
+.nav-brand {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding-right: clamp(16px, 3.5vw, 90px);
+  pointer-events: none;
+}
+
+.nav-brand-name {
+  font-family: var(--font-mono);
+  font-size: clamp(0.72rem, 0.95vw, 1.05rem);
+  letter-spacing: 0.32em;
+  color: rgba(255, 255, 255, 0.42);
+  white-space: nowrap;
+}
+
+/* 参考站 .headerNav：绝对居中、按钮紧贴无间距、背景透明（黑底即顶栏底色） */
 .nav-links {
   position: absolute;
   left: 50%;
@@ -215,30 +239,36 @@ button {
 
 .nav-link {
   position: relative;
-  z-index: 2;
+  z-index: 3;
   width: var(--nav-btn-w);
   height: var(--nav-btn-h);
-  background: #0a0a0a;
+  background: transparent; /* 参考站 sprite 背景透明，无按钮底色 */
   border: none;
-  color: #fff;
+  color: var(--nav-text-normal); /* sprite 普通态：灰 170 */
   cursor: pointer;
   font-size: clamp(0.85rem, 1.1vw, 1.3rem);
   letter-spacing: 0.08em;
-  transition: color 0.15s ease, text-shadow 0.15s ease;
+  transition: color 0.15s ease;
   white-space: nowrap;
 }
 
+/* 三态 = 切图换色（sprite 像素实测）：normal 灰(170) → hover 白(255) → active 青(#51E5FB)；
+ * 参考站无任何 shadow/blur 光晕，纯颜色切换 */
 .nav-link:hover {
-  color: #fff;
-  text-shadow: 0 0 16px rgba(80, 229, 251, 0.95);
+  color: var(--nav-text-hover);
 }
 
 .nav-link.is-active {
-  color: var(--color-accent);
-  text-shadow: 0 0 18px rgba(80, 229, 251, 0.95);
+  color: var(--nav-text-active);
 }
 
-/* 参考站 .headerNav::before：#1d1d1d 条带垫在按钮后（z-index 低于按钮、高于 header 底色） */
+/* 首页 active 用 headerNav1 专属青 #7CECFC（其余按钮 #51E5FB） */
+.nav-link.is-first.is-active {
+  color: var(--nav-text-active-first);
+}
+
+/* 参考站 .headerNav::before：#1d1d1d 条带垫在按钮后（z-index 低于按钮、高于 header 底色），
+ * 保证滚动内容经过顶栏时被遮挡——条带与顶栏同色，视觉一体 */
 .nav-links::before {
   content: '';
   position: absolute;
@@ -413,8 +443,9 @@ button {
 }
 
 /* ---------- 情报速递（1:1 参考站 pageNews，逆向见 docs/navbar-news-1to1.md §4）
- * 结构：左右装饰细线 + 标题区（对齐 .newsHead 艺术字标题图）+ 方形斜切 Tab + 行列表
- * 行：斜切徽章 / #dfdfdf 标题 hover 青 / MM-DD 日期右对齐 / 行底 3px #313131 ---------- */
+ * 结构：左右双列 —— 左 = 公告列表（标题区+Tab+固定 5 行），右 = 宣传图轮播（边框+标题条+分页点）
+ * 行：斜切徽章 / #dfdfdf 标题 hover 青 / MM-DD 日期右对齐 / 行底 3px #313131
+ * 列表容器高度固定（5 × 行高），不随内容伸缩（CEO 反馈 3） ---------- */
 .news-inner {
   position: absolute;
   inset: 0;
@@ -434,60 +465,104 @@ button {
 .news-inner .section-head {
   position: static;
   transform: none;
-  margin-bottom: clamp(12px, 1.4vw, 36px);
+  margin-bottom: clamp(8px, 1vw, 24px);
+}
+
+/* 左右双列容器：左列 927px + 间隙 + 右列 926px（参考站 .newsList/.newsSwiper 设计稿等比） */
+.news-cols {
+  display: flex;
+  gap: clamp(16px, 2.73vw, 70px); /* 参考站左列 -970 与右列 +35 → 列距约 70px 设计稿 */
+  align-items: flex-start;
+  justify-content: center;
+  width: min(1920px, 96vw);
+}
+
+/* ---------- 左列：公告列表 ---------- */
+.news-col {
+  width: var(--news-col-w);
+  flex-shrink: 0;
+}
+
+/* 标题区（参考站 .newsHead 926×196：Tab 内嵌左下 + 「更多」右上；我们用文字标题替代） */
+.news-col-head {
+  position: relative;
+  min-height: clamp(56px, 4.3vw, 110px);
+  display: flex;
+  align-items: flex-end;
 }
 
 /* Tab（参考站 .newsNav：方形黑底白字，激活 = #1d1d1d 底 + skew(-15deg) + 内层反切） */
-.tabs {
+.news-col-head .tabs {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: clamp(6px, 0.39vw, 10px);
-  margin-bottom: clamp(8px, 1vw, 26px);
+  gap: clamp(4px, 0.39vw, 10px);
+  margin: 0;
 }
 
-.tab {
+.news-col-head .tab {
   width: var(--news-tab-w);
   height: var(--news-tab-h);
   background: #101010;
   border: none;
-  border-radius: clamp(4px, 0.39vw, 10px);
+  border-radius: clamp(2px, 0.39vw, 10px);
   color: #fff;
   font-size: clamp(0.82rem, 1.1vw, 1.15rem);
   letter-spacing: 0.1em;
   cursor: pointer;
-  transition: color 0.15s ease, text-shadow 0.15s ease;
+  transition: color 0.15s ease, background-color 0.15s ease;
   transform: skew(-15deg);
 }
 
-.tab > span {
+.news-col-head .tab > span {
   display: inline-block;
   transform: skew(15deg);
 }
 
-.tab:hover {
-  color: var(--color-accent-2);
-  text-shadow: 0 0 12px rgba(80, 229, 251, 0.7);
-}
-
-.tab.is-active {
+.news-col-head .tab.is-active {
   background: #1d1d1d;
   color: var(--color-accent-2);
-  text-shadow: 0 0 14px rgba(80, 229, 251, 0.85);
 }
 
+/* 「更多」链接（参考站 .newsMore 192×50，right 22 / top 134 相对 newsHead） */
+.news-col-title {
+  position: absolute;
+  right: clamp(2px, 0.86vw, 22px);
+  top: clamp(10px, 2vw, 52px);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-3);
+  font-size: clamp(0.72rem, 0.95vw, 1rem);
+  letter-spacing: 0.14em;
+  cursor: default;
+}
+
+.news-col-title::after {
+  content: '»';
+  color: var(--color-text-3);
+}
+
+/* 列表容器：固定高度 = 5 × 行高（参考站 JS 固定渲染 5 条 → 高度恒定）；不足 5 条时占位补满 */
 .news-list {
-  width: clamp(380px, 36.2vw, 940px); /* 参考 .newsCont 927px 设计稿等比：1920 屏 ≈695px */
+  width: 100%;
+  height: calc(var(--news-row-h) * 5);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
-/* 行列表（参考站 .newsCont .newsItem：底边框 3px #313131、行高 90px 设计稿、无摘要/无置顶标） */
+/* 行列表（参考站 .newsCont .newsItem：底边框 3px #313131、行高 85px 设计稿、无摘要/无置顶标） */
 .news-item-row {
   display: flex;
   align-items: center;
   gap: var(--news-title-ml);
-  min-height: var(--news-row-h);
+  height: var(--news-row-h);
+  flex: 0 0 var(--news-row-h);
   padding: 0 4px;
   border-bottom: 2px solid var(--color-line-strong);
+}
+
+.news-item-row.is-placeholder {
+  visibility: hidden;
 }
 
 .news-title {
@@ -548,6 +623,79 @@ button {
 .type-complaint {
   background: var(--color-badge-pink);
   color: #fff;
+}
+
+/* ---------- 右列：宣传图轮播（参考站 .newsSwiper：926×468、边框 6px #363636、radius 6px） ---------- */
+.news-swiper-col {
+  width: var(--news-swiper-w);
+  flex-shrink: 0;
+  /* 参考站右列 top 430 vs 左列 top 350 → 右列整体下移 80px 设计稿 */
+  margin-top: clamp(20px, 3.1vw, 80px);
+}
+
+.news-swiper {
+  position: relative;
+  border: var(--news-swiper-border) solid #363636;
+  border-radius: clamp(3px, 0.23vw, 6px);
+  background: #101010;
+}
+
+/* 图片舞台：926×468（含边框），单图绝对定位叠放、当前图显示 */
+.news-swiper-stage {
+  position: relative;
+  height: var(--news-swiper-h);
+  overflow: hidden;
+}
+
+.news-swiper-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  opacity: 0;
+  transition: opacity 0.45s ease;
+}
+
+.news-swiper-img.is-active {
+  opacity: 1;
+}
+
+/* 轮播标题条（参考站 .newsSwiperTit：图片下方，居中标题文字） */
+.news-swiper-tit {
+  text-align: center;
+  color: var(--color-title-text);
+  font-size: clamp(0.8rem, 1.05vw, 1.1rem);
+  letter-spacing: 0.06em;
+  padding: clamp(8px, 1vw, 18px) 0 clamp(4px, 0.6vw, 12px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 分页点（参考站 .newsSwiper .pagination：子弹 20×20 radius 20、#616161 底/#515151 边、active #7ce3f2） */
+.news-swiper-dots {
+  display: flex;
+  justify-content: flex-end;
+  gap: clamp(6px, 0.78vw, 20px);
+  padding-bottom: clamp(6px, 0.8vw, 16px);
+  padding-right: clamp(2px, 0.4vw, 10px);
+}
+
+.news-swiper-dot {
+  width: var(--news-dot-size);
+  height: var(--news-dot-size);
+  border-radius: 50%;
+  background: #616161;
+  border: 1px solid #515151;
+  padding: 0;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.news-swiper-dot.is-active {
+  background: #7ce3f2;
 }
 
 /* ---------- 角色介绍（1:1 复刻参考站 pageRole，逆向见 docs/roles-1to1.md） ----------
@@ -1235,6 +1383,7 @@ button {
     left: auto;
     right: var(--space-4);
     transform: none;
+    max-width: calc(100vw - var(--space-4) * 2);
     overflow-x: auto;
     white-space: nowrap;
     scrollbar-width: none;
@@ -1265,6 +1414,25 @@ button {
     justify-content: center;
   }
 
+  /* 移动端：双列变单列（轮播在上、列表在下，对齐参考站 /m/ 顺序） */
+  .news-cols {
+    flex-direction: column;
+    align-items: center;
+    gap: 18px;
+    overflow-y: auto;
+    max-height: 100%;
+    padding-bottom: 24px;
+  }
+
+  .news-col {
+    width: min(92vw, var(--news-col-w));
+  }
+
+  .news-swiper-col {
+    width: min(92vw, var(--news-swiper-w));
+    margin-top: 0;
+  }
+
   .news-item-row {
     gap: var(--space-3);
     padding: 0 2px;
@@ -1275,7 +1443,7 @@ button {
     max-width: 52vw;
   }
 
-  .tab {
+  .news-col-head .tab {
     width: auto;
     height: auto;
     padding: 8px 18px;
@@ -1417,14 +1585,15 @@ button {
   }
 
   .news-item-row {
-    min-height: 40px;
+    height: 40px;
+    flex-basis: 40px;
   }
 
   .news-title {
     font-size: 0.9rem;
   }
 
-  .tab {
+  .news-col-head .tab {
     padding: 6px 14px;
     font-size: 0.82rem;
   }
