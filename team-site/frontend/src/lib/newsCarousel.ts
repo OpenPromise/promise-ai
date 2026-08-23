@@ -15,15 +15,15 @@ export interface NewsCarouselSlide {
 
 export const NEWS_CAROUSEL_SLIDES: NewsCarouselSlide[] = [
   {
-    imageUrl: '/assets/team/life-coding.jpg',
+    imageUrl: '/assets/team/life-xiaohei-night.png',
     title: '深夜一起写代码',
   },
   {
-    imageUrl: '/assets/team/life-snack.jpg',
-    title: '会议室零食团建',
+    imageUrl: '/assets/team/life-xiaoyou-desk.png',
+    title: '粉色工位元气值守',
   },
   {
-    imageUrl: '/assets/team/life-roof.jpg',
-    title: '天台合影',
+    imageUrl: '/assets/team/life-xiaoye-balcony.png',
+    title: '月光下的温柔陪伴',
   },
 ];
