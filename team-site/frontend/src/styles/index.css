@@ -561,221 +561,272 @@ button {
   color: #fff;
 }
 
-/* ---------- 角色介绍（参考站 pageRole：竖图导航 + 整屏氛围背景 + 大图 + 信息条） ---------- */
+/* ---------- 角色介绍（1:1 复刻参考站 pageRole，逆向见 docs/roles-1to1.md） ----------
+ * 结构：左侧竖排头像导航（.roleNav 深灰圆角框 + 上下箭头）+ 整屏角色 slide（.roleSwiper fade crossFade）
+ * 每 slide：world 氛围背景 + 右侧 2:3 立绘（参考站角色在视频右侧入画）+ 左侧信息区（名字/职务/简介+梦想）
+ * 切换：缩略图点击 / 导航箭头 → 整屏交叉淡化 ≈0.9s（参考站 slideToLoop 1000ms） */
 .roles-stage {
   position: absolute;
   inset: 0;
-  background-color: #161616;
-  background-size: cover;
-  background-position: center;
+  background: #101010;
   overflow: hidden;
 }
 
-.roles-veil {
+.roles-stage .loading-text {
   position: absolute;
   inset: 0;
-  background: linear-gradient(
-    180deg,
-    rgba(13, 13, 13, 0.74) 0%,
-    rgba(13, 13, 13, 0.32) 42%,
-    rgba(13, 13, 13, 0.88) 100%
-  );
+  display: grid;
+  place-items: center;
+  z-index: 5;
+}
+
+/* ---- 整屏角色 slide（对应参考站 .roleSwiper） ---- */
+.role-slides {
+  position: absolute;
+  inset: 0;
   z-index: 1;
 }
 
-.roles-page .section-head {
-  z-index: 3;
-}
-
-.roles-nav {
-  position: absolute;
-  left: clamp(16px, 3vw, 44px);
-  top: 50%;
-  transform: translateY(-50%);
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  z-index: 4;
-}
-
-.roles-nav-item {
-  position: relative;
-  width: 74px;
-  aspect-ratio: 2 / 3;
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  border-radius: 6px;
-  overflow: hidden;
-  padding: 0;
-  background: #1d1d1d;
-  cursor: pointer;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.roles-nav-item img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-  filter: grayscale(0.45) brightness(0.72);
-  transition: filter 0.15s ease;
-}
-
-.roles-nav-item span {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  font-size: 0.72rem;
-  color: #fff;
-  text-align: center;
-  background: var(--color-overlay);
-  padding: 2px 0;
-}
-
-.roles-nav-item:hover {
-  border-color: rgba(80, 229, 251, 0.6);
-}
-
-.roles-nav-item:hover img {
-  filter: grayscale(0.1) brightness(0.92);
-}
-
-.roles-nav-item.is-active {
-  border-color: var(--color-accent);
-  box-shadow: 0 0 18px var(--color-accent-dim);
-}
-
-.roles-nav-item.is-active img {
-  filter: none;
-}
-
-.roles-main {
+.role-slide {
   position: absolute;
   inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: clamp(18px, 4vw, 52px);
-  z-index: 2;
-  padding-top: calc(var(--nav-height) + 6vh);
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.9s ease, visibility 0.9s;
 }
 
+.role-slide.is-active {
+  visibility: visible;
+  opacity: 1;
+}
+
+/* 氛围背景（对应参考站角色背景视频 .roleBg；用 world-*.png 模拟） */
+.role-bg {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  filter: saturate(0.85) brightness(0.8);
+}
+
+/* 遮罩渐变：左侧信息区压暗、右侧立绘区留亮、上下渐进（模拟参考站视频氛围光） */
+.role-bg-veil {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(
+      90deg,
+      rgba(9, 9, 9, 0.9) 0%,
+      rgba(9, 9, 9, 0.66) 30%,
+      rgba(9, 9, 9, 0.16) 58%,
+      rgba(9, 9, 9, 0.4) 100%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(9, 9, 9, 0.7) 0%,
+      rgba(9, 9, 9, 0.14) 36%,
+      rgba(9, 9, 9, 0.3) 62%,
+      rgba(9, 9, 9, 0.88) 100%
+    );
+}
+
+/* 右侧立绘（参考站角色在视频右侧入画；2:3 图 + 底部/左缘渐变融入背景） */
 .role-figure {
-  height: clamp(300px, 58vh, 560px);
+  position: absolute;
+  right: clamp(16px, 3vw, 96px);
+  bottom: 0;
+  height: clamp(360px, 68vh, 700px);
   aspect-ratio: 2 / 3;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 8px;
-  overflow: hidden;
-  box-shadow:
-    0 24px 64px rgba(0, 0, 0, 0.55),
-    0 0 44px var(--color-accent-dim);
-  animation: fadeUp 0.45s ease both;
+  z-index: 2;
+  margin: 0;
+  pointer-events: none;
 }
 
 .role-figure img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  object-position: center 16%;
   display: block;
+  filter: brightness(1.12) contrast(1.03);
+  -webkit-mask-image:
+    linear-gradient(180deg, #000 70%, transparent 97%),
+    linear-gradient(90deg, transparent 0%, #000 7%);
+  mask-image:
+    linear-gradient(180deg, #000 70%, transparent 97%),
+    linear-gradient(90deg, transparent 0%, #000 7%);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
 }
 
-@keyframes fadeUp {
-  from {
-    opacity: 0;
-    transform: translateY(16px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
+/* 立绘背后的氛围光（模拟参考站视频角色受光，青色调微光） */
+.role-figure::before {
+  content: '';
+  position: absolute;
+  inset: -6% -38% 0 6%;
+  background: radial-gradient(58% 46% at 58% 42%, rgba(124, 227, 242, 0.1), transparent 72%);
+  z-index: -1;
 }
 
-.roles-arrow {
-  width: 46px;
-  height: 46px;
+/* 左侧信息区（对应参考站 .role_name 左缘 18%、.role_cont 上缘 49%） */
+.role-info {
+  position: absolute;
+  left: clamp(150px, 16vw, 420px);
+  top: clamp(150px, 31vh, 430px);
+  width: min(520px, 33vw);
+  z-index: 3;
+  text-align: left;
+}
+
+.role-name {
+  font-size: clamp(2.1rem, 4.4vw, 3.5rem);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.15;
+  text-shadow: 0 0 36px rgba(0, 0, 0, 0.7);
+}
+
+.role-title-badge {
+  display: inline-block;
+  margin-top: 12px;
+  border: 1px solid;
   border-radius: var(--radius-full);
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  background: rgba(13, 13, 13, 0.55);
-  color: #fff;
-  font-size: 1.7rem;
+  padding: 4px 16px;
+  font-size: 0.88rem;
+  letter-spacing: 0.14em;
+  background: rgba(13, 13, 13, 0.38);
+}
+
+/* 简介 + 梦想（对应参考站 .role_text：20px/30px、#afafaf、hover 滚动、6px 滚动条 #616161/#c1c1c1） */
+.role-text {
+  margin-top: 18px;
+  color: #afafaf;
+  font-size: 0.98rem;
+  line-height: 1.75;
+  max-width: 52ch;
+  max-height: clamp(118px, 13vh, 176px);
+  overflow: hidden;
+  padding-right: 8px;
+}
+
+.role-text:hover,
+.role-text:focus-visible {
+  overflow-y: auto;
+}
+
+.role-text::-webkit-scrollbar {
+  background: #616161;
+  border-radius: 3px;
+  width: 6px;
+}
+
+.role-text::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 3px;
+}
+
+.role-bio {
+  margin-bottom: 12px;
+}
+
+.role-dream {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.role-dream-label {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  letter-spacing: 0.18em;
+  color: var(--color-accent);
+  flex-shrink: 0;
+}
+
+.role-dream-text {
+  color: #cfcfcf;
+}
+
+/* 「更多/收起」按钮（对应参考站移动端 .roleMoreDes；桌面隐藏） */
+.role-more {
+  display: none;
+}
+
+/* ---- 左侧竖排头像导航（参考站 .roleNav：深灰圆角竖条框 + 1:1 头像 + 上下箭头） ---- */
+.roles-nav {
+  position: absolute;
+  left: clamp(12px, 2.6vw, 96px);
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 12px;
+  background: rgba(40, 40, 40, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.roles-nav-item {
+  position: relative;
+  width: 62px;
+  height: 62px;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  overflow: hidden;
+  padding: 0;
+  background: #1d1d1d;
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.roles-nav-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 18%;
+  display: block;
+  filter: grayscale(0.55) brightness(0.72);
+  transition: filter 0.2s ease;
+}
+
+.roles-nav-item:hover img {
+  filter: grayscale(0.12) brightness(0.95);
+}
+
+.roles-nav-item.is-active {
+  border-color: #89ddea;
+  box-shadow: 0 0 16px rgba(80, 229, 251, 0.35);
+}
+
+.roles-nav-item.is-active img {
+  filter: none;
+}
+
+.roles-nav-arrow {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(13, 13, 13, 0.5);
+  color: #9a9a9a;
+  font-size: 1.05rem;
   line-height: 1;
   cursor: pointer;
   transition: all 0.15s ease;
   flex-shrink: 0;
 }
 
-.roles-arrow:hover {
+.roles-nav-arrow:hover {
   border-color: var(--color-accent);
   color: var(--color-accent);
-  box-shadow: 0 0 18px var(--color-accent-dim);
-}
-
-/* 底部信息条（任务要求：名字/职务/梦想） */
-.role-info-bar {
-  position: absolute;
-  left: 50%;
-  bottom: clamp(22px, 5.5vh, 52px);
-  transform: translateX(-50%);
-  width: min(880px, 94vw);
-  z-index: 4;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  gap: 6px;
-  padding: clamp(14px, 2.4vh, 22px) clamp(20px, 3vw, 32px);
-  background: linear-gradient(90deg, rgba(40, 40, 40, 0.92), rgba(49, 49, 49, 0.88));
-  border: 1px solid var(--color-line);
-  border-radius: 12px;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-}
-
-.role-info-head {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-  justify-content: center;
-}
-
-.role-name {
-  font-size: clamp(1.3rem, 3vw, 1.8rem);
-  font-weight: 700;
-}
-
-.role-title-badge {
-  border: 1px solid;
-  border-radius: var(--radius-full);
-  padding: 3px 14px;
-  font-size: 0.82rem;
-}
-
-.role-bio {
-  color: #cfcfcf;
-  font-size: 0.95rem;
-  max-width: 64ch;
-}
-
-.role-dream {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 8px;
-  font-size: 0.88rem;
-}
-
-.role-dream-label {
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-  letter-spacing: 0.18em;
-  color: var(--color-accent);
-  align-self: center;
-}
-
-.role-dream-text {
-  color: var(--color-accent-2);
-  max-width: 72ch;
+  box-shadow: 0 0 14px var(--color-accent-dim);
 }
 
 /* 世界全景（参考站 pageView：标题居中 + 场景大图 + 缩略导航 + 箭头） */
@@ -1223,42 +1274,90 @@ button {
     display: none;
   }
 
-  /* 角色：竖排导航改顶部横排；信息条压缩 */
+  /* 角色：参考站 /m/ 布局——顶部横排头像导航（左右箭头）+ 底部信息面板 + 「更多」展开 */
   .roles-nav {
     flex-direction: row;
     left: 50%;
-    top: calc(var(--nav-height) + 17vh);
+    top: calc(var(--nav-height) + 10px);
     transform: translateX(-50%);
     gap: 10px;
+    padding: 10px 12px;
   }
 
   .roles-nav-item {
-    width: 58px;
+    width: 52px;
+    height: 52px;
   }
 
-  .roles-main {
-    gap: 10px;
-    padding-top: calc(var(--nav-height) + 4vh);
+  .roles-nav-arrow {
+    width: 28px;
+    height: 28px;
+    font-size: 0.95rem;
   }
 
   .role-figure {
-    height: 44vh;
-    max-height: 420px;
+    right: 0;
+    height: clamp(280px, 46vh, 420px);
   }
 
-  .roles-arrow {
-    width: 36px;
-    height: 36px;
-    font-size: 1.3rem;
+  /* 底部信息面板（对应参考站 .roleInfoCont） */
+  .role-info {
+    left: 0;
+    right: 0;
+    top: auto;
+    bottom: 0;
+    width: 100%;
+    padding: 44px 18px calc(16px + env(safe-area-inset-bottom));
+    background: linear-gradient(180deg, transparent, rgba(13, 13, 13, 0.9) 28%);
   }
 
-  .role-info-bar {
-    bottom: 18px;
-    padding: 12px 16px;
+  .role-name {
+    font-size: clamp(1.7rem, 6.4vw, 2.1rem);
+    padding-right: 96px; /* 给右上「展开介绍」按钮让位 */
   }
 
-  .role-bio {
-    display: none;
+  .role-title-badge {
+    margin-top: 8px;
+    font-size: 0.8rem;
+  }
+
+  /* 简介默认收起（对应参考站 roleDesText 隐藏），点「展开介绍」后展示 */
+  .role-text {
+    margin-top: 12px;
+    max-height: 0;
+    padding: 0;
+    overflow: hidden;
+    transition: max-height 0.35s ease;
+  }
+
+  .role-text.is-expanded {
+    max-height: 220px;
+    padding-right: 8px;
+    overflow-y: auto;
+  }
+
+  .role-more {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid rgba(124, 227, 242, 0.55);
+    border-radius: var(--radius-full);
+    background: rgba(13, 13, 13, 0.4);
+    color: var(--color-accent-2);
+    font-size: 0.8rem;
+    letter-spacing: 0.1em;
+    padding: 5px 14px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .role-more:hover {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+    box-shadow: 0 0 12px var(--color-accent-dim);
   }
 
   .world-caption {
@@ -1317,30 +1416,6 @@ button {
     font-size: 0.9rem;
   }
 
-  .role-figure {
-    height: 42vh;
-  }
-
-  .role-bio {
-    display: none;
-  }
-
-  .roles-arrow {
-    width: 32px;
-    height: 32px;
-    font-size: 1.2rem;
-  }
-
-  .role-info-bar {
-    bottom: 12px;
-    padding: 8px 14px;
-    gap: 2px;
-  }
-
-  .role-dream {
-    font-size: 0.8rem;
-  }
-
   .world-caption {
     bottom: 76px;
   }
@@ -1355,6 +1430,76 @@ button {
 
   .hero-title {
     margin: var(--space-3) 0;
+  }
+}
+
+/* 矮屏且非移动布局（桌面小窗口/横屏）：角色信息区上移压缩，避免与立绘/底部重叠 */
+@media (max-height: 660px) and (min-width: 901px) {
+  .role-figure {
+    height: clamp(300px, 52vh, 440px);
+  }
+
+  .role-info {
+    top: clamp(110px, 24vh, 240px);
+  }
+
+  .role-name {
+    font-size: clamp(1.6rem, 3.4vw, 2.2rem);
+  }
+
+  .role-text {
+    max-height: clamp(88px, 12vh, 120px);
+  }
+
+  .role-bio {
+    margin-bottom: 8px;
+  }
+
+  .role-dream {
+    padding-top: 8px;
+    font-size: 0.86rem;
+  }
+}
+
+/* 矮屏移动布局（横屏手机/小窗口）：底部信息面板压缩、立绘收窄 */
+@media (max-width: 900px) and (max-height: 660px) {
+  .roles-nav {
+    top: calc(var(--nav-height) + 6px);
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .roles-nav-item {
+    width: 44px;
+    height: 44px;
+  }
+
+  .role-figure {
+    height: clamp(150px, 42vh, 260px);
+  }
+
+  .role-info {
+    padding-top: 30px;
+    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  }
+
+  .role-name {
+    font-size: 1.5rem;
+  }
+
+  .role-title-badge {
+    margin-top: 6px;
+  }
+
+  .role-text.is-expanded {
+    max-height: 150px;
+  }
+
+  .role-more {
+    top: 10px;
+    right: 10px;
+    padding: 3px 12px;
+    font-size: 0.74rem;
   }
 }
 
