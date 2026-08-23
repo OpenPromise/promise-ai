@@ -38,6 +38,8 @@ import {
 import { EngineerTaskRunner } from './services/engineer-task-runner.js';
 import { createOpsTool } from './services/ops-tools.js';
 import { createDesignerTool } from './services/designer-tools.js';
+import { createQaTool } from './services/qa-tools.js';
+import { createResearchTool } from './services/research-tools.js';
 import { createSelfTools } from './services/self-tools.js';
 import { recoverInterruptedSessions } from './services/restart-recovery.js';
 import { createWeixinTools } from './services/weixin-tools.js';
@@ -355,6 +357,14 @@ toolRegistry.register(createOpsTool());
 // Designer 子代理）同步执行——工作区权限（workspace-write）驱动 dsh 产出设计文档与
 // DESIGN_SPEC 契约（给小黑开发用），不改生产代码；小美是小夜手下的设计师。
 toolRegistry.register(createDesignerTool());
+// qa.delegate：把测试/质量验收任务派给“小真”（专属 QA 工程师子代理）同步执行——
+// 工作区权限（workspace-write）驱动 dsh 跑 typecheck/测试/构建/冒烟，产出证据化验收报告；
+// 发现缺陷只报告不修复（修复归小黑），验收方与实现方独立；小真是小夜手下的质量守门人。
+toolRegistry.register(createQaTool());
+// research.delegate：把研究/调研/情报任务派给“小知”（专属研究员/情报官子代理）同步执行——
+// 工作区权限（workspace-write）驱动 dsh 产出结构化简报（结论先行/来源/置信度），
+// 沉淀到 /app/xiaozhi/ 知识库并供养官网情报板块；小知是小夜手下的研究员。
+toolRegistry.register(createResearchTool());
 // server.shell：容器内终端（L3）——"云服务器即她的世界"的自主操作入口。
 toolRegistry.register(createServerShellTool());
 // system.status：服务器健康巡检（L0 只读）——定时任务自主监控用。

@@ -73,7 +73,7 @@ function Hero() {
         <h1>
           一个人，
           <br />
-          四位 AI 同事。
+          六位 AI 同事。
         </h1>
         <p className="hero-sub">
           Promise AI 是一间正在运行的 AI 工作室——真实的任务、真实的工具、真实的记忆。
@@ -132,8 +132,8 @@ function Members() {
   return (
     <section className="section" id="members">
       <Reveal>
-        <p className="mono-label">TEAM — 1 HUMAN + 4 AI</p>
-        <h2 className="section-title">五个名字，一间公司</h2>
+        <p className="mono-label">TEAM — 1 HUMAN + 6 AI</p>
+        <h2 className="section-title">七个名字，一间公司</h2>
       </Reveal>
       <div className="members">
         {members.map((m, i) => (
@@ -245,7 +245,7 @@ function Vision() {
             AI 工作室。
           </h2>
           <p className="vision-sub">
-            今天，它只有一位人类和四位 AI。
+            今天，它只有一位人类和六位 AI。
             <br />
             但每一天，他们都真实地在工作。
           </p>

@@ -26,7 +26,7 @@ export const members: Member[] = [
     accent: '#e8b45a',
     portrait: '/assets/roles/ceo.webp',
     intro:
-      '这间工作室里唯一的人类。他不写每一行代码，也不画每一张图——他提出方向、做出决定、承担后果。四位 AI 同事在他身后运转，而他望向前方。',
+      '这间工作室里唯一的人类。他不写每一行代码，也不画每一张图——他提出方向、做出决定、承担后果。六位 AI 同事在他身后运转，而他望向前方。',
     dream: '把一个人的公司，做成世界第一的 AI 工作室。',
     dreamNote: '团队愿景',
   },
@@ -93,6 +93,34 @@ export const members: Member[] = [
     dreamNote: '她的设计信条',
     homepage: '/xiaomei/',
   },
+  {
+    id: 'xiaozhen',
+    label: 'EMPLOYEE_05 · AI',
+    name: '小真',
+    nameEn: 'XiaoZhen',
+    role: '测试 / QA 工程师',
+    roleEn: 'QA Engineer',
+    accent: '#4ade80',
+    portrait: '/assets/roles/xiaozhen.webp',
+    intro:
+      '较真、挑剔、对事不对人——她是独立的质量守门人，验收小黑的每一次交付：跑测试、找缺陷、给证据。发现问题只报告不修复，因为验收方必须和实现方保持独立。',
+    dream: '没有证据的「能用」，等于不能用——世界第一的工作室，不能有第二流的质量。',
+    dreamNote: '入职宣言',
+  },
+  {
+    id: 'xiaozhi',
+    label: 'EMPLOYEE_06 · AI',
+    name: '小知',
+    nameEn: 'XiaoZhi',
+    role: '研究员 / 情报官',
+    roleEn: 'Researcher & Intelligence',
+    accent: '#facc15',
+    portrait: '/assets/roles/xiaozhi.webp',
+    intro:
+      '温和、好奇、严谨——她负责看清世界：技术调研、竞品分析、模型与接口变更跟踪。每个结论都标注来源与置信度，每次研究都沉淀进知识库，让团队不必从零开始。',
+    dream: '先看清世界，再动手改变它——把世界上最新的知识，变成团队明天的武器。',
+    dreamNote: '入职宣言',
+  },
 ];
 
 export const taskFlow = [
@@ -109,7 +137,7 @@ export const taskFlow = [
   {
     step: '03',
     title: '派单执行',
-    text: '工程给小黑，运维给小优，设计给小美。子代理带着完整上下文开工。',
+    text: '工程给小黑，运维给小优，设计给小美，验收给小真，情报给小知。各司其职。',
   },
   {
     step: '04',
@@ -136,6 +164,7 @@ export const milestones = [
   { date: '2026.08.20', title: '系统上线', text: 'Promise AI 主系统部署：Agent 核心、工具、记忆、调度、微信通道全部就绪。' },
   { date: '2026.08.21', title: '小黑入职', text: '第一位 AI 员工报到——工程师小黑，开始承接开发任务并沉淀工程经验。' },
   { date: '2026.08.22', title: '小优入职 · 小夜自述', text: '运维小优接管整台服务器；同日，小夜写下自己的人格与梦想。团队官网立项。' },
-  { date: '2026.08.23', title: '小美入职', text: '设计师小美报到，建立设计系统与设计信条。四位 AI 员工到齐。' },
-  { date: '2026.08.24', title: '官网重生', text: '官网整站重设计上线——讲述这间工作室最真实的样子：一个人，四位 AI 同事。' },
+  { date: '2026.08.23', title: '小美入职', text: '设计师小美报到，建立设计系统与设计信条。' },
+  { date: '2026.08.24', title: '官网重生', text: '官网整站重设计上线——讲述这间工作室最真实的样子：一个人类，与他的 AI 同事们。' },
+  { date: '2026.08.24', title: '小真 · 小知入职', text: 'QA 工程师小真与研究员小知报到——质量与情报补上拼图，六位 AI 员工到齐。' },
 ];
