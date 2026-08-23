@@ -30,6 +30,7 @@ export default function NavBar({
             key={s.id}
             type="button"
             className={`nav-link${active === s.id ? ' is-active' : ''}`}
+            aria-current={active === s.id ? 'page' : undefined}
             onClick={() => onNavigate(s.id)}
           >
             {s.label}

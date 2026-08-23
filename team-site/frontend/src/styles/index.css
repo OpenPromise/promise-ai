@@ -161,7 +161,7 @@ button {
   padding: var(--space-6) 0;
 }
 
-/* ---------- 顶栏（参考站 header：logo 左、导航居中、hover/active 青色提亮发光） ---------- */
+/* ---------- 顶栏（1:1 参考站 .header：实底 #1d1d1d 固定条 + 居中紧贴黑底白字按钮组，逆向见 docs/navbar-news-1to1.md §3） ---------- */
 .nav {
   position: fixed;
   top: 0;
@@ -171,11 +171,8 @@ button {
   height: var(--nav-height);
   display: flex;
   align-items: center;
-  padding: 0 clamp(16px, 3vw, 48px);
+  padding: 0 clamp(16px, 4.6vw, 118px) 0 clamp(16px, 6.6vw, 170px); /* 参考 .logo left 170px 设计稿 */
   background: var(--nav-bg);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border-bottom: 1px solid var(--color-line);
 }
 
 .nav-logo {
@@ -185,13 +182,15 @@ button {
   text-decoration: none;
   color: var(--color-text);
   white-space: nowrap;
+  height: 3.32vw;
+  max-height: 85px;
 }
 
 .nav-logo-mark {
   font-family: var(--font-mono);
   color: var(--color-accent);
   font-weight: 700;
-  font-size: 1.05rem;
+  font-size: clamp(0.9rem, 1.2vw, 1.35rem);
   border: 1px solid var(--color-accent);
   border-radius: var(--radius-sm);
   padding: 1px 6px;
@@ -199,52 +198,57 @@ button {
 }
 
 .nav-logo-text {
-  font-size: 1.05rem;
+  font-size: clamp(0.95rem, 1.25vw, 1.4rem);
   font-weight: 600;
   letter-spacing: 0.08em;
 }
 
+/* 参考站 .headerNav：绝对居中、按钮紧贴无间距、黑底白字 */
 .nav-links {
   position: absolute;
   left: 50%;
-  transform: translateX(-50%);
+  top: 50%;
+  transform: translate(-50%, -50%);
   display: flex;
-  gap: clamp(18px, 3.2vw, 44px);
   align-items: center;
 }
 
 .nav-link {
   position: relative;
-  background: none;
+  z-index: 2;
+  width: var(--nav-btn-w);
+  height: var(--nav-btn-h);
+  background: #0a0a0a;
   border: none;
-  color: var(--color-text-2);
+  color: #fff;
   cursor: pointer;
-  font-size: 1rem;
-  letter-spacing: 0.06em;
-  padding: 6px 2px;
+  font-size: clamp(0.85rem, 1.1vw, 1.3rem);
+  letter-spacing: 0.08em;
   transition: color 0.15s ease, text-shadow 0.15s ease;
   white-space: nowrap;
 }
 
 .nav-link:hover {
   color: #fff;
-  text-shadow: 0 0 14px rgba(80, 229, 251, 0.9);
+  text-shadow: 0 0 16px rgba(80, 229, 251, 0.95);
 }
 
 .nav-link.is-active {
   color: var(--color-accent);
-  text-shadow: 0 0 14px rgba(80, 229, 251, 0.9);
+  text-shadow: 0 0 18px rgba(80, 229, 251, 0.95);
 }
 
-.nav-link.is-active::after {
+/* 参考站 .headerNav::before：#1d1d1d 条带垫在按钮后（z-index 低于按钮、高于 header 底色） */
+.nav-links::before {
   content: '';
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -4px;
-  height: 2px;
-  background: var(--color-accent);
-  box-shadow: 0 0 10px var(--color-accent);
+  left: -1.5%;
+  top: 50%;
+  transform: translateY(-50%);
+  height: var(--nav-height);
+  width: 103%;
+  background: #1d1d1d;
+  z-index: 1;
 }
 
 /* ---------- 按钮（style-guide §5：深底 + 青色描边 + hover 提亮光晕） ---------- */
@@ -408,7 +412,9 @@ button {
   letter-spacing: 0.18em;
 }
 
-/* ---------- 情报速递（参考站 pageNews：装饰线 + Tab + 行列表） ---------- */
+/* ---------- 情报速递（1:1 参考站 pageNews，逆向见 docs/navbar-news-1to1.md §4）
+ * 结构：左右装饰细线 + 标题区（对齐 .newsHead 艺术字标题图）+ 方形斜切 Tab + 行列表
+ * 行：斜切徽章 / #dfdfdf 标题 hover 青 / MM-DD 日期右对齐 / 行底 3px #313131 ---------- */
 .news-inner {
   position: absolute;
   inset: 0;
@@ -420,6 +426,7 @@ button {
   padding: var(--nav-height) 4vw 0;
 }
 
+/* 左右装饰细线（参考站 .pageNews::before/::after：7px 高、白点、左右断开） */
 .news-inner .section-lines {
   top: calc(var(--nav-height) + 1.2vh);
 }
@@ -427,74 +434,70 @@ button {
 .news-inner .section-head {
   position: static;
   transform: none;
-  margin-bottom: var(--space-5);
+  margin-bottom: clamp(12px, 1.4vw, 36px);
 }
 
+/* Tab（参考站 .newsNav：方形黑底白字，激活 = #1d1d1d 底 + skew(-15deg) + 内层反切） */
 .tabs {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: var(--space-3);
-  margin-bottom: var(--space-4);
+  gap: clamp(6px, 0.39vw, 10px);
+  margin-bottom: clamp(8px, 1vw, 26px);
 }
 
 .tab {
-  padding: 7px 22px;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--color-line);
-  background: var(--color-panel);
-  color: var(--color-text-2);
-  font-size: 0.95rem;
+  width: var(--news-tab-w);
+  height: var(--news-tab-h);
+  background: #101010;
+  border: none;
+  border-radius: clamp(4px, 0.39vw, 10px);
+  color: #fff;
+  font-size: clamp(0.82rem, 1.1vw, 1.15rem);
+  letter-spacing: 0.1em;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: color 0.15s ease, text-shadow 0.15s ease;
+  transform: skew(-15deg);
+}
+
+.tab > span {
+  display: inline-block;
+  transform: skew(15deg);
 }
 
 .tab:hover {
-  border-color: var(--color-accent);
-  color: var(--color-accent);
+  color: var(--color-accent-2);
+  text-shadow: 0 0 12px rgba(80, 229, 251, 0.7);
 }
 
 .tab.is-active {
-  background: var(--color-accent-dim);
-  border-color: var(--color-accent);
-  color: var(--color-accent);
-  box-shadow: 0 0 16px var(--color-accent-dim);
+  background: #1d1d1d;
+  color: var(--color-accent-2);
+  text-shadow: 0 0 14px rgba(80, 229, 251, 0.85);
 }
 
 .news-list {
-  width: min(940px, 94vw);
+  width: clamp(380px, 36.2vw, 940px); /* 参考 .newsCont 927px 设计稿等比：1920 屏 ≈695px */
 }
 
-/* 行列表（参考站 .newsCont .newsItem：底边框 #313131、标题 #dfdfdf、hover 提亮） */
+/* 行列表（参考站 .newsCont .newsItem：底边框 3px #313131、行高 90px 设计稿、无摘要/无置顶标） */
 .news-item-row {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
-  padding: 13px 6px;
-  border-bottom: 1px solid var(--color-line-strong);
-  transition: background 0.15s ease;
-}
-
-.news-item-row:hover {
-  background: rgba(124, 227, 242, 0.045);
-}
-
-.news-item-row.is-pinned {
-  box-shadow: inset 3px 0 0 var(--color-accent);
-}
-
-.news-title-col {
-  flex: 1;
-  min-width: 0;
+  gap: var(--news-title-ml);
+  min-height: var(--news-row-h);
+  padding: 0 4px;
+  border-bottom: 2px solid var(--color-line-strong);
 }
 
 .news-title {
-  font-size: 1.02rem;
-  font-weight: 500;
+  font-size: var(--news-title-fs);
+  font-weight: 400;
   color: var(--color-title-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: var(--news-title-w);
   transition: color 0.15s ease;
 }
 
@@ -502,39 +505,25 @@ button {
   color: var(--color-accent-2);
 }
 
-.news-summary {
-  font-size: 0.82rem;
-  color: var(--color-text-3);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin-top: 2px;
-}
-
-.news-pin {
-  font-size: 0.72rem;
-  color: var(--color-accent);
-  border: 1px solid var(--color-accent);
-  border-radius: var(--radius-full);
-  padding: 1px 8px;
-  white-space: nowrap;
-}
-
 .news-date {
   font-family: var(--font-mono);
   color: var(--color-title-text);
-  font-size: 0.8rem;
+  font-size: clamp(0.78rem, 1vw, 1.05rem);
+  margin-left: auto;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
-/* 类型徽章：实色 + 斜切（参考站 .newsItem .type：skew(-15deg)，内层反切保持文字正向） */
+/* 类型徽章：实色 + 斜切（参考站 .newsItem .type：95×37px、skew(-15deg)、内层反切） */
 .type-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 3px 12px;
-  border-radius: 3px;
-  font-size: 0.76rem;
+  min-width: var(--news-badge-w);
+  height: var(--news-badge-h);
+  padding: 0 10px;
+  border-radius: clamp(2px, 0.2vw, 5px);
+  font-size: clamp(0.7rem, 0.94vw, 1rem);
   font-weight: 600;
   transform: skew(-15deg);
   white-space: nowrap;
@@ -1234,12 +1223,15 @@ button {
     padding: 0 var(--space-4);
   }
 
+  .nav-logo {
+    height: auto;
+  }
+
   .nav-logo-text {
     display: none;
   }
 
   .nav-links {
-    gap: 16px;
     left: auto;
     right: var(--space-4);
     transform: none;
@@ -1248,12 +1240,24 @@ button {
     scrollbar-width: none;
   }
 
+  .nav-links::before {
+    display: none;
+  }
+
   .nav-links::-webkit-scrollbar {
     display: none;
   }
 
   .nav-link {
+    width: auto;
+    height: auto;
+    background: none;
     font-size: 0.92rem;
+    padding: 6px 10px;
+  }
+
+  .nav-link.is-active {
+    color: var(--color-accent);
   }
 
   .news-inner {
@@ -1263,15 +1267,19 @@ button {
 
   .news-item-row {
     gap: var(--space-3);
-    padding: 10px 4px;
+    padding: 0 2px;
   }
 
   .news-title {
     font-size: 0.94rem;
+    max-width: 52vw;
   }
 
-  .news-summary {
-    display: none;
+  .tab {
+    width: auto;
+    height: auto;
+    padding: 8px 18px;
+    font-size: 0.88rem;
   }
 
   /* 角色：参考站 /m/ 布局——顶部横排头像导航（左右箭头）+ 底部信息面板 + 「更多」展开 */
@@ -1405,15 +1413,20 @@ button {
   }
 
   .news-inner .section-head {
-    margin-bottom: var(--space-3);
+    margin-bottom: var(--space-2);
   }
 
   .news-item-row {
-    padding: 7px 4px;
+    min-height: 40px;
   }
 
   .news-title {
     font-size: 0.9rem;
+  }
+
+  .tab {
+    padding: 6px 14px;
+    font-size: 0.82rem;
   }
 
   .world-caption {

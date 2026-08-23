@@ -48,11 +48,13 @@
   --radius-lg: 16px;
   --radius-full: 999px;
 
-  /* 6. 导航栏 */
-  --nav-bg: rgba(13, 13, 13, 0.72);
-  --nav-height: 64px;
+  /* 6. 导航栏（对齐参考站 .header：118px 设计稿 = 4.6vw 等比，1920 屏 ≈88px；实底 #1d1d1d） */
+  --nav-bg: #1d1d1d;
+  --nav-height: clamp(56px, 4.6vw, 92px);
+  --nav-btn-w: clamp(96px, 9.41vw, 241px); /* 参考 .headerNav button 241px 设计稿 */
+  --nav-btn-h: clamp(30px, 1.56vw, 40px); /* 参考 .headerNav button 40px 设计稿 */
 
-  /* 7. 参考站细节色（逆向自 main260813.css，2026-08-22 复抓确认） */
+  /* 7. 参考站细节色（逆向自 main260813.css，2026-08-23 导航/情报速递复抓确认） */
   --color-title-text: #dfdfdf; /* 列表标题（参考站 .newsItem .title） */
   --color-line-strong: #313131; /* 行分割线（.newsCont .newsItem 底边框） */
   --color-frame: #363636; /* 板块边框（.newsSwiper） */
@@ -63,4 +65,13 @@
   --color-badge-cyan-text: #313131;
   --color-badge-pink: #fe5a95; /* 牢骚徽章底（.gamebroad） */
   --color-badge-purple: #7958cb; /* 入职徽章底（.gameevent） */
+  /* 情报速递行/徽章/Tab（参考站 pageNews 实测值，2560 设计稿等比） */
+  --news-row-h: clamp(48px, 3.52vw, 90px); /* 参考 .newsCont .newsItem 行高 90px */
+  --news-title-fs: clamp(0.95rem, 1.17vw, 1.4rem); /* 参考 .newsItem font-size 30px */
+  --news-badge-w: clamp(62px, 3.71vw, 95px); /* 参考 .type 95px */
+  --news-badge-h: clamp(24px, 1.45vw, 37px); /* 参考 .type 37px */
+  --news-tab-w: clamp(88px, 6.13vw, 157px); /* 参考 .newsNav span 157px */
+  --news-tab-h: clamp(30px, 2.42vw, 62px); /* 参考 .newsNav span 62px */
+  --news-title-ml: clamp(14px, 1.29vw, 33px); /* 参考 .newsItem .title margin-left 33px */
+  --news-title-w: clamp(220px, 21.48vw, 550px); /* 参考 .newsItem .title 宽度 550px */
 }

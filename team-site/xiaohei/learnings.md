@@ -41,3 +41,27 @@
 - **触发场景**：无角色视频，用静态图模拟"立绘入画"构图。
 - **动作**：world 图作背景 + 2:3 立绘放右侧（`mask-image` 底部/左缘渐变融入背景 + 背后青色氛围光 + brightness(1.12) 提亮），暗色素材需适度提亮否则与背景糊在一起（小黑场景过暗，亮度 0.72→0.8 + 立绘 1.12 后结构可见）。
 - **证据**：截图像素统计立绘区亮度对比；未在真实设备/多浏览器验证，待验证。
+
+## 6. 参考站导航栏 + 情报速递逆向（2026-08-23，高置信）
+
+- **触发场景**：1:1 复刻 yh.wanmei.com/main.html 顶栏 + pageNews。
+- **动作/结论**：
+  - 顶栏（`.header`，样式在 **public260423.css** 而非 main260813.css）：**实底 #1d1d1d** 固定条，高 118px 设计稿（4.6vw），右侧贴 664×144 品牌字标图；logo 左 170px 设计稿；导航组绝对居中、按钮 **241×40 紧贴无间距**、三态 sprite（0/-40/-80px 切 hover/active）。
+  - 导航 sprite 实测（headerNav1-6.png）：黑底白字，**hover/active 是"白→灰"暗化而非提亮**，青色像素为 0——与任务要求"提亮青色"矛盾，按监督者要求实现（见 docs/navbar-news-1to1.md §3.3）。
+  - pageNews：左列（927 宽：926×196 标题图 + 内嵌 Tab 157×62 + 5 行列表）+ 右列（926×468 边框图轮播）+ 顶部 y=705 装饰细线（7px 高、白点、左右断开各距中心 1000px）。
+  - 行结构 = 徽章（95×37 skew(-15deg) 内层反切，青/粉/紫）+ 标题（#dfdfdf 30px 设计稿，hover #7ce3f2）+ 日期（MM/DD 右对齐），**无摘要/无封面/无置顶标**；每频道 5 条。
+  - Tab 激活态 = #1d1d1d 底 + radius 10 + skew(-15deg)，内层按钮反切 skew(15deg)（`transform` 内层反切是 sprite 切态的通用技法）。
+  - 移动端 /m/ 是独立页面：轮播在上、列表在下（居中 6.14rem），Tab 居中，gamenews 徽章用 #51e5fb（与桌面 #7ce3f2 不同）。
+- **证据**：4 份 CSS/JS/数据 + 13 张素材全部抓到并解析；无头浏览器实测几何（header 88.5px@1920、按钮 180.75×30、行高 67.5、徽章 78.7×27.75、日期右边缘=列右缘）；完整记录见 `docs/navbar-news-1to1.md`。
+
+## 7. headless-shell 截图不渲染背景色（高置信，本次新发现）
+
+- **触发场景**：想用截图做参考站像素级取色/对齐验证。
+- **动作/结论**：此环境 chrome-headless-shell 152 的截图合成器**不绘制元素背景色**——连 `setContent('<div style="background:#fe5a95">')` 的纯色 div 截出来都是黑（换 `--use-gl=angle/--use-angle=swiftshader/--disable-gpu-compositing` 均无效）；但文字、边框、背景图线条能渲染。→ **像素截图验证在此环境不可靠**，改用 DOM 几何（getBoundingClientRect）+ getComputedStyle 断言（与上轮角色板块同法）；参考站颜色以 CSS 源码声明为准。
+- **证据**：纯色 div 三组渲染参数截图中心像素均 (0,0,0)；注入参考站页内同样全黑；几何断言 28/28 通过。
+
+## 8. 参考站资源抓取要点（高置信）
+
+- **触发场景**：抓 yh.wanmei.com 资源。
+- **动作**：header 样式在 `style/public260423.css`（不在 main260813.css）；导航/新闻素材在 `images/cover250513/`、`images/main260326/`、`images/cover240718/` 目录；移动版是 `m/` 独立子站（m/style/main260813.css）；新闻数据在 `include/newsData20260112.js`（全局 `newsdataObj`，pc/m 双份）；所有资源直链可 curl（图片无需 Referer）。
+- **证据**：本任务 4 CSS/JS + 13 图片全部 200 抓取成功。
