@@ -4,17 +4,19 @@
   config:
     providers:
       openai:
-        displayName: OpenAI
+        displayName: ApexApi (OpenAI-compatible)
         apiKeyEnv: OPENAI_API_KEY
+        api: openai-responses
+        baseURL: https://apexapi.roixw.com/v1
         models:
-          - id: gpt-4.1
-            name: GPT-4.1
+          - id: gpt-5.6-sol
+            name: GPT-5.6 Sol
             contextWindow: 1048576
             maxTokens: 32768
 - id: agent-default-model
   config:
     provider: openai
-    model: gpt-4.1
+    model: gpt-5.6-sol
 - id: web
   disabled: true
 - id: web-search-deepseek
