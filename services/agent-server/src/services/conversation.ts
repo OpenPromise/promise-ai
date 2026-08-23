@@ -851,7 +851,7 @@ export class ConversationService {
       let summary = '';
       const messagesForTurn: LLMChatMessage[] = [
         { role: 'system', content: COMPACTION_PROMPT },
-        ...toLLMMessages(oldMessages),
+        ...repairToolResultPairing(toLLMMessages(oldMessages)),
       ];
       for await (const chunk of chatWithTimeoutAndRetry(this.#llm, {
         messages: messagesForTurn,
