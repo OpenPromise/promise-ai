@@ -9,6 +9,11 @@
 - 新增 ops.delegate（小优运维工程师子代理），复用 dsh 底盘注入运维人格，
   全权限（danger-full-access）管理整个服务器（监控/部署/巡检/故障/安全/自动化）；
   新增 /xiaoyou 欢迎主页（调皮可爱风）
+- 新增 designer.delegate（小美设计师子代理）：复用 dsh 底盘注入产品/UI/视觉设计
+  人格，以工作区权限（workspace-write）同步执行，产出机器可读契约 DESIGN_SPEC
+  给小黑开发；新增 /xiaomei 欢迎主页（极简高级设计风：留白/黑白灰 + 品牌点缀色）
+  与专属知识库（identity 人格 / rules 设计原则 / references 品牌分析 /
+  design-system tokens / output 产出目录）
 
 ## [0.14.32] - 2026-08-20
 

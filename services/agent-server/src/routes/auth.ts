@@ -1,5 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { IncomingHttpHeaders } from 'node:http';
 
 /**
@@ -19,6 +19,7 @@ const EXEMPT_PATHS = new Set([
   '/xiaohei',
   '/xiaoyou',
   '/xiaoye',
+  '/xiaomei',
 ]);
 
 /**
@@ -26,7 +27,7 @@ const EXEMPT_PATHS = new Set([
  * 静态资源。必须带尾斜杠且逐项前缀匹配，避免 /xiaohei-other 之类被误豁免。
  * 含 .. 段（路径穿越）的请求一律不豁免（见 isAuthExemptPath）。
  */
-const EXEMPT_PATH_PREFIXES = ['/xiaohei/', '/xiaoyou/', '/xiaoye/'];
+const EXEMPT_PATH_PREFIXES = ['/xiaohei/', '/xiaoyou/', '/xiaoye/', '/xiaomei/'];
 
 /** hooks 有自己的 HOOK_SECRET + 恒定时间比较，外部系统无法带 API token。 */
 const HOOK_PATH_PREFIX = '/api/hooks/';

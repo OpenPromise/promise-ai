@@ -37,6 +37,7 @@ import {
 } from './services/engineer-tools.js';
 import { EngineerTaskRunner } from './services/engineer-task-runner.js';
 import { createOpsTool } from './services/ops-tools.js';
+import { createDesignerTool } from './services/designer-tools.js';
 import { createSelfTools } from './services/self-tools.js';
 import { recoverInterruptedSessions } from './services/restart-recovery.js';
 import { createWeixinTools } from './services/weixin-tools.js';
@@ -350,6 +351,10 @@ toolRegistry.register(createEngineerStatusTool(engineerTaskRunner));
 // 全权限（danger-full-access）驱动 dsh 管理整台服务器（监控/部署/巡检/故障/安全/自动化），
 // 权限与小夜同级；小优是小夜手下的运维专员。
 toolRegistry.register(createOpsTool());
+// designer.delegate：把产品设计/UX/UI/视觉设计任务派给"小美"（专属 Product/UI/Visual
+// Designer 子代理）同步执行——工作区权限（workspace-write）驱动 dsh 产出设计文档与
+// DESIGN_SPEC 契约（给小黑开发用），不改生产代码；小美是小夜手下的设计师。
+toolRegistry.register(createDesignerTool());
 // server.shell：容器内终端（L3）——"云服务器即她的世界"的自主操作入口。
 toolRegistry.register(createServerShellTool());
 // system.status：服务器健康巡检（L0 只读）——定时任务自主监控用。

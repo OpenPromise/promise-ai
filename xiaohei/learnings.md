@@ -758,3 +758,49 @@
    - 触发场景：想手工验证 ops.delegate 端到端成功路径，dsh 启动阶段写 profile 失败（landlock 只放行 /app 与临时区）。
    - 动作：设置 `DSH_HOME=/tmp/dsh-manual-home` 后重试成功（dsh 配置目录可被 DSH_HOME 覆盖，凭据仍可解析）——手工验证用此技巧；但生产容器内 /root/.dsh 可写，不需要。
    - 证据：EACCES open '/root/.dsh/profiles/headless/cordis.yml' → DSH_HOME 覆盖后 exit 0 且小优报告落盘。单次观察，待在生产容器复验。
+
+---
+
+## 二十八、团队建设：招了小美（2026-08-23）
+
+> 落地"小美"设计师子代理：designer.delegate 工具 + 专属主页 /xiaomei + 知识库
+> （identity/rules/references/design-system/output）。与招小优（ops.delegate）同款
+> "子代理 + 专属页面 + 知识库"三件套模式，本次把知识库做厚了（此前小优只有主页）。
+
+1. **【高置信·本次验证】新成员"三件套"模式可复制：delegate 工具 + 欢迎主页路由 + 专属知识库**
+   - 触发场景：再招一个子代理成员（工程师/运维之后的设计师），要接入现有派单-监督工作流。
+   - 动作：①工具层照 ops-tools.ts 结构写 designer-tools.ts（XIAO_MEI_PROMPT 人格 +
+     buildXiaoMeiTask 任务单 + createDesignerTool，同步 runDshHeadless 执行）；
+     **权限按职责定**——小美只产出设计文档，用 `permissionMode: 'workspace-write'`（L1），
+     小优管整台服务器才用 danger-full-access；②路由照 xiaoyou.ts 抄（import.meta.url
+     向上 4 级定位仓库根 + safeResolve 兜底 404），app.ts 注册 + auth.ts 三处豁免
+     （EXEMPT_PATHS 精确路径 + EXEMPT_PATH_PREFIXES 子路径前缀，防 /xiaomei-other 误豁免）；
+     ③知识库放 /app/<成员名>/ 下按职能拆（identity/rules/references/design-system/output）。
+   - 证据：designer-tools.test.ts 8 断言 + app.test.ts /xiaomei 200 含"小美" + auth.test.ts
+     豁免/不误伤断言全绿；typecheck + 全量 test 通过。
+
+2. **【高置信·本次验证】首页风格必须与既有成员"一眼可辨"：用品牌色家族反着用**
+   - 触发场景：新成员主页不能撞风格——小黑深黑科技感（#04070d+#22d3ee）、
+     小优粉色俏皮（#ff6fb5/#ffe0ef），小美再来一个深色/粉色就分不清。
+   - 动作：小美走"极简高级"：白底 #fafafa + 墨色 #1d1d1d + 细线分隔 + 衬线大字标题
+     （杂志/画廊感），品牌点缀色仍复用官网 style-guide 的 #50e5fb 但只做小面积
+     accent（同家族不同气质——"反着用"：别人深底亮色，她浅底墨字）。
+   - 证据：与 xiaoyou（浅粉底+卡通）对比肉眼可辨；设计 token 仍对齐
+     team-site/docs/style-guide.md 色板（#1d1d1d/#50e5fb），视觉家族不分裂。
+
+3. **【高置信·本次验证】Design System 的"初始值"可以直接复用官网 style-guide 色板**
+   - 触发场景：新成员知识库要建 tokens.json（colors/typography/spacing/radius/shadows），
+     从头发明一套色板会与官网（#1d1d1d 深底 + #50e5fb 青）割裂。
+   - 动作：颜色初始值照抄 team-site/docs/style-guide.md 的 token 表（含用途列），
+     再补浅色界面中性色（#fafafa/#4a4a4a/#8a8a8a）与语义色（success/warning/danger
+     浅深两套）；每个 token 带 description，避免"有值无义"。
+   - 证据：tokens.json 通过 JSON.parse 校验；README 写明与官网 tokens.css 的关系
+     （同家族、语义命名优先）。
+
+4. **【低置信·单次观察·待验证】app.test.ts 的 /xiaomei 200 断言依赖真实 /app/xiaomei/index.html**
+   - 触发场景：先加路由测试断言（expect body 含"小美"）再建主页文件，测试会 500。
+   - 动作：先写 index.html 再跑 app.test.ts（文件从仓库根经 import.meta.url 定位，
+     不存在即 500，测试不 mock 文件系统）。
+   - 证据：第一次跑 app.test.ts 前先建了 index.html，58/58 通过；单次观察，待验证
+     （若后续测试环境有独立 fixture 再改）。
+

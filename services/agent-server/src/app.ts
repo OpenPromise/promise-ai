@@ -17,6 +17,7 @@ import { registerHealthRoutes } from './routes/health.js';
 import { registerApiAuth } from './routes/auth.js';
 import { registerXiaoheiRoutes } from './routes/xiaohei.js';
 import { registerXiaoyouRoutes } from './routes/xiaoyou.js';
+import { registerXiaomeiRoutes } from './routes/xiaomei.js';
 import { registerXiaoyeRoutes } from './routes/xiaoye.js';
 import { registerSessionRoutes } from './routes/sessions.js';
 import { registerVoiceRoutes } from './routes/voice.js';
@@ -112,6 +113,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerXiaoheiRoutes(app);
   // 小优欢迎主页：http://<host>:3000/xiaoyou
   registerXiaoyouRoutes(app);
+  // 小美欢迎主页：http://<host>:3000/xiaomei
+  registerXiaomeiRoutes(app);
   registerXiaoyeRoutes(app);
   if (deps.subscribeTaskEvents || deps.subscribeReminderEvents || deps.subscribeEngineerEvents) {
     registerEventRoutes(app, {
