@@ -60,8 +60,8 @@ function Hero() {
     <header className="hero" id="top">
       <video
         className="hero-video"
-        src="/assets/videos/hero.mp4"
-        poster="/assets/scenes/group.webp"
+        src="/assets/videos/hero-v2.mp4"
+        poster="/assets/scenes/group-v2.webp"
         autoPlay
         muted
         loop
@@ -234,7 +234,7 @@ function Journey() {
 function Vision() {
   return (
     <section className="vision" id="vision">
-      <img className="vision-bg" src="/assets/scenes/group.webp" alt="" aria-hidden />
+      <img className="vision-bg" src="/assets/scenes/group-v2.webp" alt="" aria-hidden />
       <div className="vision-shade" />
       <div className="vision-content">
         <Reveal>
