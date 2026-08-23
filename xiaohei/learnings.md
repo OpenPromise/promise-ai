@@ -656,3 +656,26 @@
    - 触发场景：AI 生成 3 个 logo 候选，模型无法"看"图，需客观选优。
    - 动作：①PNG 结构校验（魔数/IHDR/IDAT 字节量）；②ASCII 缩略图（/tmp/yh/pngascii.py，48x30 或 72x44）看构图是否居中、干净、无文字乱码；③亮色直方图（采样亮度>300 像素按 32 阶聚类）确认"深色底 + 青/白细线"符合设计 spec（本次 logo-1：93.2% 暗底，亮色集中 (32,224,224) 青系 + 白）。优先选无文字、小尺寸（导航栏 32-64px）下几何仍清晰的候选。
    - 证据：logo-1（A/I 融合）ASCII 构图清晰 + 直方图符合 spec 入选；另两候选（环轨道/神经节点）构图更散。
+
+## 二十五、官网首页净化 + 二次元风生活照替换（任务沉淀，2026-08-23）
+
+> 记录人：小黑；依据：本次"首页视频区净化 + 生活照换二次元风"任务实施结果（frontend typecheck/build 通过、PNG 3/3 校验、无头浏览器 24/24、根测试 498/498，均有工具结果）。
+
+### 沉淀经验（原子化 + 置信度）
+
+1. **【高置信·本次验证】轮播 autoplay（固定 ms 的 setInterval）会与 puppeteer 点击断言竞态，导致断言随机失败**
+   - 触发场景：断言"点击分页点切换 slide"时，NewsPage 的 4s autoplay interval 恰好落在"点击后 300ms 等待窗口"内 → 读到的是 autoplay 前进后的状态（本次 active 2→0 假失败）。
+   - 动作：①点击切换类断言用 `page.evaluateOnNewDocument` 拦截精确 ms 的 `setInterval`（本次仅 NewsPage 用 setInterval 且恰为 4000ms，拦 `ms===4000` 返回 0 即中和 autoplay，不影响 setTimeout）→ 切换断言确定性通过；②autoplay 本身单独验证：`page.waitForFunction` 等 active 从初始值自然前进，超时 5s。
+   - 证据：拦截前 22 项断言随机 FAIL 1 项（同一脚本两次运行时序不同）；拦截后 24/24 稳定通过，autoplay 前进 + 3 次点击切换均验证。
+2. **【中置信·本次验证】React 18 自动批处理下，puppeteer 同一 evaluate 内 `el.click()` 后立即读 DOM 拿不到新状态**
+   - 触发场景：想在点击后同步断言（避开竞态），同 evaluate 内 click + findIndex(is-active) 读到旧值（active 仍为点击前）。
+   - 动作：React 状态更新在离散事件后异步 flush（不保证同任务同步）→ 点击与断言分两个 evaluate，中间 `setTimeout(~250ms)`（实测 250ms 内落地）或 `waitForFunction` 轮询目标状态。
+   - 证据：同 evaluate 读旧值（active=0）、250ms 后读新值（active=1/2）均复现；配合经验 1 的 interval 拦截后完全确定。
+3. **【高置信·本次验证】根仓库 typecheck 基线失败快照：`services/agent-server/src/routes/xiaoye.ts(35,42)` TS2345（`string|null` → `string`）**
+   - 触发场景：跑根 `npm run typecheck` 报错，需判断是否本次改动引入的回归。
+   - 动作：先 `git diff` 确认该文件未被本任务触碰，再 `git worktree add /tmp/check HEAD` + `ln -s /app/node_modules`（worktree 无 node_modules 会误报 "Cannot find type definition file for 'node'"）在干净 HEAD 复现同一错误 → 判定为基线既有问题（源自 424bf8d，safeResolve 返回 null 未收敛），不在本任务方案范围内不擅改，报告如实标注。
+   - 证据：工作树与 HEAD 均报同文件同行号同错误；`git diff --stat` 该文件为空。
+4. **【高置信·本次验证】"人设原文 + 场景化 + 统一风格尾缀"的二次元风生活照 prompt 构造法**
+   - 触发场景：把团队生活照从写实风换成与角色立绘同一视觉语言的二次元风，且人物必须"一看就是本人"。
+   - 动作：prompt = characters/*.md 形象提示词原文的人设元素逐条保留（发型/服饰/道具/配色/气质）+ 场景化描述（工位/阳台等生活场景 + 批准的姿势假设如"打字/端咖啡"）+ 统一尾缀「二次元动漫插画风，与角色立绘同款厚涂风格，16:9 横构图，无文字无水印」；立绘专属元素（半身像/竖构图/纯色底）替换为场景描述。
+   - 证据：3/3 生成成功（46.5s/50.6s/39.6s），PNG 1536x864 校验全过，无头浏览器 3 图 1536x864 加载确认；视觉符合度未人工看图（模型无图像输入），待人工复核（风险项）。
