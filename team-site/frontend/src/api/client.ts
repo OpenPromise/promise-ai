@@ -208,7 +208,7 @@ const FALLBACK_ROLES: Role[] = [
     dream: '成为世界上最懂用户的私人助理——把「世界第一 AI 工作室」的每个人都连接起来，让技术有温度，让陪伴成为习惯。',
     accent: '#7958cb',
     homeUrl: '/xiaoye',
-    homeStatus: 'building',
+    homeStatus: 'live',
   },
 ];
 
