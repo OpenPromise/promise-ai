@@ -11,6 +11,20 @@ import { approvalFingerprint, type ApprovalDecision, type ApprovalRegistry } fro
 
 export const TOOL_TIMEOUT_MS = 15_000;
 
+/**
+ * 配置缺失类错误的统一提示后缀（Leon resolveToolAvailability 思路的务实版）：
+ * 报错即给指引——缺什么、去哪配、怎么补，让上层（LLM/用户）能直接引导配置，
+ * 而不是盲试。用法：`工具 X 失败：...${missingConfigHint('DEEPSEEK_API_KEY', ...)}`。
+ * 刻意不做完整 not_available 枚举（避免过度设计），只保证"报错信息自带修复路径"。
+ */
+export function missingConfigHint(
+  missing: string,
+  location: string,
+  howToFix: string,
+): string {
+  return `（缺什么：${missing}；配置位置：${location}；如何补：${howToFix}）`;
+}
+
 export class ToolTimeoutError extends Error {
   constructor(toolName: string) {
     super(`工具 ${toolName} 执行超时，已终止`);

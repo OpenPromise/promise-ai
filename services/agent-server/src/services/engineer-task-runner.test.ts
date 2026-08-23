@@ -10,6 +10,7 @@ import {
   type EngineerTaskEvent,
   type RunTaskFn,
 } from './engineer-task-runner.js';
+import { DSH_NOT_FOUND_MESSAGE } from './coding-tool.js';
 
 describe('lastMeaningfulLine / appendCapped', () => {
   it('提取最后一行有意义的输出，忽略空行与纯分隔线', () => {
@@ -96,6 +97,25 @@ describe('EngineerTaskRunner 异步派单', () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(timeoutRunner.get(timedOut.id)?.status).toBe('timeout');
     expect(timeoutRunner.get(timedOut.id)?.error).toContain('被终止');
+  });
+
+  it('dsh 未安装时任务失败原因带配置指引（engineer.delegate 经 engineer.status 可见）', async () => {
+    const runner = makeRunner({
+      runTask: async () => ({
+        stdout: '',
+        stderr: DSH_NOT_FOUND_MESSAGE,
+        timedOut: false,
+        exitCode: 1,
+      }),
+    });
+    const task = await runner.delegate('写一个脚本');
+    await new Promise((r) => setTimeout(r, 10));
+    const record = runner.get(task.id);
+    expect(record?.status).toBe('failed');
+    expect(record?.error).toContain('缺什么');
+    expect(record?.error).toContain('配置位置');
+    expect(record?.error).toContain('如何补');
+    expect(record?.error).toContain('@deepseek-ai/dsh');
   });
 
   it('任务记录持久化：重启后可恢复已完成任务（running 不恢复）', async () => {

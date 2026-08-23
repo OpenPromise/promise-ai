@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import type { SessionStore } from '@personal-ai/memory';
 import type { Tool, ToolContext, ToolResult } from '@personal-ai/tools';
+import { missingConfigHint } from './tool-execution.js';
 
 export interface WeixinToolOptions {
   /** weixin-bridge 地址（如 http://weixin-bridge:3100）。 */
@@ -16,6 +17,16 @@ interface BridgeResult {
   data?: unknown;
   error?: string;
 }
+
+/**
+ * 微信桥 401 的配置指引：桥端鉴权只认 BRIDGE_TOKEN（未配置/缺失/不匹配都返回
+ * 401），报错即告诉上层去哪补（agent-server 与 weixin-bridge 两侧要一致）。
+ */
+const BRIDGE_AUTH_HINT = missingConfigHint(
+  'BRIDGE_TOKEN（weixin-bridge 共享鉴权 token，未配置/缺失/与桥端不一致）',
+  '环境变量 .env 的 BRIDGE_TOKEN',
+  '在 .env 设置 BRIDGE_TOKEN=<token>，且与 weixin-bridge 服务启动时使用的 token 保持一致',
+);
 
 async function postBridge(
   fetchImpl: typeof fetch,
@@ -50,7 +61,10 @@ async function postBridge(
         typeof json === 'object' && json && 'error' in json
           ? String((json as { error?: unknown }).error ?? '')
           : raw.slice(0, 200);
-      return { ok: false, error: `微信桥返回 ${response.status}：${detail}` };
+      return {
+        ok: false,
+        error: `微信桥返回 ${response.status}：${detail}${response.status === 401 ? BRIDGE_AUTH_HINT : ''}`,
+      };
     }
     return { ok: true, data: json };
   } catch (error) {
@@ -91,7 +105,10 @@ async function getBridge(
         typeof json === 'object' && json && 'error' in json
           ? String((json as { error?: unknown }).error ?? '')
           : raw.slice(0, 200);
-      return { ok: false, error: `微信桥返回 ${response.status}：${detail}` };
+      return {
+        ok: false,
+        error: `微信桥返回 ${response.status}：${detail}${response.status === 401 ? BRIDGE_AUTH_HINT : ''}`,
+      };
     }
     return { ok: true, data: json };
   } catch (error) {

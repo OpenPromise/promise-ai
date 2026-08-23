@@ -60,6 +60,32 @@ describe('weixin.send_image', () => {
     expect(result.ok).toBe(false);
     expect(result.error).toContain('不是微信会话');
   });
+
+  it('bridge 返回 401（BRIDGE_TOKEN 缺失/不匹配）时错误信息带配置指引', async () => {
+    const store = await makeStore('wx_peer');
+    const session = (await store.listSessions())[0]!;
+    const fetchImpl = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.startsWith('http://img'))
+        return new Response(new Uint8Array([9, 8, 7]), { status: 200 });
+      return new Response(JSON.stringify({ error: '缺少 x-bridge-token 头' }), { status: 401 });
+    });
+    const tools = createWeixinTools({
+      bridgeUrl: 'http://weixin-bridge:3100',
+      store,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const result = await tools
+      .find((t) => t.name === 'weixin.send_image')!
+      .execute({ source: 'http://img.example/pic.png' }, { sessionId: session.id });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('401');
+    expect(result.error).toContain('BRIDGE_TOKEN');
+    expect(result.error).toContain('缺什么');
+    expect(result.error).toContain('配置位置');
+    expect(result.error).toContain('如何补');
+  });
 });
 
 describe('weixin.list_files', () => {

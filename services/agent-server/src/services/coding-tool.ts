@@ -3,12 +3,20 @@ import { accessSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import type { PermissionLevel, Tool, ToolContext, ToolResult } from '@personal-ai/tools';
+import { missingConfigHint } from './tool-execution.js';
 
 /**
  * coding.run 服务端实现：在服务器（容器）上直接驱动 dsh（DeepSeek Harness）。
  * dsh 是开源底盘：插件化、可自由扩展，作为本项目唯一的编码代理后端。
  * 桌面端工具列表不再包含 coding.run——它属于"大脑"而不是"客户端外壳"。
  */
+
+/** 缺 dsh 时的报错信息：错误即指引（缺什么/去哪配/怎么补），供 LLM 引导配置而非盲试。 */
+export const DSH_NOT_FOUND_MESSAGE = `未找到 dsh，请确认容器/服务器已安装 @deepseek-ai/dsh${missingConfigHint(
+  '@deepseek-ai/dsh（DeepSeek Harness 编码代理底盘）',
+  '环境变量 DSH_CLI，或全局 npm 目录（如 /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js）',
+  '执行 npm install -g @deepseek-ai/dsh 安装；或把 dsh 的 lib/bin.js 绝对路径写入 .env 的 DSH_CLI',
+)}`;
 
 interface CodingInput {
   directory?: string;
@@ -158,7 +166,7 @@ export async function runDshHeadless(
   if (!dshBin) {
     return {
       stdout: '',
-      stderr: '未找到 dsh，请确认容器/服务器已安装 @deepseek-ai/dsh',
+      stderr: DSH_NOT_FOUND_MESSAGE,
       timedOut: false,
       exitCode: 1,
     };

@@ -1,5 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildXiaoYouTask, createOpsTool } from './ops-tools.js';
+import { DSH_NOT_FOUND_MESSAGE, runDshHeadless } from './coding-tool.js';
+
+// 只 mock runDshHeadless（派单不真跑 dsh），保留模块内真实常量（DSH_NOT_FOUND_MESSAGE 等）。
+vi.mock('./coding-tool.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./coding-tool.js')>();
+  return { ...actual, runDshHeadless: vi.fn() };
+});
+
+const runDshHeadlessMock = vi.mocked(runDshHeadless);
 
 describe('buildXiaoYouTask', () => {
   it('任务单包含小优人格关键词与结构化报告元素', () => {
@@ -61,5 +70,22 @@ describe('createOpsTool', () => {
     );
     expect(result.ok).toBe(false);
     expect(result.error).toContain('目录不存在');
+  });
+
+  it('dsh 未安装时错误信息给出"缺什么/去哪补/怎么补"指引（不盲试）', async () => {
+    runDshHeadlessMock.mockResolvedValue({
+      stdout: '',
+      stderr: DSH_NOT_FOUND_MESSAGE,
+      timedOut: false,
+      exitCode: 1,
+    });
+    const tool = createOpsTool();
+    const result = await tool.execute({ task: '查看服务器时间' }, { sessionId: 's1' });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('未找到 dsh');
+    expect(result.error).toContain('缺什么');
+    expect(result.error).toContain('配置位置');
+    expect(result.error).toContain('如何补');
+    expect(result.error).toContain('@deepseek-ai/dsh');
   });
 });
