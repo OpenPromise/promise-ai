@@ -1,92 +1,18 @@
-/* ============================================================
- * Design Tokens —— 派生自 docs/style-guide.md
- * 规范改动时先改 style-guide.md，再同步本文件
- * ============================================================ */
 :root {
-  /* 1. 中性色 */
-  --color-bg: #1d1d1d;
-  --color-bg-deep: #161616;
-  --color-panel: #282828;
-  --color-panel-2: #313131;
-  --color-line: rgba(255, 255, 255, 0.08);
-  --color-text: #ffffff;
-  --color-text-2: #afafaf;
-  --color-text-3: #7d7d7d;
-  --color-text-muted: #616161;
-
-  /* 2. 强调色 */
-  --color-accent: #50e5fb;
-  --color-accent-2: #7ce3f2;
-  --color-accent-dim: rgba(80, 229, 251, 0.16);
-  --color-pink: #fe5a95;
-  --color-purple: #7958cb;
-
-  /* 3. 字体 */
+  --ink: #0d1114;
+  --ink-2: #141a1e;
+  --panel: #192126;
+  --paper: #f4f0e8;
+  --paper-2: #e9e4da;
+  --text: #edf2ef;
+  --muted: #95a2a4;
+  --line: rgba(237, 242, 239, .14);
+  --line-strong: rgba(237, 242, 239, .28);
+  --acid: #b7ff68;
+  --blue: #8ed8ff;
+  --pink: #ff7eaa;
   --font-sans: 'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC', system-ui, sans-serif;
-  --font-mono: ui-monospace, 'JetBrains Mono', Consolas, monospace;
-
-  /* 字号阶梯（56/32/20/16/13，display/title 响应式 clamp） */
-  --fs-display: clamp(2.25rem, 6.5vw, 3.5rem);
-  --fs-title: clamp(1.5rem, 4vw, 2rem);
-  --fs-subtitle: 1.25rem;
-  --fs-body: 1rem;
-  --fs-caption: 0.8125rem;
-
-  /* 4. 间距（4px 基准） */
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 24px;
-  --space-6: 32px;
-  --space-7: 48px;
-  --space-8: 64px;
-
-  /* 5. 圆角 */
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 16px;
-  --radius-full: 999px;
-
-  /* 6. 导航栏（对齐参考站 .header：118px 设计稿 = 4.6vw 等比，1920 屏 ≈88px；实底 #1d1d1d）
-   * 参考站按钮 = 三态切图换色（sprite 像素实测，2026-08-23 复扒）：
-   *   normal 灰 rgb(170,170,170) → hover 白 rgb(255,255,255) → active 青 rgb(81,229,251)
-   *   首页(headerNav1) active 为 rgb(124,236,252)；无任何 shadow/blur 光晕（alpha 分布零扩散）。
-   * 按钮背景透明（sprite 仅文字像素），黑底即顶栏 #1d1d1d 本身 → 与顶栏浑然一体。 */
-  --nav-bg: #1d1d1d;
-  --nav-height: clamp(56px, 4.6vw, 92px);
-  --nav-btn-w: clamp(96px, 9.41vw, 241px); /* 参考 .headerNav button 241px 设计稿 */
-  --nav-btn-h: clamp(30px, 1.56vw, 40px); /* 参考 .headerNav button 40px 设计稿 */
-  --nav-text-normal: rgb(170, 170, 170); /* sprite 普通态（灰 170） */
-  --nav-text-hover: rgb(255, 255, 255); /* sprite hover 态（纯白） */
-  --nav-text-active: rgb(81, 229, 251); /* sprite active 态（青 #51E5FB，headerNav2-6） */
-  --nav-text-active-first: rgb(124, 236, 252); /* 首页 active（headerNav1 青 #7CECFC） */
-
-  /* 7. 参考站细节色（逆向自 main260813.css，2026-08-23 导航/情报速递复抓确认） */
-  --color-title-text: #dfdfdf; /* 列表标题（参考站 .newsItem .title） */
-  --color-line-strong: #313131; /* 行分割线（.newsCont .newsItem 底边框） */
-  --color-frame: #363636; /* 板块边框（.newsSwiper） */
-  --color-thumb-border: #454545; /* 缩略图边框（.pageViewNav .swiper-slide） */
-  --color-halo: #b8b8b8; /* 高亮描边（分页点 outline） */
-  --color-overlay: rgba(28, 28, 28, 0.68); /* 缩略图名称底条（.pageViewNav .name） */
-  --color-badge-cyan: #7ce3f2; /* 做了什么徽章底（.newsItem .type.gamenews） */
-  --color-badge-cyan-text: #313131;
-  --color-badge-pink: #fe5a95; /* 牢骚徽章底（.gamebroad） */
-  --color-badge-purple: #7958cb; /* 入职徽章底（.gameevent） */
-  /* 情报速递行/徽章/Tab（参考站 pageNews 实测值，2560 设计稿等比） */
-  --news-row-h: clamp(44px, 3.33vw, 85px); /* 参考 .newsCont .newsItem 行高实测 64px@1920=85.3px 设计稿 */
-  --news-title-fs: clamp(0.95rem, 1.17vw, 1.4rem); /* 参考 .newsItem font-size 30px */
-  --news-badge-w: clamp(62px, 3.71vw, 95px); /* 参考 .type 95px */
-  --news-badge-h: clamp(24px, 1.45vw, 37px); /* 参考 .type 37px */
-  --news-tab-w: clamp(88px, 6.13vw, 157px); /* 参考 .newsNav span 157px */
-  --news-tab-h: clamp(30px, 2.42vw, 62px); /* 参考 .newsNav span 62px */
-  --news-title-ml: clamp(14px, 1.29vw, 33px); /* 参考 .newsItem .title margin-left 33px */
-  --news-title-w: clamp(220px, 21.48vw, 550px); /* 参考 .newsItem .title 宽度 550px */
-
-  /* 8. 情报速递双列（参考站 pageNews 实测，2560 设计稿等比） */
-  --news-col-w: clamp(460px, 36.21vw, 927px); /* 参考 .newsCont 宽 927px */
-  --news-swiper-w: clamp(460px, 36.17vw, 926px); /* 参考 .newsSwiper 宽 926px */
-  --news-swiper-h: clamp(232px, 18.28vw, 468px); /* 参考 .newsSwiper 高 468px */
-  --news-swiper-border: clamp(3px, 0.23vw, 6px); /* 参考 border 6px #363636 */
-  --news-dot-size: clamp(10px, 0.78vw, 20px); /* 参考分页点 20×20 */
+  --font-display: 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Mono', Consolas, monospace;
+  --nav-height: 76px;
 }

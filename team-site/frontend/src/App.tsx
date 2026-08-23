@@ -5,50 +5,44 @@ import LoadingOverlay from './components/LoadingOverlay';
 import HomePage from './pages/HomePage';
 import NewsPage from './pages/NewsPage';
 import RolesPage from './pages/RolesPage';
+import SystemPage from './pages/SystemPage';
 import WorldPage from './pages/WorldPage';
-import CityPage from './pages/CityPage';
-import { SECTIONS, resolveInitialSection, scrollToSection, syncHash } from './lib/sections';
+import NextPage from './pages/NextPage';
+import { SECTIONS, canonicalSection, resolveInitialSection, scrollToSection, syncHash } from './lib/sections';
 
-/**
- * 官网骨架：单页 + 全屏 scroll-snap 翻页（对齐参考站 wrapSwiper 五板块）。
- * - main.site-scroll 为滚动容器（y mandatory 吸附），五板块整屏切换；
- * - IntersectionObserver 维护当前板块（顶栏高亮 + hash 深链 + 悬浮 footer 显隐）。
- */
 export default function App() {
   const scrollRef = useRef<HTMLElement>(null);
-  const [active, setActive] = useState<string>(resolveInitialSection());
+  const [active, setActive] = useState(resolveInitialSection());
 
-  // 初始定位：进入地址映射到对应板块（覆盖在加载页之下，淡出后即到位）
   useEffect(() => {
     const target = resolveInitialSection();
     requestAnimationFrame(() => scrollToSection(target, 'auto'));
     syncHash(target);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 滚动监听：当前板块高亮 + hash 同步
   useEffect(() => {
     const container = scrollRef.current;
     if (!container) return;
     const io = new IntersectionObserver(
       (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            setActive(entry.target.id);
-            syncHash(entry.target.id);
-          }
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        if (visible) {
+          const id = canonicalSection(visible.target.id);
+          setActive(id);
+          syncHash(id);
         }
       },
-      { root: container, threshold: 0.5 },
+      { root: container, threshold: [0.2, 0.5, 0.8] },
     );
-    SECTIONS.forEach((s) => {
-      const el = document.getElementById(s.id);
-      if (el) io.observe(el);
+    SECTIONS.forEach((section) => {
+      const element = document.getElementById(section.id);
+      if (element) io.observe(element);
     });
     return () => io.disconnect();
   }, []);
 
-  // 浏览器前进/后退（hash 变化）时跟随
   useEffect(() => {
     const onHash = () => {
       const id = resolveInitialSection();
@@ -59,8 +53,9 @@ export default function App() {
   }, [active]);
 
   const go = (id: string) => {
-    setActive(id);
-    scrollToSection(id);
+    const target = canonicalSection(id);
+    setActive(target);
+    scrollToSection(target);
   };
 
   return (
@@ -71,10 +66,11 @@ export default function App() {
         <HomePage onNavigate={go} />
         <NewsPage />
         <RolesPage />
+        <SystemPage onNavigate={go} />
         <WorldPage />
-        <CityPage />
+        <NextPage onNavigate={go} />
       </main>
-      <Footer visible={active === 'city'} onHome={() => go('home')} />
+      <Footer onHome={() => go('home')} />
     </>
   );
 }

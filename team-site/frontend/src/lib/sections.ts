@@ -1,62 +1,59 @@
-/**
- * 全屏板块注册表：单页 scroll-snap 翻页（对齐参考站 wrapSwiper 五板块）。
- * 旧路由路径（/news 等）、hash（#news）与 ?nav=N 均映射到板块，保持旧链接可用。
- */
-
 export interface SectionDef {
-  /** DOM id（也作 hash 深链：#news） */
   id: string;
-  /** 旧路由路径（保留兼容，直接访问时定位到对应板块） */
   path: string;
-  /** 顶栏文字 */
   label: string;
-  /** 参考站 nav 序号（1 起） */
   index: number;
+  aliases?: string[];
 }
 
 export const SECTIONS: SectionDef[] = [
   { id: 'home', path: '/', label: '首页', index: 1 },
-  { id: 'news', path: '/news', label: '情报速递', index: 2 },
-  { id: 'roles', path: '/roles', label: '角色介绍', index: 3 },
-  { id: 'world', path: '/world', label: '世界全景', index: 4 },
-  { id: 'city', path: '/city', label: '都市映像', index: 5 },
+  { id: 'signals', path: '/news', label: '情报', index: 2, aliases: ['news'] },
+  { id: 'team', path: '/roles', label: '团队', index: 3, aliases: ['roles'] },
+  { id: 'system', path: '/system', label: '工作方式', index: 4 },
+  { id: 'world', path: '/world', label: '世界', index: 5 },
+  { id: 'next', path: '/city', label: '下一步', index: 6, aliases: ['city'] },
 ];
 
+const aliases = new Map<string, string>();
+for (const section of SECTIONS) {
+  aliases.set(section.id, section.id);
+  section.aliases?.forEach((alias) => aliases.set(alias, section.id));
+}
+
+export function canonicalSection(id: string): string {
+  return aliases.get(id.toLowerCase()) ?? 'home';
+}
+
 export function scrollToSection(id: string, behavior: ScrollBehavior = 'smooth') {
-  // 减动效偏好下直接定位（DESIGN_SPEC §6.10：smooth scroll 有静态替代）
   const finalBehavior =
     behavior === 'smooth' &&
     typeof window !== 'undefined' &&
     window.matchMedia('(prefers-reduced-motion: reduce)').matches
       ? 'auto'
       : behavior;
-  document.getElementById(id)?.scrollIntoView({ behavior: finalBehavior, block: 'start' });
+  document.getElementById(canonicalSection(id))?.scrollIntoView({
+    behavior: finalBehavior,
+    block: 'start',
+  });
 }
 
-/** 解析进入地址 → 目标板块（hash > 旧路径 > ?nav=N > 首页） */
 export function resolveInitialSection(): string {
-  if (typeof window === 'undefined') return 'home'; // SSR/无 window 环境安全兜底
+  if (typeof window === 'undefined') return 'home';
   const { hash, pathname, search } = window.location;
-  if (hash) {
-    const found = SECTIONS.find((s) => `#${s.id}` === hash.toLowerCase());
-    if (found) return found.id;
-  }
-  if (pathname !== '/') {
-    const found = SECTIONS.find((s) => s.path === pathname);
-    if (found) return found.id;
-  }
+  if (hash) return canonicalSection(hash.slice(1));
+  const direct = SECTIONS.find((s) => s.path === pathname);
+  if (direct) return direct.id;
+  const legacy = SECTIONS.find((s) => s.aliases?.includes(pathname.slice(1)));
+  if (legacy) return legacy.id;
   const nav = Number(new URLSearchParams(search).get('nav'));
   if (Number.isFinite(nav)) {
-    const found = SECTIONS.find((s) => s.index === nav);
-    if (found) return found.id;
+    return SECTIONS.find((s) => s.index === nav)?.id ?? 'home';
   }
   return 'home';
 }
 
-/** 同步 URL 深链（不触发滚动） */
 export function syncHash(id: string) {
-  const target = `#${id}`;
-  if (window.location.hash !== target) {
-    history.replaceState(null, '', target);
-  }
+  const target = `#${canonicalSection(id)}`;
+  if (window.location.hash !== target) history.replaceState(null, '', target);
 }
