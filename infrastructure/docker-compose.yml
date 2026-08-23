@@ -35,8 +35,9 @@ services:
       PORT: 3000
       # 容器内通过 compose 网络访问 postgres 服务，而非 localhost
       DATABASE_URL: postgres://${POSTGRES_USER:-assistant}:${POSTGRES_PASSWORD:-assistant}@postgres:5432/${POSTGRES_DB:-assistant}
+    command: ['sh', '-lc', '/app/team-site/start.sh && exec npm start']
     ports:
-      - '${APP_PORT:-3000}:3000'
+      - '127.0.0.1:${APP_PORT:-3000}:3000'
     volumes:
       # 宿主机仓库作为 /app（含 .git），bot 的 self.commit 可直接提交推送；
       # node_modules 用命名卷避免污染宿主目录；SSH 部署 key 供 git push
@@ -74,7 +75,7 @@ services:
       WEIXIN_BOT_AGENT: PromiseAi/0.1.0
     command: ['npm', 'run', 'weixin:bridge']
     ports:
-      - '${WEIXIN_PORT:-3100}:3100'
+      - '127.0.0.1:${WEIXIN_PORT:-3100}:3100'
     volumes:
       - weixin-data:/data/weixin
       # 微信文件库：宿主机仓库根目录 weixin-files/ 直接可见，丢文件即入库
@@ -88,6 +89,26 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+    depends_on:
+      app:
+        condition: service_started
+
+
+  # 官网入口代理：纳入 Compose，避免手工容器失去健康检查与开机恢复。
+  team-site-proxy:
+    profiles: ['server']
+    image: alpine/socat
+    container_name: team-site-proxy
+    restart: unless-stopped
+    command: ['TCP-LISTEN:80,fork,reuseaddr', 'TCP:app:80']
+    ports:
+      - '80:80'
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O - http://127.0.0.1:80/ >/dev/null || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     depends_on:
       app:
         condition: service_started
