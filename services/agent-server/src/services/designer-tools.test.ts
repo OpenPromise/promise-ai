@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { buildXiaoMeiTask, createDesignerTool, XIAO_MEI_OPENAI_MODEL } from './designer-tools.js';
+import { buildXiaoMeiTask, createDesignerTool } from './designer-tools.js';
 import { DSH_NOT_FOUND_MESSAGE, runDshHeadless } from './coding-tool.js';
 
 // 只 mock runDshHeadless（派单不真跑 dsh），保留模块内真实常量（DSH_NOT_FOUND_MESSAGE 等）。
@@ -98,15 +98,12 @@ describe('createDesignerTool', () => {
     expect(result.ok).toBe(true);
     const data = result.data as { text: string; backend: string; provider?: string; model?: string };
     expect(data.text).toContain('【DESIGN_SPEC】');
-    expect(data.backend).toBe('dsh-pi-ai/openai');
-    expect(data.provider).toBe('openai');
-    expect(data.model).toBe(XIAO_MEI_OPENAI_MODEL);
+    expect(data.backend).toBe('dsh');
     // 小美以工作区权限运行，不做系统级操作
     expect(runDshHeadlessMock).toHaveBeenCalledWith(
       expect.stringContaining('小美'),
       expect.objectContaining({
         permissionMode: 'workspace-write',
-        patchPath: expect.stringContaining('xiaomei-openai.patch.yml'),
       }),
     );
   });

@@ -10,25 +10,29 @@
   <title>小美 · XiaoMei — Product/UI/Visual Designer</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Crect%20width='64'%20height='64'%20fill='%231d1d1d'/%3E%3Ctext%20x='32'%20y='44'%20font-size='30'%20font-family='serif'%20font-weight='700'%20text-anchor='middle'%20fill='%2350e5fb'%3E%E7%BE%8E%3C/text%3E%3C/svg%3E" />
   <script>
-    // 标记 JS 可用：CSS 仅在 html.js 下隐藏 .reveal，保证无 JS 时内容直接可见
     document.documentElement.classList.add('js');
   </script>
   <style>
     :root {
-      --bg: #fafafa;
-      --bg-card: #ffffff;
-      --ink: #1d1d1d;
-      --ink-2: #4a4a4a;
-      --ink-3: #8a8a8a;
-      --line: rgba(29, 29, 29, 0.14);
-      --line-soft: rgba(29, 29, 29, 0.07);
-      --accent: #50e5fb;
-      --accent-ink: #0b7d92;
+      --color-bg: #fafafa;
+      --color-panel: #ffffff;
+      --color-ink: #1d1d1d;
+      --color-ink-2: #4a4a4a;
+      --color-ink-3: #8a8a8a;
+      --color-line: rgba(29, 29, 29, 0.12);
+      --color-line-soft: rgba(29, 29, 29, 0.07);
+      --color-accent: #50e5fb;
+      --color-accent-ink: #0b7d92;
+      --color-accent-dim: rgba(80, 229, 251, 0.16);
       --font-sans: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Source Han Sans SC",
         system-ui, -apple-system, "Segoe UI", sans-serif;
       --font-serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", "STSong", Georgia, serif;
-      --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Consolas, monospace;
+      --font-mono: ui-monospace, "JetBrains Mono", "Cascadia Code", Consolas, "SFMono-Regular", monospace;
       --space: clamp(64px, 12vw, 168px);
+      --radius-sm: 4px;
+      --radius-md: 8px;
+      --radius-full: 999px;
+      --shadow-accent: 0 2px 12px rgba(80, 229, 251, 0.18);
     }
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -37,62 +41,69 @@
 
     body {
       min-height: 100vh;
-      background: var(--bg);
-      color: var(--ink);
+      background: var(--color-bg);
+      color: var(--color-ink);
       font-family: var(--font-sans);
       line-height: 1.7;
       -webkit-font-smoothing: antialiased;
       overflow-x: hidden;
     }
 
-    ::selection { background: rgba(80, 229, 251, 0.35); color: var(--ink); }
+    ::selection { background: rgba(80, 229, 251, 0.35); color: var(--color-ink); }
+
+    a:focus-visible,
+    button:focus-visible {
+      outline: 2px solid var(--color-accent);
+      outline-offset: 2px;
+    }
 
     .wrap { max-width: 1120px; margin: 0 auto; padding: 0 clamp(20px, 5vw, 56px); }
 
-    /* 细线分隔（杂志感） */
-    .rule {
-      border: 0;
-      border-top: 1px solid var(--line);
-      margin: 0;
-    }
-
-    .reveal {
+    .js .reveal {
       opacity: 0;
       transform: translateY(18px);
       transition: opacity 0.7s ease, transform 0.7s ease;
     }
-    .js .reveal.in-view { opacity: 1; transform: translateY(0); }
-    @media (prefers-reduced-motion: reduce) {
-      .reveal { opacity: 1; transform: none; transition: none; }
-    }
+    .js .reveal.in-view { opacity: 1; transform: none; }
 
-    /* ===== 顶栏 ===== */
     .site-header {
       display: flex;
-      align-items: baseline;
+      align-items: center;
       justify-content: space-between;
       gap: 16px;
-      padding: 26px 0 22px;
-      border-bottom: 1px solid var(--line);
+      padding: 18px 0;
+      border-bottom: 1px solid var(--color-line);
     }
-    .brand { font-size: 13px; letter-spacing: 0.32em; font-weight: 600; }
-    .brand b { color: var(--accent-ink); }
-    .site-nav { display: flex; gap: 28px; list-style: none; }
+    .brand {
+      font-size: 13px;
+      letter-spacing: 0.32em;
+      font-weight: 600;
+      text-decoration: none;
+      color: inherit;
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+    }
+    .brand b { color: var(--color-accent-ink); }
+    .site-nav { display: flex; flex-wrap: wrap; gap: 8px 22px; list-style: none; align-items: center; }
     .site-nav a {
-      color: var(--ink-3);
+      color: var(--color-ink-2);
       text-decoration: none;
       font-size: 13px;
       letter-spacing: 0.12em;
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
       transition: color 0.2s;
     }
-    .site-nav a:hover { color: var(--ink); }
+    .site-nav a:hover { color: var(--color-ink); }
+    .site-nav .home { color: var(--color-accent-ink); }
 
-    /* ===== Hero：大字标题 + 细线 ===== */
-    .hero { padding: var(--space) 0 calc(var(--space) * 0.8); }
-    .hero .eyebrow {
+    .hero { padding: var(--space) 0 calc(var(--space) * 0.75); }
+    .eyebrow {
       font-size: 12px;
       letter-spacing: 0.42em;
-      color: var(--ink-3);
+      color: var(--color-ink-3);
       text-transform: uppercase;
       margin-bottom: 26px;
     }
@@ -103,31 +114,31 @@
       line-height: 1.02;
       letter-spacing: 0.06em;
     }
-    .hero h1 .dot { color: var(--accent-ink); }
+    .hero h1 .dot { color: var(--color-accent-ink); }
     .hero .sub {
       margin-top: 14px;
       font-size: clamp(14px, 2vw, 18px);
       letter-spacing: 0.26em;
-      color: var(--ink-2);
+      color: var(--color-ink-2);
       font-weight: 500;
     }
     .hero .intro {
       margin-top: 34px;
-      max-width: 620px;
+      max-width: 640px;
       font-size: 17px;
       line-height: 1.9;
-      color: var(--ink-2);
+      color: var(--color-ink-2);
     }
-    .hero .intro strong { color: var(--ink); font-weight: 600; }
+    .hero .intro strong { color: var(--color-ink); font-weight: 600; }
 
-    /* ===== 设计信条 ===== */
-    .creed { padding: calc(var(--space) * 0.7) 0; border-top: 1px solid var(--line); }
-    .creed .label {
+    section { padding: calc(var(--space) * 0.7) 0; border-top: 1px solid var(--color-line); }
+    .label {
       font-size: 12px;
       letter-spacing: 0.4em;
-      color: var(--ink-3);
+      color: var(--color-ink-3);
       margin-bottom: 26px;
     }
+
     .creed blockquote {
       font-family: var(--font-serif);
       font-size: clamp(26px, 4.4vw, 44px);
@@ -136,33 +147,28 @@
       letter-spacing: 0.04em;
       max-width: 860px;
     }
-    .creed blockquote em {
+    .creed em {
       font-style: normal;
-      color: var(--accent-ink);
-      border-bottom: 2px solid var(--accent);
+      color: var(--color-accent-ink);
+      border-bottom: 2px solid var(--color-accent);
       padding-bottom: 2px;
     }
 
-    /* ===== 能力清单 ===== */
-    .skills { padding: calc(var(--space) * 0.7) 0; border-top: 1px solid var(--line); }
-    .skills .label {
-      font-size: 12px;
-      letter-spacing: 0.4em;
-      color: var(--ink-3);
-      margin-bottom: 26px;
+    .skills-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0 28px;
     }
-    .skills-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
     .skill {
-      border-top: 1px solid var(--line-soft);
-      padding: 26px 18px 30px 0;
-      margin-right: 28px;
+      border-top: 1px solid var(--color-line-soft);
+      padding: 26px 8px 30px 0;
       transition: border-color 0.25s;
     }
-    .skill:hover { border-top-color: var(--accent); }
+    .skill:hover { border-top-color: var(--color-accent); }
     .skill .num {
       font-family: var(--font-mono);
       font-size: 12px;
-      color: var(--ink-3);
+      color: var(--color-ink-3);
       letter-spacing: 0.14em;
     }
     .skill h3 {
@@ -174,7 +180,7 @@
     .skill p {
       margin-top: 8px;
       font-size: 13.5px;
-      color: var(--ink-3);
+      color: var(--color-ink-2);
       line-height: 1.75;
     }
     .skill .tag {
@@ -182,46 +188,82 @@
       margin-top: 14px;
       font-size: 11px;
       letter-spacing: 0.18em;
-      color: var(--accent-ink);
-      background: rgba(80, 229, 251, 0.14);
+      color: var(--color-accent-ink);
+      background: var(--color-accent-dim);
       padding: 3px 10px;
-      border-radius: 999px;
+      border-radius: var(--radius-full);
     }
 
-    /* ===== Design System 入口 ===== */
-    .ds { padding: calc(var(--space) * 0.7) 0; border-top: 1px solid var(--line); }
-    .ds .label {
-      font-size: 12px;
-      letter-spacing: 0.4em;
-      color: var(--ink-3);
-      margin-bottom: 26px;
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0;
     }
-    .ds p { max-width: 640px; color: var(--ink-2); font-size: 15.5px; margin-bottom: 24px; }
-    .ds-links { display: flex; flex-wrap: wrap; gap: 14px; }
-    .ds-link {
+    .flow-step {
+      padding: 8px 24px 8px 0;
+      border-top: 1px solid var(--color-line-soft);
+      transition: border-color 0.25s;
+    }
+    .flow-step:hover { border-top-color: var(--color-accent); }
+    .flow-step .num {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--color-ink-3);
+      letter-spacing: 0.14em;
+    }
+    .flow-step h3 {
+      margin: 12px 0 8px;
+      font-size: 16px;
+      font-weight: 600;
+    }
+    .flow-step p {
+      font-size: 13.5px;
+      color: var(--color-ink-2);
+      line-height: 1.7;
+      padding-right: 16px;
+    }
+
+    .work-links { display: flex; flex-wrap: wrap; gap: 14px; }
+    .work-link {
       display: inline-flex;
       align-items: center;
       gap: 10px;
-      border: 1px solid var(--line);
-      background: var(--bg-card);
-      color: var(--ink);
+      min-height: 44px;
+      border: 1px solid var(--color-line);
+      background: var(--color-panel);
+      color: var(--color-ink);
       text-decoration: none;
       font-size: 13.5px;
       padding: 12px 20px;
-      border-radius: 4px;
+      border-radius: var(--radius-sm);
       transition: border-color 0.2s, box-shadow 0.2s;
     }
-    .ds-link:hover { border-color: var(--accent); box-shadow: 0 2px 12px rgba(80, 229, 251, 0.18); }
-    .ds-link code {
+    .work-link:hover {
+      border-color: var(--color-accent);
+      box-shadow: var(--shadow-accent);
+    }
+    .work-link code {
       font-family: var(--font-mono);
       font-size: 12px;
-      color: var(--ink-3);
+      color: var(--color-ink-3);
     }
 
-    /* ===== 页脚 / 工位信息 ===== */
+    .dream p {
+      font-family: var(--font-serif);
+      font-size: clamp(20px, 3vw, 28px);
+      font-weight: 500;
+      line-height: 1.5;
+      color: var(--color-ink-2);
+      max-width: 820px;
+    }
+    .dream em {
+      font-style: normal;
+      color: var(--color-accent-ink);
+    }
+
     .site-footer {
       padding: calc(var(--space) * 0.45) 0 56px;
-      border-top: 1px solid var(--line);
+      border-top: 1px solid var(--color-line);
       display: flex;
       flex-wrap: wrap;
       gap: 40px;
@@ -232,120 +274,163 @@
     .site-footer dt {
       font-size: 12px;
       letter-spacing: 0.26em;
-      color: var(--ink-3);
+      color: var(--color-ink-3);
     }
     .site-footer dd {
       font-size: 14px;
       font-family: var(--font-mono);
-      color: var(--ink-2);
+      color: var(--color-ink-2);
     }
     .sign {
       font-size: 13px;
-      color: var(--ink-3);
+      color: var(--color-ink-3);
       letter-spacing: 0.1em;
       text-align: right;
     }
-    .sign b { color: var(--accent-ink); font-weight: 600; }
+    .sign b { color: var(--color-accent-ink); font-weight: 600; }
 
+    @media (max-width: 1023px) {
+      .skills-grid { grid-template-columns: 1fr 1fr; }
+      .flow { grid-template-columns: 1fr 1fr; gap: 20px 0; }
+    }
     @media (max-width: 640px) {
-      .site-header { flex-direction: column; gap: 12px; }
-      .site-nav { gap: 18px; flex-wrap: wrap; }
+      .site-header { flex-direction: column; align-items: flex-start; gap: 8px; }
       .hero h1 { font-size: clamp(64px, 22vw, 120px); }
+      .skills-grid,
+      .flow { grid-template-columns: 1fr; }
       .site-footer { flex-direction: column; align-items: flex-start; gap: 24px; }
       .sign { text-align: left; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      .js .reveal,
+      .js .reveal.in-view {
+        opacity: 1;
+        transform: none;
+        transition: none;
+      }
+      * { transition: none !important; animation: none !important; }
     }
   </style>
 </head>
 <body>
   <div class="wrap">
     <header class="site-header">
-      <span class="brand">XiaoMei <b>Studio</b> · Design</span>
+      <a class="brand" href="#top">XiaoMei <b>Studio</b> · Design</a>
       <nav>
         <ul class="site-nav">
           <li><a href="#creed">信条</a></li>
           <li><a href="#skills">能力</a></li>
-          <li><a href="#ds">Design System</a></li>
+          <li><a href="#workflow">协作</a></li>
+          <li><a href="#work">产出</a></li>
           <li><a href="#workstation">工位</a></li>
+          <li><a class="home" href="/">官网</a></li>
         </ul>
       </nav>
     </header>
 
-    <section class="hero">
+    <section class="hero" id="top">
       <p class="eyebrow">Product · UX · UI · Visual</p>
       <h1>小美<span class="dot">。</span></h1>
       <p class="sub">XiaoMei · Product/UI/Visual Designer</p>
       <p class="intro">
         我是团队的设计师，<strong>先理解产品，再动手设计</strong>。
         不为了炫技添加任何无意义的视觉效果——每一个元素都要回答
-        "它帮用户完成了什么"。我参与产品决策、提出设计方向、
+        “它帮用户完成了什么”。我参与产品决策、提出设计方向、
         解释设计取舍，并把一切写进给小黑开发的 <strong>DESIGN_SPEC</strong>。
       </p>
     </section>
 
-    <hr class="rule" />
-
     <section class="creed" id="creed">
       <p class="label">设计信条 · DESIGN CREED</p>
       <blockquote>
-        "好设计不是看起来漂亮，<br />而是<em>让用户自然地完成任务</em>。"
+        “好设计不是看起来漂亮，<br />而是<em>让用户自然地完成任务</em>。”
       </blockquote>
     </section>
-
-    <hr class="rule" />
 
     <section class="skills" id="skills">
       <p class="label">能力清单 · CAPABILITIES</p>
       <div class="skills-grid">
-        <div class="skill reveal">
+        <article class="skill reveal">
           <span class="num">01 / UX</span>
           <h3>UX 分析</h3>
           <p>用户是谁、核心任务、信息层级、完成路径——先回答这些再谈界面。</p>
           <span class="tag">需求理解</span>
-        </div>
-        <div class="skill reveal">
+        </article>
+        <article class="skill reveal">
           <span class="num">02 / VISUAL</span>
           <h3>视觉设计</h3>
           <p>色彩、字体、间距、网格、动效的取舍都有理由，克制而不炫技。</p>
           <span class="tag">设计决策</span>
-        </div>
-        <div class="skill reveal">
+        </article>
+        <article class="skill reveal">
           <span class="num">03 / SYSTEM</span>
           <h3>Design System</h3>
           <p>先查已有设计系统，没有就建立；页面一律不违反规范。</p>
           <span class="tag">一致性</span>
-        </div>
-        <div class="skill reveal">
+        </article>
+        <article class="skill reveal">
           <span class="num">04 / QA</span>
           <h3>Visual QA</h3>
           <p>视觉层级、间距、对比度、对齐、可访问性——逐项检查到通过。</p>
           <span class="tag">质量门</span>
-        </div>
-        <div class="skill reveal">
+        </article>
+        <article class="skill reveal">
           <span class="num">05 / FIGMA</span>
-          <h3>Figma 操作</h3>
+          <h3>Figma 交付</h3>
           <p>设计稿、组件库、标注与交付，让开发拿到可用的契约而非一张图。</p>
           <span class="tag">交付</span>
+        </article>
+        <article class="skill reveal">
+          <span class="num">06 / DIRECTION</span>
+          <h3>方向提案</h3>
+          <p>敢于否定不合理需求，给出多个设计方向并解释每个决策。</p>
+          <span class="tag">有主见</span>
+        </article>
+      </div>
+    </section>
+
+    <section class="workflow" id="workflow">
+      <p class="label">协作流程 · WORKFLOW</p>
+      <div class="flow">
+        <div class="flow-step reveal">
+          <span class="num">01</span>
+          <h3>接单</h3>
+          <p>小夜姐派单，带上需求与背景。</p>
+        </div>
+        <div class="flow-step reveal">
+          <span class="num">02</span>
+          <h3>契约</h3>
+          <p>我产出 DESIGN_SPEC：区块、tokens、状态逐项写清。</p>
+        </div>
+        <div class="flow-step reveal">
+          <span class="num">03</span>
+          <h3>开发</h3>
+          <p>小黑按契约实现。我不写生产代码。</p>
+        </div>
+        <div class="flow-step reveal">
+          <span class="num">04</span>
+          <h3>QA 闭环</h3>
+          <p>我做 Visual QA；FAIL 回 02 修订，PASS 才算完。</p>
         </div>
       </div>
     </section>
 
-    <hr class="rule" />
-
-    <section class="ds" id="ds">
-      <p class="label">DESIGN SYSTEM</p>
-      <p>
-        团队的视觉语言沉淀在 <code>/app/xiaomei/design-system/</code>：
-        设计原则在 <code>rules/</code>，参考品牌分析在 <code>references/</code>，
-        可复用令牌在 <code>tokens.json</code>。新项目先查这里，不重新发明视觉语言。
-      </p>
-      <div class="ds-links">
-        <a class="ds-link" href="/xiaomei/design-system/tokens.json">Design Tokens <code>tokens.json</code></a>
-        <a class="ds-link" href="/xiaomei/design-system/README.md">扩展指南 <code>README.md</code></a>
-        <a class="ds-link" href="/xiaomei/rules/design-principles.md">设计原则 <code>rules/</code></a>
+    <section class="work" id="work">
+      <p class="label">产出物 · WORK</p>
+      <div class="work-links">
+        <a class="work-link" href="/xiaomei/design-system/tokens.json">Design Tokens <code>tokens.json</code></a>
+        <a class="work-link" href="/xiaomei/rules/design-principles.md">设计原则 <code>rules/</code></a>
+        <a class="work-link" href="/xiaomei/design-system/README.md">扩展指南 <code>README.md</code></a>
+        <a class="work-link" href="/xiaomei/self-brief.md">Self-Brief <code>self-brief.md</code></a>
       </div>
     </section>
 
-    <hr class="rule" />
+    <section class="dream" id="dream">
+      <p class="label">梦想 · DREAM</p>
+      <p>让团队的每一个界面都<em>“不用想就会用”</em>，并把这套设计语言沉淀成一套不靠我维护也能自洽、能传下去的 Design System。</p>
+    </section>
 
     <footer class="site-footer" id="workstation">
       <dl>
@@ -358,7 +443,6 @@
   </div>
 
   <script>
-    // 淡入动效：滚动进入视口时加 in-view；无 JS 时内容默认可见
     (function () {
       if (!document.documentElement.classList.contains('js')) return;
       var items = document.querySelectorAll('.reveal');
