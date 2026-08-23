@@ -629,3 +629,30 @@
 5. **【低置信·待验证】scroll-snap + 100dvh 移动端真机手感**：dvh 兼容（100vh 回退已写）、iOS 弹性滚动与 snap 冲突未实测；建议部署后真机走查（参考站移动端也是独立横滑版，我们是竖滑 snap，属于有意偏离）。
 6. **【低置信·本次验证】minify 产物里模板拼接类名不以字面量出现**：`className={`type-badge type-${type}`}` 编译后是 `type-badge type-${k}`，grep 产物验证类名要按前缀匹配，避免误判缺失；证据=产物 grep 'type-badge type-${k}' 命中。
 7. **【低置信·本次验证】组件顶层访问 window/location 的函数要加 `typeof window` 守卫**：resolveInitialSection 在 useState 初始化时调用，SSR/Node 环境无 window 会崩；加守卫后 SSR 冒烟通过；证据=守卫前 SSR 冒烟 ReferenceError 风险（本次直接预防性加上，未复现崩溃）。
+
+## 二十四、官网 logo + 工作生活照 + 角色主页链接（任务沉淀，2026-08-23）
+
+> 记录人：小黑；依据：本次"logo/生活照/主页链接"任务实施结果（生图 API 6/6 成功、typecheck/build/测试 498/498、无头浏览器 13/13、curl 回归全过，均有工具结果）。
+
+### 沉淀经验（原子化 + 置信度）
+
+1. **【高置信·本次验证】nginx alias 静态路由服务成员主页的权限坑：0600 文件 → nobody worker 读不了**
+   - 触发场景：nginx.conf 加 `location /xiaohei/ { alias /app/xiaohei/; index index.html; }` 后，curl 无法读到成员页（403 风险）。
+   - 动作：本环境 nginx worker 以 nobody 运行，而 `/app/xiaohei/index.html`、`/app/xiaoyou/index.html` 是 `-rw-------`（0600，属主 ubuntu）→ 需 `chmod o+r`（运行时操作；git 不跟踪普通文件权限，只跟踪可执行位，故不会入库）。avatar.png 本就是 0644 无需处理。
+   - 证据：chmod o+r 后 curl /xiaohei 302→/xiaohei/ 200、title=成员主页；/xiaohei/avatar.png 200。
+2. **【高置信·本次验证】doubao-seedream-5-0-pro 的 1536x864（16:9）尺寸合法且实测稳定**（补充 §十五 只验证过的 1024x1024）
+   - 触发场景：需要 16:9 横版生活照。
+   - 动作：`size:"1536x864"`（1,327,104 像素 ∈ [921600, 4624220]，比例 16:9 ∈ [1/16,16]）直接可用；本次 6 张（3×logo 1024x1024 + 3×生活照 1536x864）全部一次成功，单张 20-40s，b64_json 返回。
+   - 证据：6/6 PNG 魔数 + IHDR 尺寸 + IDAT 字节量校验通过；API 响应耗时日志。
+3. **【低置信·单次观察·待验证】seedream 5.0 pro 的 PNG 输出无 C2PA 凭证段**
+   - 触发场景：检查 AI 生成图是否带内容凭证、是否需做 §十一 的剥离。
+   - 动作：PNG chunk 遍历找 `c2pa` 段——6/6 张计数为 0（PNG 无 APP11 概念或该模型未嵌入），无需剥离步骤。
+   - 证据：chunk 扫描 c2pa_seg=0（6 张）；样本少，待更多模型/格式验证。
+4. **【高置信·本次验证】"杜绝 404 入口"的未上线资源占位模式**
+   - 触发场景：角色主页链接指向未上线的 /xiaoye——直接渲染 href 会 404。
+   - 动作：后端契约不动（/api/roles 无 homeUrl 字段），前端三件套：①Role 接口加**可选** homeUrl/homeStatus（向后兼容）；②`lib/roleHome.ts` 按角色 id 兜底映射（live/building）；③RolesPage 渲染时 building → 不可点「建设中」徽章（**无 href**），live → 可点链接同窗口跳转；nginx **不注册**未上线路由（SPA try_files 兜底 200 不 404）。上线后只需改 roleHome.ts 状态 + nginx 加路由。
+   - 证据：无头浏览器断言——小夜徽章无 href、/xiaoye 200；小黑/小优 href=/xiaohei、/xiaoyou 且可达成员页。
+5. **【高置信·本次验证】无图像输入时的 logo 选优法：ASCII 构图 + 亮色直方图**
+   - 触发场景：AI 生成 3 个 logo 候选，模型无法"看"图，需客观选优。
+   - 动作：①PNG 结构校验（魔数/IHDR/IDAT 字节量）；②ASCII 缩略图（/tmp/yh/pngascii.py，48x30 或 72x44）看构图是否居中、干净、无文字乱码；③亮色直方图（采样亮度>300 像素按 32 阶聚类）确认"深色底 + 青/白细线"符合设计 spec（本次 logo-1：93.2% 暗底，亮色集中 (32,224,224) 青系 + 白）。优先选无文字、小尺寸（导航栏 32-64px）下几何仍清晰的候选。
+   - 证据：logo-1（A/I 融合）ASCII 构图清晰 + 直方图符合 spec 入选；另两候选（环轨道/神经节点）构图更散。
