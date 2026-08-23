@@ -31,25 +31,14 @@ BACKEND_PORT=8080
 
 echo "[start.sh] team-site 官网启动（幂等）"
 
-# ---------- 1. 后端 ----------
-if curl -sf -m 2 "http://127.0.0.1:${BACKEND_PORT}/health" >/dev/null 2>&1; then
-  echo "[start.sh] 后端已在运行（127.0.0.1:${BACKEND_PORT}），跳过启动"
-  BACKEND_PID="$(pgrep -f '^node src/server\.js$' | head -1)"
-  echo "[start.sh] 后端 PID=${BACKEND_PID}，日志=${ROOT}/backend/server.log"
-else
-  if [ ! -d "$ROOT/backend/node_modules" ]; then
-    echo "[start.sh] 安装后端依赖（NODE_ENV=development 规避 production 跳过依赖的坑）..."
-    (cd "$ROOT/backend" && NODE_ENV=development npm install) >/dev/null 2>&1 \
-      || { echo "[start.sh] 后端依赖安装失败"; exit 1; }
-  fi
-  echo "[start.sh] 启动后端：nohup node src/server.js（日志 ${ROOT}/backend/server.log）"
-  (cd "$ROOT/backend" && NODE_ENV=production PORT=${BACKEND_PORT} nohup node src/server.js > server.log 2>&1 &)
-  sleep 1.5
-  if ! curl -sf -m 2 "http://127.0.0.1:${BACKEND_PORT}/health" >/dev/null 2>&1; then
-    echo "[start.sh] 后端启动失败，见 ${ROOT}/backend/server.log"; exit 1
-  fi
-  echo "[start.sh] 后端已启动 PID=$(pgrep -f '^node src/server\.js$' | head -1)"
+# ---------- 1. 后端（已下线） ----------
+# 官网改为纯静态后不再启动 Express :8080。残留进程在此收口，避免重启后复活。
+if pgrep -f '^node src/server\.js$' >/dev/null 2>&1; then
+  echo "[start.sh] 发现遗留内容 API，正在停止"
+  pkill -f '^node src/server\.js$' || true
+  sleep 0.4
 fi
+echo "[start.sh] 跳过内容 API（静态站不需要 8080）"
 
 # ---------- 2. 前端构建（dist 缺失时才构建） ----------
 if [ ! -f "$ROOT/frontend/dist/index.html" ]; then

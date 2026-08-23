@@ -9,6 +9,8 @@
 
 - 脚本：`/home/ubuntu/backup-postgres.sh`（root cron 每天 **03:30** 执行）；
 - 备份文件：`/home/ubuntu/backups/postgres/postgres-<UTC时间戳>.dump`；
+- 稳定指针：`/home/ubuntu/backups/postgres/latest.dump`（每次备份后更新的符号链接）；
+- 本机拉取：仓库根目录执行 `powershell -File scripts/pull-postgres-backup.ps1`；
 - 格式：`pg_dump` custom 格式（gzip 压缩，可 `pg_restore` 选择性恢复）；
 - 保留：最近 **14 份**（旧的自动删除）；
 - 日志：`/home/ubuntu/backups/postgres-backup.log`。

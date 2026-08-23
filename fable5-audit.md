@@ -207,3 +207,4 @@ crontab 与 systemd timer 中均未找到 postgres 备份的调度项，但日�
 | UFW 陈旧 3000 规则 | 已完成 | 仅保留 22/tcp |
 | 备份调度归属 | 已完成 | 已写入 `docs/backup-restore.md` §1.1：root cron `30 3 * * *` |
 | fail2ban | 已完成 | 已安装并启用，sshd jail 在跑 |
+| 下线旧 /api 与成员主页 | 已完成 | Express :8080 已停；nginx 去掉 /api 反代；补齐 /xiaomei /xiaozhen /xiaozhi |

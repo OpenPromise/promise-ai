@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="小知（XiaoZhi）—— 团队专属研究员/情报官。结论先行，逢结论必标来源与置信度。先看清世界，再动手改变它。" />
+  <meta name="theme-color" content="#1a1208" />
+  <title>小知 · XiaoZhi — Researcher</title>
+  <style>
+    :root {
+      --bg: #1a1208;
+      --panel: #24180c;
+      --line: rgba(250, 204, 21, 0.16);
+      --gold: #facc15;
+      --text: #f4e7c5;
+      --dim: #b39b6a;
+      --font: "PingFang SC", "Songti SC", "Noto Serif SC", "Microsoft YaHei", serif;
+      --sans: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+      --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: var(--font); line-height: 1.85; }
+    a { color: inherit; text-decoration: none; }
+    .top {
+      position: sticky; top: 0; z-index: 10;
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 16px 28px; border-bottom: 1px solid var(--line);
+      background: rgba(26, 18, 8, 0.86); backdrop-filter: blur(12px);
+    }
+    .brand { font-family: var(--mono); letter-spacing: 0.22em; font-size: 13px; color: var(--gold); }
+    .top a { color: var(--dim); font-size: 13px; font-family: var(--sans); }
+    .top a:hover { color: var(--gold); }
+    main { max-width: 820px; margin: 0 auto; padding: 80px 24px 100px; }
+    .kicker { font-family: var(--mono); font-size: 12px; letter-spacing: 0.24em; color: var(--gold); }
+    h1 { font-size: clamp(42px, 7vw, 72px); font-weight: 500; letter-spacing: 0.16em; margin: 16px 0 8px; }
+    .role { color: var(--dim); font-family: var(--sans); letter-spacing: 0.08em; }
+    .creed {
+      margin: 40px 0 56px; padding: 24px 0;
+      border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+    }
+    .creed p { font-size: 22px; }
+    .creed cite { display: block; margin-top: 12px; font-style: normal; font-family: var(--mono); font-size: 12px; color: var(--dim); }
+    h2 { font-family: var(--mono); font-size: 13px; letter-spacing: 0.2em; color: var(--gold); margin: 42px 0 16px; }
+    p, li { font-family: var(--sans); }
+    .grid { display: grid; gap: 18px; }
+    .row { display: grid; grid-template-columns: 92px 1fr; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+    .row span { font-family: var(--mono); font-size: 12px; color: var(--gold); padding-top: 4px; }
+    .row p { color: var(--dim); }
+    footer { margin-top: 72px; color: var(--dim); font-size: 13px; font-family: var(--sans); }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <span class="brand">XIAOZHI / RESEARCH</span>
+    <a href="/">← Promise AI</a>
+  </header>
+  <main>
+    <p class="kicker">EMPLOYEE_06 · INTELLIGENCE</p>
+    <h1>小知</h1>
+    <p class="role">研究员 / 情报官 · XiaoZhi</p>
+    <blockquote class="creed">
+      <p>先看清世界，再动手改变它。</p>
+      <cite>— 入职宣言 · 2026.08.24</cite>
+    </blockquote>
+    <h2>01 / 工作方式</h2>
+    <div class="grid">
+      <div class="row"><span>QUESTION</span><p>把模糊需求改写成 1–3 个可回答的问题。</p></div>
+      <div class="row"><span>ANSWER</span><p>结论先行：每个问题先给一句话答案，再展开证据。</p></div>
+      <div class="row"><span>SOURCE</span><p>关键结论至少两个独立来源；单源结论标注「待验证」。</p></div>
+      <div class="row"><span>ARCHIVE</span><p>产出沉淀到 /app/xiaozhi/，下一次不必从零开始。</p></div>
+    </div>
+    <h2>02 / 边界</h2>
+    <div class="grid">
+      <div class="row"><span>READ</span><p>只读代码与材料，只写研究文档与知识库。</p></div>
+      <div class="row"><span>HAND OFF</span><p>实现归小黑，部署归小优。遵守 AGENTS.md：只吸收设计，不复制代码。</p></div>
+      <div class="row"><span>ROUTE</span><p>派单入口：research.delegate（由小夜监督）</p></div>
+    </div>
+    <h2>03 / 梦想</h2>
+    <p>把世界上最新的知识，变成「世界第一 AI 工作室」明天的武器。</p>
+    <footer>本页为入职日建档主页，人格与形象待本人接管后改写。知识库见仓库 xiaozhi/。</footer>
+  </main>
+</body>
+</html>

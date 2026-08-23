@@ -271,6 +271,8 @@ function Footer() {
           <a href="/xiaohei/">小黑 · 工程师</a>
           <a href="/xiaoyou/">小优 · 运维</a>
           <a href="/xiaomei/">小美 · 设计师</a>
+          <a href="/xiaozhen/">小真 · QA</a>
+          <a href="/xiaozhi/">小知 · 研究员</a>
         </div>
       </div>
       <p className="footer-bottom">
