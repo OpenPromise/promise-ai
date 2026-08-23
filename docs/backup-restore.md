@@ -13,6 +13,21 @@
 - 保留：最近 **14 份**（旧的自动删除）；
 - 日志：`/home/ubuntu/backups/postgres-backup.log`。
 
+
+## 1.1 如何确认调度还在跑
+
+调度归属：**root crontab**（不是 ubuntu 用户 crontab，也不是 Agent TaskService）。
+
+```bash
+sudo crontab -l | grep backup-postgres
+# 期望：30 3 * * * /home/ubuntu/backup-postgres.sh >> /home/ubuntu/backups/postgres-backup.log 2>&1
+
+tail -5 /home/ubuntu/backups/postgres-backup.log
+# 期望每天 03:30 出现一行 [backup] ok ...
+```
+
+若连续两天没有新日志，先手动跑 `sudo /home/ubuntu/backup-postgres.sh` 看脚本本身是否失败，再查 `sudo crontab -l`。
+
 手动备份一条命令：
 
 ```bash

@@ -6,7 +6,7 @@ import { runDshHeadless, type DshRunResult } from './coding-tool.js';
 const XIAO_MEI_DSH_PATCH =
   process.env.XIAOMEI_DSH_PATCH ??
   path.resolve(process.cwd(), 'infrastructure/dsh/xiaomei-openai.patch.yml');
-const XIAO_MEI_OPENAI_MODEL = process.env.XIAOMEI_OPENAI_MODEL ?? 'gpt-5.6-sol';
+export const XIAO_MEI_OPENAI_MODEL = process.env.XIAOMEI_OPENAI_MODEL ?? 'gpt-5.6-sol';
 
 /**
  * designer.delegate：把产品设计/UX/UI/视觉设计任务派给"小美"（专属

@@ -186,3 +186,24 @@ crontab 与 systemd timer 中均未找到 postgres 备份的调度项，但日�
 ---
 
 *本报告由 Fable5 于 2026-08-24 生成；所有数据均为服务器实测，命令与输出可复核。*
+
+
+---
+
+## 10. 整改记录（2026-08-24 同日）
+
+由 Fable5 按本报告行动清单执行。API 密钥轮换仍需 CEO 在各家控制台完成。
+
+| 事项 | 状态 | 实测结果 |
+| --- | --- | --- |
+| 关闭 SSH 密码认证 | 已完成 | `/etc/ssh/sshd_config.d/00-harden.conf`；`sshd -T` 为 `passwordauthentication no` / `permitrootlogin without-password`；密钥登录复测通过 |
+| 轮换泄露凭据 | 待 CEO | SSH 密码登录已关，泄露的服务器密码对 SSH 失效；MiniMax / 火山 Ark key 仍需控制台重置 |
+| 推送未推送提交 | 进行中 | 见本提交之后的 `git push` |
+| Docker 构建缓存 | 已完成 | 回收约 22GB；根分区 81% → **26%**（余 28G） |
+| `.env.bak` 收权 | 已完成 | `chmod 600` |
+| 陈旧测试断言 | 已完成 | 测试改为引用 `XIAO_MEI_OPENAI_MODEL`；designer/qa/research 共 17 测通过 |
+| repo 属主归一 | 已完成 | `chown -R ubuntu:ubuntu ~/promise-ai` |
+| 清理历史部署包 | 已完成 | `~/promise-ai-deploy*.tar.gz` 与 `~/NUL` 已删 |
+| UFW 陈旧 3000 规则 | 已完成 | 仅保留 22/tcp |
+| 备份调度归属 | 已完成 | 已写入 `docs/backup-restore.md` §1.1：root cron `30 3 * * *` |
+| fail2ban | 已完成 | 已安装并启用，sshd jail 在跑 |
