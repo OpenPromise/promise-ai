@@ -1,7 +1,9 @@
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { access } from 'node:fs/promises';
 import type { PermissionLevel, Tool, ToolContext, ToolResult } from '@personal-ai/tools';
-import { runDshHeadless } from './coding-tool.js';
+import { runDshHeadless, type DshRunResult } from './coding-tool.js';
+import { appendOpsAudit, isLikelyDestructive, resolveGitHead } from './ops-audit.js';
 
 /**
  * ops.delegate：把服务器运维任务派给"小优"（专属运维工程师子代理）执行。
@@ -94,16 +96,59 @@ export function createOpsTool(): Tool {
         return { ok: false, error: '任务文本超过 20000 字符，请拆分任务后重试' };
       }
       const timeoutMs = Math.min(Math.max(1, Math.floor(timeoutMinutes)), 60) * 60 * 1000;
-      const { stdout, stderr, timedOut, exitCode } = await runDshHeadless(
-        buildXiaoYouTask(task.trim()),
-        {
-          cwd: resolvedDir,
-          timeoutMs,
-          // 小优管理整台服务器：全权限（免沙箱确认），与小夜同级。
-          permissionMode: 'danger-full-access',
-          signal: context.signal,
-        },
-      );
+      let run: DshRunResult;
+      try {
+        run = await runDshHeadless(
+          buildXiaoYouTask(task.trim()),
+          {
+            cwd: resolvedDir,
+            timeoutMs,
+            // 小优管理整台服务器：全权限（免沙箱确认），与小夜同级。
+            permissionMode: 'danger-full-access',
+            signal: context.signal,
+          },
+        );
+      } catch (error) {
+        // 派单启动失败（如 spawn 异常）也要留痕：exitCode 记 null，可回放查证。
+        await appendOpsAudit({
+          ts: new Date().toISOString(),
+          type: 'ops.delegate',
+          taskId: randomUUID(),
+          taskSummary: task.trim().slice(0, 200),
+          directory: resolvedDir,
+          exitCode: null,
+          timedOut: false,
+          resultSummary: `派单启动失败：${error instanceof Error ? error.message : String(error)}`.slice(0, 500),
+          destructive: isLikelyDestructive(task),
+          gitHead: await resolveGitHead(resolvedDir),
+        });
+        return {
+          ok: false,
+          error: `小优派单启动失败：${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      const { stdout, stderr, timedOut, exitCode } = run;
+      // 派单审计（Leon ToolCallLogger 留痕）：记录时间/taskId/任务摘要/目录/退出码/
+      // 结果摘要/破坏性标记/git 基线，落盘 JSON Lines（写前脱敏、超限滚动）。
+      // 审计失败不阻断派单结果（appendOpsAudit 内部兜底，不抛出）。
+      await appendOpsAudit({
+        ts: new Date().toISOString(),
+        type: 'ops.delegate',
+        taskId: randomUUID(),
+        taskSummary: task.trim().slice(0, 200),
+        directory: resolvedDir,
+        exitCode,
+        timedOut,
+        resultSummary: (
+          timedOut
+            ? `小优执行超过 ${Math.round(timeoutMs / 60_000)} 分钟被终止`
+            : exitCode !== 0
+              ? (stderr.trim() || stdout.trim()).slice(0, 500)
+              : (stdout.trim() || stderr.trim()).slice(0, 500)
+        ),
+        destructive: isLikelyDestructive(task),
+        gitHead: await resolveGitHead(resolvedDir),
+      });
       if (timedOut) {
         return {
           ok: false,

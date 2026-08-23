@@ -737,3 +737,24 @@
 - 仓库：https://github.com/leon-ai/leon
 - 分析文档：/app/team-site/docs/leon-analysis.md
 - 关键源码（develop 分支）：server/src/core/nlp/nlu/nlu.ts、server/src/core/brain/brain.ts、server/src/core/toolkit-registry.ts、server/src/core/tool-executor.ts、server/src/core/post-turn-maintenance-queue.ts、server/src/core/llm-manager/llm-duty.ts、server/src/core/memory-manager/memory-manager.ts、server/src/core/context-manager/context-manager.ts、server/src/core/self-model-manager.ts、server/src/core/pulse-manager.ts、skills/native/todo_list_skill/skill.json、skills/native/skill_writer_skill/skill.json
+
+---
+
+## 二十七、Leon 优化落地：工具配置缺失指引 + ops 派单审计日志（2026-08-23）
+
+> 本次落地两件事：①工具可用性显式化的务实版（报错即给指引）；②小优派单审计日志（留痕可回放）。均按"调研 → 小步实现 → 测试 → 手工验证 → 提交"执行。
+
+1. **【高置信·本次验证】配置缺失类报错统一"缺什么/配置位置/如何补"后缀，一处改动覆盖多工具**
+   - 触发场景：工具执行失败只报"未找到 XXX/失败"，上层（LLM/用户）不知道去哪补配置只能盲试（Leon resolveToolAvailability 的差距；vision.ts 已有范本）。
+   - 动作：在 harness 层 tool-execution.ts 加纯函数 `missingConfigHint(missing, location, howToFix)` 生成统一后缀；缺 dsh 的报错收敛到 runDshHeadless 一处（ops.delegate / coding.run / engineer.delegate 三工具自动生效，因为三者都吃 runDshHeadless 的 stderr）；weixin 桥 401 指向 BRIDGE_TOKEN（桥端鉴权只返回 401，语义明确可精准指引）。
+   - 证据：新增 tool-execution.test.ts + ops/weixin/engineer-runner 三处断言（错误含"缺什么/配置位置/如何补"）全绿；不建完整 not_available 枚举避免过度设计（务实版原则）。
+
+2. **【高置信·本次验证】ops 派单审计日志：JSON Lines 追加写 + 写前脱敏 + 超限滚动 + git 基线**
+   - 触发场景：小优（ops.delegate）每次派单没有落盘记录，故障排查/回滚只能靠记忆；派单内容（任务/结果摘要）可能含密钥。
+   - 动作：ops-audit.ts 实现 appendOpsAudit（默认 /app/logs/ops-audit.log，OPS_AUDIT_LOG_PATH 可覆盖；5MB 滚动保留 .1；全局写队列串行化防并发交错；失败只 console.error 不阻断派单）；写前用 server-shell 的 collectSecrets/redactOutput 脱敏全部字符串字段；条目含 taskId（randomUUID）/gitHead（resolveGitHead 跑 git rev-parse HEAD）/破坏性关键词标记（isLikelyDestructive 启发式）。校验失败（缺 task/目录不存在）不产生条目（未真正派单），spawn 异常也留痕（exitCode=null）。
+   - 证据：ops-audit.test.ts 覆盖追加/脱敏/滚动/自动建目录，ops-tools.test.ts 覆盖成功/失败/破坏性标记/spawn 异常，全绿；手工调用 ops.delegate（"查看服务器时间"）落盘 2 条（1 失败 1 成功），0 处密钥泄漏。
+
+3. **【低置信·单次观察·待验证】本沙箱内真实 dsh 派单写 /root/.dsh/profiles 会被文件沙箱拒绝（EACCES）**
+   - 触发场景：想手工验证 ops.delegate 端到端成功路径，dsh 启动阶段写 profile 失败（landlock 只放行 /app 与临时区）。
+   - 动作：设置 `DSH_HOME=/tmp/dsh-manual-home` 后重试成功（dsh 配置目录可被 DSH_HOME 覆盖，凭据仍可解析）——手工验证用此技巧；但生产容器内 /root/.dsh 可写，不需要。
+   - 证据：EACCES open '/root/.dsh/profiles/headless/cordis.yml' → DSH_HOME 覆盖后 exit 0 且小优报告落盘。单次观察，待在生产容器复验。
