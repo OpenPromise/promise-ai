@@ -23,7 +23,14 @@ export const SECTIONS: SectionDef[] = [
 ];
 
 export function scrollToSection(id: string, behavior: ScrollBehavior = 'smooth') {
-  document.getElementById(id)?.scrollIntoView({ behavior, block: 'start' });
+  // 减动效偏好下直接定位（DESIGN_SPEC §6.10：smooth scroll 有静态替代）
+  const finalBehavior =
+    behavior === 'smooth' &&
+    typeof window !== 'undefined' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      ? 'auto'
+      : behavior;
+  document.getElementById(id)?.scrollIntoView({ behavior: finalBehavior, block: 'start' });
 }
 
 /** 解析进入地址 → 目标板块（hash > 旧路径 > ?nav=N > 首页） */

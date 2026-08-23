@@ -1,0 +1,551 @@
+/* ============================================================
+ * 首页 Studio Editorial（方向 A）样式
+ * 依据 DESIGN_SPEC §2.5 / §6.3 / §6.8：
+ * - #1d1d1d 深色底 + #50e5fb 品牌动作色；青色只用于主 CTA、当前状态、
+ *   焦点环与少量路径提示（kicker/文字链接），不做全局 glow/粒子/厚重阴影；
+ * - 桌面 12 列网格（内容最大宽度 min(1200px, 100vw - 2*6vw)）；
+ *   移动端内容自然增长，首屏允许超过一屏；
+ * - 所有可点击目标 ≥ 44px；focus-visible 由全局规则提供；
+ * - prefers-reduced-motion 下视频降级为 poster（JS 处理），动效由全局规则停用。
+ * ============================================================ */
+
+/* ---------- 首页板块：允许内容超过一屏（scroll-snap 容器为 proximity，可自然滚动） ---------- */
+.home-page.page-sec {
+  height: auto;
+  min-height: 100vh;
+  background: var(--color-bg);
+}
+
+/* ---------- 首屏 Hero 舞台 ---------- */
+.home-hero {
+  position: relative;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 560px;
+  background-color: #0d0d0d;
+  overflow: hidden;
+}
+
+.home-hero-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-color: #0d0d0d;
+  background-size: cover;
+  background-position: center;
+}
+
+/* 文案安全区：左侧局部深色渐变（避免整屏压黑；移动端文案在独立深色带，此渐变隐藏） */
+.home-hero::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    rgba(13, 13, 13, 0.9) 0%,
+    rgba(13, 13, 13, 0.56) 34%,
+    transparent 62%
+  );
+}
+
+/* 首屏文案块：左对齐，宽度约 5 列（max 520px），垂直居中偏下安全区 */
+.home-hero-copy {
+  position: relative;
+  z-index: 2;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  width: min(1200px, calc(100vw - 2 * 6vw));
+  margin: 0 auto;
+  padding: calc(var(--nav-height) + 2vh) 0 8vh;
+}
+
+.home-kicker {
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  letter-spacing: 0.32em;
+  color: var(--color-accent);
+  text-transform: uppercase;
+}
+
+.home-headline {
+  font-size: clamp(2.5rem, 6vw, 4rem);
+  font-weight: 700;
+  line-height: 1.14;
+  letter-spacing: 0.02em;
+  margin: var(--space-4) 0 var(--space-3);
+  max-width: 8em;
+}
+
+.home-sub {
+  color: var(--color-text-2);
+  font-size: var(--fs-subtitle);
+  line-height: 1.7;
+  max-width: 42ch;
+}
+
+/* 主 CTA（青色实心 + 高对比深字；radius-sm 保持编辑感，不用大面积胶囊） */
+.home-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  flex-wrap: wrap;
+  margin-top: var(--space-6);
+}
+
+.home-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  padding: 12px 30px;
+  background: var(--color-accent);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  color: #061a20;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-decoration: none;
+  cursor: pointer;
+  transition: filter 0.15s ease, transform 0.15s ease;
+}
+
+.home-cta:hover {
+  filter: brightness(1.08);
+}
+
+.home-cta:active {
+  transform: translateY(1px);
+}
+
+/* 次级入口：低干扰文字链接，不与主 CTA 同层级 */
+.home-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 48px;
+  padding: 0 4px;
+  color: var(--color-accent-2);
+  font-size: var(--fs-body);
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.home-secondary:hover {
+  color: var(--color-accent);
+  border-bottom-color: var(--color-accent);
+}
+
+/* 章节索引（装饰性，告知还有内容；矮屏/移动端隐藏） */
+.home-index {
+  position: absolute;
+  right: clamp(16px, 3vw, 48px);
+  bottom: clamp(20px, 5vh, 48px);
+  z-index: 2;
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  letter-spacing: 0.24em;
+  color: var(--color-text-3);
+}
+
+/* ---------- 编辑式内容流通用结构 ---------- */
+.home-block {
+  border-top: 1px solid var(--color-line);
+  padding: clamp(48px, 9vh, 96px) 0;
+}
+
+.home-grid {
+  width: min(1200px, calc(100vw - 2 * 6vw));
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: clamp(16px, 1.5vw, 24px);
+  align-items: start;
+}
+
+.home-block-head {
+  grid-column: 1 / span 5;
+}
+
+.home-block-title {
+  font-size: clamp(1.5rem, 3vw, 2.1rem);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin-top: var(--space-2);
+  line-height: 1.3;
+}
+
+.home-block-desc {
+  color: var(--color-text-2);
+  font-size: 0.95rem;
+  line-height: 1.7;
+  margin-top: var(--space-3);
+  max-width: 46ch;
+}
+
+.home-block-status {
+  grid-column: 1 / -1;
+  color: var(--color-text-3);
+  padding: var(--space-6) 0;
+}
+
+/* 编辑条目通用链接（路径提示：青色文字 + 下划线条） */
+.home-signal-link,
+.home-people-more,
+.home-worlds-more {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 44px;
+  color: var(--color-accent);
+  font-size: 0.92rem;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.home-signal-link:hover,
+.home-people-more:hover,
+.home-worlds-more:hover {
+  border-bottom-color: var(--color-accent);
+}
+
+/* ---------- 团队目录（3 列编辑条目；整条为链接进入 #roles） ---------- */
+.home-people-list {
+  grid-column: 1 / -1;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: clamp(16px, 2vw, 32px);
+  margin-top: var(--space-7);
+}
+
+.home-people-list li {
+  display: flex;
+}
+
+.home-people-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  flex: 1;
+  padding: var(--space-5);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  text-decoration: none;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.home-people-item:hover {
+  border-color: var(--color-accent);
+  transform: translateY(-2px);
+}
+
+.home-people-num {
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  letter-spacing: 0.22em;
+  color: var(--color-text-3);
+}
+
+.home-people-avatar {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  object-position: center 18%;
+  border-radius: var(--radius-sm);
+  margin-top: var(--space-2);
+}
+
+.home-people-name {
+  font-size: 1.3rem;
+  font-weight: 600;
+  margin-top: var(--space-2);
+}
+
+.home-people-title {
+  color: var(--color-text-2);
+  font-size: 0.88rem;
+  letter-spacing: 0.1em;
+}
+
+.home-people-bio {
+  color: var(--color-text-2);
+  font-size: 0.92rem;
+  line-height: 1.7;
+  margin-top: var(--space-2);
+}
+
+.home-people-more {
+  margin-top: auto;
+  padding-top: var(--space-4);
+}
+
+/* ---------- 最新情报（左标题 / 右一条真实动态） ---------- */
+.home-signal-head {
+  grid-column: 1 / span 5;
+}
+
+.home-signal-card {
+  grid-column: 7 / -1;
+  margin-top: var(--space-2);
+}
+
+.home-signal-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.home-signal-date {
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  letter-spacing: 0.08em;
+  color: var(--color-text-3);
+}
+
+.home-signal-author {
+  color: var(--color-text-2);
+  font-size: 0.92rem;
+}
+
+.home-signal-title {
+  font-size: clamp(1.2rem, 2.2vw, 1.6rem);
+  font-weight: 600;
+  line-height: 1.5;
+  margin: var(--space-4) 0;
+  max-width: 26em;
+}
+
+/* ---------- 工作场景（3 列横向静态索引，点击进入 #world） ---------- */
+.home-worlds-list {
+  grid-column: 1 / -1;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: clamp(16px, 2vw, 32px);
+  margin-top: var(--space-7);
+}
+
+.home-worlds-item {
+  display: block;
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.home-worlds-img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  object-position: center;
+  border-radius: var(--radius-md);
+  transition: transform 0.15s ease;
+}
+
+.home-worlds-item:hover .home-worlds-img {
+  transform: translateY(-2px);
+}
+
+.home-worlds-item:hover .home-worlds-name {
+  color: var(--color-accent-2);
+}
+
+.home-worlds-owner {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  letter-spacing: 0.22em;
+  color: var(--color-text-3);
+  margin-top: var(--space-3);
+}
+
+.home-worlds-name {
+  display: block;
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-top: var(--space-1);
+  transition: color 0.15s ease;
+}
+
+.home-worlds-desc {
+  display: block;
+  color: var(--color-text-2);
+  font-size: 0.92rem;
+  line-height: 1.7;
+  margin-top: var(--space-2);
+}
+
+.home-worlds-more {
+  margin-top: var(--space-3);
+}
+
+/* ---------- 未来都市愿景收束（愿景语义，不是现状成果） ---------- */
+.home-mission {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  min-height: clamp(420px, 64vh, 680px);
+  padding: 0;
+}
+
+.home-mission-bg {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+}
+
+.home-mission-veil {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(13, 13, 13, 0.6) 0%,
+    rgba(13, 13, 13, 0.3) 45%,
+    rgba(13, 13, 13, 0.88) 100%
+  );
+}
+
+.home-mission-content {
+  position: relative;
+  z-index: 2;
+  width: min(1200px, calc(100vw - 2 * 6vw));
+  margin: 0 auto;
+  padding: clamp(48px, 9vh, 96px) 0;
+}
+
+.home-mission-note {
+  display: inline-block;
+  margin-top: var(--space-3);
+  padding: 3px 12px;
+  border: 1px solid rgba(80, 229, 251, 0.45);
+  border-radius: var(--radius-full);
+  color: var(--color-accent-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  letter-spacing: 0.3em;
+}
+
+.home-mission-title {
+  font-size: clamp(1.6rem, 3.6vw, 2.6rem);
+  font-weight: 600;
+  line-height: 1.3;
+  margin: var(--space-4) 0 var(--space-3);
+  max-width: 18em;
+}
+
+.home-mission-desc {
+  color: #cfcfcf;
+  line-height: 1.75;
+  max-width: 52ch;
+}
+
+/* ---------- 平板/移动端：内容自然增长，单列 ---------- */
+@media (max-width: 900px) {
+  /* 首屏：视频/poster 舞台 → 深色文案带 → CTA（文字不直接压在复杂画面上） */
+  .home-hero {
+    height: auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .home-hero::after {
+    display: none;
+  }
+
+  .home-hero-stage {
+    position: relative;
+    height: 56dvh;
+    min-height: 320px;
+    flex: none;
+  }
+
+  .home-hero-copy {
+    height: auto;
+    width: 100%;
+    padding: var(--space-6) 20px calc(28px + env(safe-area-inset-bottom));
+    background: linear-gradient(180deg, #1d1d1d 0%, #131313 100%);
+  }
+
+  .home-headline {
+    font-size: clamp(2.5rem, 10vw, 3rem);
+  }
+
+  .home-actions {
+    width: 100%;
+    margin-top: var(--space-5);
+  }
+
+  .home-cta {
+    width: 100%;
+  }
+
+  .home-index {
+    display: none;
+  }
+
+  /* 编辑式内容流：单列 */
+  .home-block {
+    padding: 56px 0;
+  }
+
+  .home-grid {
+    width: calc(100vw - 40px);
+    grid-template-columns: 1fr;
+  }
+
+  .home-block-head,
+  .home-signal-head,
+  .home-signal-card,
+  .home-block-status {
+    grid-column: 1 / -1;
+  }
+
+  .home-signal-card {
+    margin-top: var(--space-5);
+  }
+
+  .home-people-list,
+  .home-worlds-list {
+    grid-template-columns: 1fr;
+    margin-top: var(--space-5);
+  }
+
+  .home-mission {
+    min-height: auto;
+  }
+
+  .home-mission-content {
+    width: calc(100vw - 40px);
+  }
+}
+
+/* 矮屏（横屏手机 / 小窗口）：优先保证导航、品牌名和 CTA 可见，取消装饰性章节编号 */
+@media (max-height: 660px) {
+  .home-index {
+    display: none;
+  }
+
+  .home-headline {
+    font-size: clamp(2rem, 5vw, 3rem);
+  }
+
+  .home-hero-copy {
+    padding-top: calc(var(--nav-height) + 1vh);
+  }
+}

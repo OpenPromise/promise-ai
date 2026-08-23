@@ -61,6 +61,12 @@ button {
   font-size: inherit;
 }
 
+/* 统一键盘焦点环（DESIGN_SPEC §6.10）：高对比青色描边，不与背景混淆 */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
 /* ---------- 全屏翻页容器（参考站 wrapSwiper） ---------- */
 .site-scroll {
   position: relative;
@@ -69,7 +75,9 @@ button {
   height: 100dvh;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scroll-snap-type: y mandatory;
+  /* proximity：板块边界仍会吸附（保持翻页叙事），但允许首页这类
+   * 内容超过一屏的板块在内部自然滚动（DESIGN_SPEC §6.7 交互 3） */
+  scroll-snap-type: y proximity;
   scrollbar-width: none;
   -ms-overflow-style: none;
 }

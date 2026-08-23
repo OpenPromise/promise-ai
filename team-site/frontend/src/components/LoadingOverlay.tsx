@@ -27,7 +27,8 @@ export default function LoadingOverlay() {
     <div className={`loading-overlay${phase === 'fade' ? ' is-fading' : ''}`} aria-hidden="true">
       <div className="loading-brand">
         <p className="loading-sub">{SUB}</p>
-        <h1 className="loading-name" aria-label={BRAND}>
+        {/* 页面唯一 H1 属于首页正文（DESIGN_SPEC §6.10）；加载层为装饰性品牌动画，用 div 承载 */}
+        <div className="loading-name" aria-hidden="true">
           {BRAND.split('').map((ch, i) => (
             <span key={`${ch}-${i}`} className="loading-letter" style={{ animationDelay: `${0.06 * i}s` }}>
               {ch}
@@ -38,7 +39,7 @@ export default function LoadingOverlay() {
             <i />
             <i />
           </span>
-        </h1>
+        </div>
         <div className="loading-bar">
           <i />
         </div>
