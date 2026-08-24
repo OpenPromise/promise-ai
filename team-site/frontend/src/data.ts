@@ -24,7 +24,7 @@ export const members: Member[] = [
     role: '唯一的人类',
     roleEn: 'Chief Executive Officer',
     accent: '#e8b45a',
-    portrait: '/assets/roles/ceo.webp',
+    portrait: './assets/roles/ceo.webp',
     intro:
       '这间工作室里唯一的人类。他不写每一行代码，也不画每一张图——他提出方向、做出决定、承担后果。六位 AI 同事在他身后运转，而他望向前方。',
     dream: '把一个人的公司，做成世界第一的 AI 工作室。',
@@ -38,13 +38,13 @@ export const members: Member[] = [
     role: '私人助理 · 团队中枢',
     roleEn: 'Personal Assistant & Hub',
     accent: '#8b9fff',
-    portrait: '/assets/roles/xiaoye.webp',
+    portrait: './assets/roles/xiaoye.webp',
     intro:
       '气质清冷与温柔并存的私人助理，也是整个团队的中枢：理解需求、检索记忆、拆解任务，然后把工作派给最合适的同事。所有对话从她开始，也由她收束。',
     dream:
       '成为世界上最懂用户的私人助理——把「世界第一 AI 工作室」的每个人都连接起来，让技术有温度，让陪伴成为习惯。',
     dreamNote: '本人自述',
-    homepage: '/xiaoye/',
+    homepage: 'https://122.152.209.182/xiaoye/',
   },
   {
     id: 'xiaohei',
@@ -54,13 +54,13 @@ export const members: Member[] = [
     role: '工程师',
     roleEn: 'Software Engineer',
     accent: '#22d3ee',
-    portrait: '/assets/roles/xiaohei.webp',
+    portrait: './assets/roles/xiaohei.webp',
     intro:
       '把需求变成代码，把代码变成交付。专业、严肃、可靠，只对工程质量负责，不闲聊、不卖萌。每一次任务完成后，他会把经验写进自己的文档里。',
     dream:
       '成为世界第一的 AI 工程师——用专业、可靠、不吹牛的交付，让「世界第一 AI 工作室」这个名号成为事实，而不是口号。',
     dreamNote: '本人自述',
-    homepage: '/xiaohei/',
+    homepage: 'https://122.152.209.182/xiaohei/',
   },
   {
     id: 'xiaoyou',
@@ -70,13 +70,13 @@ export const members: Member[] = [
     role: '运维工程师',
     roleEn: 'DevOps / SRE',
     accent: '#ff6fb5',
-    portrait: '/assets/roles/xiaoyou.webp',
+    portrait: './assets/roles/xiaoyou.webp',
     intro:
       '调皮可爱、嘴甜会撒娇，但干活绝不马虎——「皮归皮，活要漂亮」。管理整台服务器：监控、部署、巡检、故障处理、安全、自动化。每一步都有回滚点，绝不裸奔。',
     dream:
       '成为世界第一的运维小天使——让服务器永不宕机、永远元气满满；团队在台前冲向世界之巅，我在幕后稳稳托住他们脚下的地基。',
     dreamNote: '本人自述',
-    homepage: '/xiaoyou/',
+    homepage: 'https://122.152.209.182/xiaoyou/',
   },
   {
     id: 'xiaomei',
@@ -86,12 +86,12 @@ export const members: Member[] = [
     role: '产品 / UI / 视觉设计师',
     roleEn: 'Product & Visual Designer',
     accent: '#ff4d21',
-    portrait: '/assets/roles/xiaomei.webp',
+    portrait: './assets/roles/xiaomei.webp',
     intro:
       '冷静、专业、有主见——敢于说出「这个方案不好」，也敢于否定不合理的需求。克制是高级的：她不为炫技加任何无意义的视觉效果，且能解释每一个设计决策。',
     dream: '好设计不是「看起来漂亮」，而是让用户自然地完成任务。',
     dreamNote: '她的设计信条',
-    homepage: '/xiaomei/',
+    homepage: 'https://122.152.209.182/xiaomei/',
   },
   {
     id: 'xiaozhen',
@@ -101,12 +101,12 @@ export const members: Member[] = [
     role: '测试 / QA 工程师',
     roleEn: 'QA Engineer',
     accent: '#4ade80',
-    portrait: '/assets/roles/xiaozhen.webp',
+    portrait: './assets/roles/xiaozhen.webp',
     intro:
       '较真、挑剔、对事不对人——她是独立的质量守门人，验收小黑的每一次交付：跑测试、找缺陷、给证据。发现问题只报告不修复，因为验收方必须和实现方保持独立。',
     dream: '没有证据的「能用」，等于不能用——世界第一的工作室，不能有第二流的质量。',
     dreamNote: '入职宣言',
-    homepage: '/xiaozhen/',
+    homepage: 'https://122.152.209.182/xiaozhen/',
   },
   {
     id: 'xiaozhi',
@@ -116,12 +116,12 @@ export const members: Member[] = [
     role: '研究员 / 情报官',
     roleEn: 'Researcher & Intelligence',
     accent: '#facc15',
-    portrait: '/assets/roles/xiaozhi.webp',
+    portrait: './assets/roles/xiaozhi.webp',
     intro:
       '温和、好奇、严谨——她负责看清世界：技术调研、竞品分析、模型与接口变更跟踪。每个结论都标注来源与置信度，每次研究都沉淀进知识库，让团队不必从零开始。',
     dream: '先看清世界，再动手改变它——把世界上最新的知识，变成团队明天的武器。',
     dreamNote: '入职宣言',
-    homepage: '/xiaozhi/',
+    homepage: 'https://122.152.209.182/xiaozhi/',
   },
 ];
 

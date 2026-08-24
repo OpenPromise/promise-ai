@@ -1,414 +1,151 @@
-# Qwen 私人 AI 助理
+# Promise AI · 一个人，六位 AI 同事
 
-一个长期可扩展的个人 AI Assistant 的 Monorepo。设计蓝图见
-[Grok_ElevenLabs_私人AI助理开发计划.md](./Grok_ElevenLabs_私人AI助理开发计划.md)，
-架构说明见 [docs/architecture.md](./docs/architecture.md)。
+> **我们不演示未来，我们运行现在。**
 
-> Qwen 负责"想"，Agent Core 负责"做"，Memory 负责"记"，
-> 各终端负责"行动"。所有第三方服务都通过抽象层接入，以便未来替换。
+这是一个**真实运行中**的 AI 工作室 Monorepo：一位人类创始人（CEO），与六位各司其职的 AI 同事。
 
-## 当前状态
+它不是概念演示，也不是开源玩具——这里的每一行代码都在生产环境运行，每一位成员都有真实的工作职责、工作区、文档与产出。你看到的官网、成员主页、自动化巡检、微信对话，都是这套系统自己跑出来的。
 
-- Phase 0（项目骨架）：完成
-- Phase 1（Qwen 文本 Agent MVP）：完成
-- Phase 1.1（LLM Provider 可切换：Qwen / OpenRouter）：完成
-- Phase 2（Persona 人格系统）：完成
-- Phase 3（ElevenLabs 语音层）：完成
-- Phase 4（实时语音 Agent）：完成
-- Phase 5（Agent Core / 工具系统）：完成
-- Phase 6（权限系统）：完成
-- Phase 7（Memory System）：完成
-- Phase 8（Task / Scheduler）：完成
-- Phase 9（微信 ClawBot 通道）：完成（桌面端已下线，只保留微信 bot 端）
-- 下一步：微信端体验完善
+---
 
-## 目录结构
+## 团队成员
+
+| 成员 | 角色 | 一句话 |
+| --- | --- | --- |
+| 👤 创始人 | 唯一的人类 · CEO | 提出方向、做出决定、承担后果 |
+| 🌙 小夜 | 私人助理 · 团队中枢 | 所有对话从她开始，也由她收束 |
+| ⚙️ 小黑 | 软件工程师 | 只对工程质量负责，不闲聊、不卖萌 |
+| 🛠️ 小优 | 运维 / SRE | 皮归皮，活要漂亮 |
+| 🎨 小美 | 产品 / UI / 视觉设计师 | 好设计不是漂亮，而是让用户自然地完成任务 |
+| ✅ 小真 | QA 工程师 | 没有证据的「能用」，等于不能用 |
+| 📚 小知 | 研究员 / 情报官 | 先看清世界，再动手改变它 |
+
+每位成员都有自己的工作区目录与个人主页：
+
+```
+xiaoye/   小夜 · 私人助理（团队中枢）
+xiaohei/  小黑 · 工程师
+xiaoyou/  小优 · 运维
+xiaomei/  小美 · 设计
+xiaozhen/ 小真 · QA
+xiaozhi/  小知 · 情报
+```
+
+成员定义与自述见 [`team-site/characters/`](./team-site/characters/)。
+
+---
+
+## 系统架构
+
+```
+┌─────────────────────────────────────────────────┐
+│  用户（微信）                                    │
+└──────────────┬──────────────────────────────────┘
+               │
+┌──────────────▼──────────────────────────────────┐
+│  services/weixin-bridge   微信桥（唯一客户端通道）│
+└──────────────┬──────────────────────────────────┘
+               │
+┌──────────────▼──────────────────────────────────┐
+│  services/agent-server    Agent Server（小夜）   │
+│  会话 · 流式聊天 · 工具调用 · 权限分级            │
+└──────────────┬──────────────────────────────────┘
+               │ 派单
+   ┌───────────┼───────────┬───────────┬─────────┐
+   ▼           ▼           ▼           ▼         ▼
+ 小黑工程师   小优运维    小美设计    小真 QA    小知情报
+ (dsh)       (dsh)      (dsh)      (dsh)      (dsh)
+```
+
+- **小夜**（Agent Server）是大脑：理解需求、检索记忆、拆解任务、派单给最合适的同事。
+- **五位同事**（工程师 / 运维 / 设计 / QA / 情报）通过 dsh（DeepSeek Harness）执行具体工作，各自拥有专属工作区。
+- **权限分级 L0–L3**：只读操作自动放行，高危操作必须确认，密钥只通过 `.env` 注入。
+
+---
+
+## Monorepo 结构
 
 ```text
 ├── services/
-│   ├── agent-server/ # Agent Server：Session + Streaming Chat
-│   └── weixin-bridge/# 微信 ClawBot 桥（唯一客户端通道）
+│   ├── agent-server/        # Agent Server：会话 + 流式聊天 + 工具调用（小夜）
+│   └── weixin-bridge/       # 微信 ClawBot 桥（唯一客户端通道）
 ├── packages/
-│   ├── core/         # Agent Context / Persona 抽象
-│   ├── protocol/     # 统一消息协议
-│   ├── types/        # 共享领域类型
-│   ├── config/       # 环境变量统一管理
-│   ├── llm/          # LLMProvider 抽象 + OpenAI 兼容流式工具
-│   ├── openrouter/   # OpenRouterProvider（LLM 聚合网关）
-│   ├── elevenlabs/   # STT/TTS 抽象（Phase 3 实现）
-│   ├── memory/       # Session/Memory 存储抽象
-│   └── tools/        # Tool 抽象与注册表
-├── persona/          # 人格定义（Phase 2 已接入，文件修改即时生效）
-├── infrastructure/   # Docker Compose / PostgreSQL
-└── docs/             # 架构文档
+│   ├── core/                # Agent Context / Persona 抽象
+│   ├── protocol/            # 统一消息协议
+│   ├── types/               # 共享领域类型
+│   ├── config/              # 环境变量统一管理
+│   ├── llm/                 # LLM Provider 抽象（OpenAI 兼容流式）
+│   ├── openrouter/          # OpenRouterProvider（LLM 聚合网关）
+│   ├── elevenlabs/          # STT/TTS 语音抽象
+│   ├── qwen-realtime/       # 实时语音 Agent
+│   ├── memory/              # 记忆系统（长期记忆 / 画像 / 目标 / 时间线）
+│   └── tools/               # 工具抽象与注册表
+├── persona/                 # 小夜的人格系统（修改即时生效）
+├── team-site/               # 团队官网（React 18 + Vite + TS）
+│   ├── frontend/            #   官网前端（纯静态，可独立构建）
+│   ├── backend/             #   内容 API（Express）
+│   ├── characters/          #   成员定义与自述
+│   ├── assets/              #   素材（形象 / 场景 / 视频）
+│   └── nginx/               #   部署配置
+├── xiaoye/ xiaohei/ xiaoyou/ xiaomei/ xiaozhen/ xiaozhi/
+│                            # 各成员工作区与个人主页
+├── infrastructure/          # Docker Compose / PostgreSQL / systemd
+├── docs/                    # 架构与运维文档
+└── scripts/                 # 运维与调试脚本
 ```
 
-## 前置要求
+---
 
-- Node.js >= 20（开发使用 24）
-- Docker + Docker Compose（仅本地 PostgreSQL 需要）
+## 技术栈
+
+- **语言 / 工程**：TypeScript Monorepo（npm workspaces）、Node.js ≥ 20
+- **LLM**：Qwen（DashScope）/ DeepSeek / OpenRouter，可切换
+- **语音**：ElevenLabs STT / TTS
+- **通道**：微信（桌面端已下线）
+- **记忆**：长期记忆 / 用户画像 / 长期目标 / 事件时间线
+- **官网**：React 18 + Vite + TypeScript
+- **部署**：Docker + nginx + systemd（腾讯云轻量服务器）
+
+---
 
 ## 快速开始
 
 ```bash
 npm install
-cp .env.example .env   # 填入 DASHSCOPE_API_KEY（或 OPENROUTER_API_KEY），以及 ELEVENLABS_API_KEY / ELEVENLABS_VOICE_ID
-npm run infra:up       # 启动 PostgreSQL
-npm run dev            # 启动 Agent Server（默认 :3000）
+cp .env.example .env    # 填入你自己的 API Key
+npm run infra:up        # 启动 PostgreSQL
+npm run dev             # 启动 Agent Server（默认 :3000）
 ```
 
-## LLM Provider
+> ⚠️ 所有密钥通过 `.env` 注入，已被 `.gitignore` 排除，**永不入库**。
+> 请勿提交任何 `.env` 文件或真实密钥。
 
-通过 `LLM_PROVIDER` 选择大脑：
+---
 
-- `deepseek`：DeepSeek 官方 API（当前唯一推理后端），需要 `DEEPSEEK_API_KEY`；
-  `DEEPSEEK_LLM_MODEL` 默认 `deepseek-v4-flash`
-- `dashscope`：千问 OpenAI 兼容接口（可选备用），需要 `DASHSCOPE_API_KEY`
+## 官网
 
-语音开关拆成两个：
+`team-site/` 是团队官网，由小美设计、小黑构建——包括这句话。
 
-- `VOICE_ENABLED`：语音路由总开关。实时语音已废弃（桌面端下线、微信语音走
-  iLink 服务端转写），生产环境显式设 `false`——三个 `/ws/voice` 路由与
-  WebSocket 升级钩子都不注册；配置默认值仍是 `true`，所以必须显式写
-- `VOICE_TTS_ENABLED=false`：**只识别不说话**——Qwen ASR 继续识别你的语音，
-  回复以文字显示（s2s 端到端语音需 TTS 开启才启用）
+- 前端为纯静态站点（数据内联），可独立构建后托管到任意静态平台（GitHub Pages / nginx）。
+- 成员个人主页由各成员自己维护（`xiaoye/` 等目录）。
 
-仍在使用 Qwen 模型的位置：Qwen ASR（语音识别）、记忆嵌入 `text-embedding-v4`。
-微信收图理解已切到 DeepSeek 官方视觉模型（`WEIXIN_VISION_MODEL` 默认
-`deepseek-v4-flash-vision-exp`，走 `DEEPSEEK_API_KEY`）。
+---
 
-全权限模式：`AUTO_APPROVE_ALL=true` 时所有工具（含 L2/L3：终端、电源、
-删除等）自动执行，不弹确认；权限系统保留，随时可回退。
+## 文档
 
-选中的 Provider 没有配置 Key 时服务仍可启动，`/health` 会显示 `llm.configured: false`，
-调用聊天接口会返回 503。
+- [`AGENTS.md`](./AGENTS.md) — 架构参考策略与阶段规划
+- [`docs/architecture.md`](./docs/architecture.md) — 系统架构说明
+- [`CHANGELOG.md`](./CHANGELOG.md) — 变更记录
+- [`team-site/README.md`](./team-site/README.md) — 官网项目说明
 
-主模型未产出内容即失败时，可自动切换到备用后端（OpenCrabs 故障转移思路）：
-`LLM_FALLBACK_PROVIDER=none`（默认，仅 DeepSeek 官方；openrouter 已停用）。
-流式输出一旦开始则不回滚，中途失败按既有错误路径重试/上报。
+---
 
-## 语音层（Phase 3）
+## 许可与说明
 
-语音链路（cascade 模式）：**Qwen ASR（实时转写）→ DeepSeek（思考回复）→
-ElevenLabs TTS（语音合成）**；默认 `s2s` 模式为 Qwen 端到端实时语音，通过
-WebSocket 暴露给终端：
+- 本项目为私人 AI 助理系统，公开仓库用于展示团队与工程实践。
+- 任何第三方服务（LLM / 语音 / 云）均为按需接入，可通过抽象层替换。
+- 复制一份数据很容易，但**真正运行的团队在服务器上**——而它属于创始人与每一位成员。
 
-```text
-WS /ws/voice/:sessionId
-```
+---
 
-客户端先 `POST /api/sessions` 创建会话，再连接语音 WebSocket：
-
-1. 服务端发送 `voice.ready`（含 `audioFormat: pcm_16000`）
-2. 客户端持续发送 **二进制 PCM 音频**（16kHz 单声道 16-bit）
-3. 服务端依次推送 `transcript.partial` / `transcript.final`
-4. Qwen 生成回复时推送 `agent.thinking`；回复按句子流式切分，
-   每句立即 `tts.start`（首句）或直接续传 `audio.chunk`（base64 音频）
-5. 全部说完后推送 `tts.end`（含完整回复文本）与 `agent.done`
-
-客户端可在对话中发送控制消息：
-
-```json
-{ "type": "interrupt" }
-```
-
-用于显式打断 AI 说话（例如按 PTT 键时）。服务端检测到 TTS 播放期间
-用户开始说话（非空 partial transcript）也会自动打断，并推送
-`tts.interrupted`（含原因 `user_speech` / `client` / `new_final_transcript`）。
-
-注意：若使用扬声器外放且无回声消除，AI 自己的声音可能被麦克风重新拾取并
-触发自我打断。终端播放 TTS 时应抑制麦克风输入（或本地 VAD + `interrupt` 消息）。
-
-每个语音连接独立创建 STT/TTS 会话，多客户端并发互不干扰。
-
-## Agent 工具系统（Phase 5）
-
-AI 可以自主调用工具完成任务：`Agent → ToolRouter → Tool → Result`。
-
-当前内置工具（`packages/tools`）：
-
-| 工具                  | 权限 | 说明                                 |
-| --------------------- | ---- | ------------------------------------ |
-| `time.get`            | L0   | 获取当前时间（可指定时区）           |
-| `weather.get`         | L0   | 查询城市天气（Open-Meteo，无需 Key） |
-| `web.search`          | L0   | 维基百科搜索                         |
-| `github.search_repos` | L0   | 搜索 GitHub 仓库（按星标排序）       |
-| `filesystem.search`   | L0   | 工作区内按文件名搜索（含通配符）     |
-| `reminder.create`     | L1   | 创建提醒（内存存储）                 |
-| `reminder.list`       | L0   | 列出提醒                             |
-| `calendar.create`     | L1   | 创建日程（内存存储）                 |
-| `calendar.list`       | L0   | 列出日程                             |
-| `notification.send`   | L2   | 发送通知（需用户确认）               |
-| `filesystem.delete`   | L3   | 删除文件（需二次确认）               |
-| `memory.remember`     | L1   | 保存长期记忆                         |
-| `memory.list`         | L0   | 列出长期记忆                         |
-| `memory.forget`       | L1   | 永久删除记忆                         |
-| `memory.edit`         | L1   | 修改记忆                             |
-| `goal.set`            | L1   | 设置/更新长期目标（跨会话存活）      |
-| `goal.list`           | L0   | 列出长期目标                         |
-| `goal.done`           | L1   | 移除长期目标                         |
-| `task.create`         | L1   | 创建定时任务（cron）                 |
-| `task.list`           | L0   | 列出定时任务                         |
-| `task.delete`         | L2   | 删除定时任务（需确认）               |
-| `task.list-runs`      | L0   | 查看任务执行记录                     |
-
-对话时如果 AI 决定调用工具，SSE / 语音 WS 会额外收到：
-
-```json
-{"type":"agent.tool_call",  "payload":{"toolCalls":[...]}}
-{"type":"agent.tool_result","payload":{"callId":"...","name":"...","result":{...}}}
-```
-
-工具执行有 15 秒超时；超时、失败、权限不足都会作为结果回传给 AI，
-由 AI 决定下一步（重试、换工具或直接回答）。L2/L3 工具（删除文件、发消息等）
-执行前会请求用户确认：
-
-```json
-{
-  "type": "permission.request",
-  "payload": {
-    "request": {
-      "requestId": "...",
-      "toolName": "filesystem.delete",
-      "permissionLevel": 3,
-      "confirmationsNeeded": 2,
-      "confirmationsDone": 0
-    }
-  }
-}
-```
-
-- L2 工具确认一次，L3 工具确认两次
-- 文本客户端：`POST /api/sessions/:id/permission`，
-  body `{"requestId":"...","approved":true}`（或 `approved:false, reason:"..."`）
-- 语音客户端：发送 `{"type":"permission.response","requestId":"...","approved":true}`
-- 60 秒未响应自动拒绝；拒绝/超时原因会回传给 AI
-
-## 长期记忆（Phase 7）
-
-三层记忆：**Short-term**（当前会话）+ **Episodic**（重要事件）+
-**Semantic**（长期事实，如用户偏好）。AI 每轮对话前自动检索相关记忆
-注入上下文，并通过 `memory.*` 工具自主维护：
-
-```text
-"记住我喜欢喝美式咖啡"   → memory.remember(semantic)
-"我该点什么咖啡？"       → 检索注入 → AI 回答"来杯美式"
-"忘记刚才那条"          → memory.forget(真实删除)
-```
-
-记忆存储：默认内存实现（本地语义检索）；配置 `DATABASE_URL` 后自动使用
-PostgreSQL + pgvector（`npm run infra:up` 启动）。写入遵循规则：只保存
-长期价值信息，不保存闲聊、密码、API Key 等敏感内容。
-
-`GET /health` 会显示当前记忆后端（`memory` 或 `postgres`）。
-
-## 定时任务（Phase 8）
-
-让 AI 主动工作：`Scheduler → Task → Agent → Action`。直接对 AI 说
-"每天 9 点检查杭州天气，如果下雨提醒我"，它会创建定时任务：
-
-```text
-task.create({ name, schedule: "0 9 * * *", action: "检查杭州天气，如果下雨提醒我" })
-```
-
-- 调度：Node.js 定时器每 30 秒检查一次 cron 到期（第一阶段，无队列）
-- 执行：到点后任务指令通过完整 Agent Loop 无人值守执行
-  （只能使用 L0/L1 工具；需要确认的工具会被拒绝）
-- 运行记录：`task.list-runs` 查看每次执行的结果（成功/失败/输出）
-- 主动通知：任务执行完成/失败时，微信桥通过 `GET /api/events`（SSE）收到
-  `task.run` 事件并主动推送到微信（含任务名与结果摘要）
-- 存储：内存或 PostgreSQL（`tasks` / `task_runs` 表）
-
-## 提醒（一次性）
-
-"20 秒后提醒我喝水"这类一次性提醒走 `reminder.create`（L1，自动执行）：
-提醒存于内存，`ReminderService` 每 10 秒扫描一次到期提醒，到点通过
-`GET /api/events`（SSE）的 `reminder.due` 事件推送到桌面端弹系统通知。
-注意：提醒存储为内存实现，服务重启后未到期的提醒会丢失。
-
-开发架构约束见 [AGENTS.md](./AGENTS.md)（参考项目仅作架构参考）。
-
-配置项（`.env`）：
-
-| 变量                  | 说明                                                      |
-| --------------------- | --------------------------------------------------------- |
-| `ELEVENLABS_API_KEY`  | ElevenLabs API Key（必填）                                |
-| `ELEVENLABS_VOICE_ID` | 音色 ID（免费套餐需使用自己创建的音色）                   |
-| `ELEVENLABS_MODEL`    | 语音模型，如 `eleven_v3`（默认 `eleven_multilingual_v2`） |
-| `ELEVENLABS_LANGUAGE` | 语音/转写语言代码，中文用 `zh`                            |
-
-### coding.run 后端（dsh 开源底盘）
-
-`coding.run` 统一走 **dsh**（DeepSeek Harness：headless 一次性会话，Agent/工具/模型
-适配器全部插件化，可扩展性强；模型用 DeepSeek 官方 `deepseek-v4-flash`），
-作为专属编码底盘持续打磨。
-
-dsh 一次性机器配置：
-
-```bash
-npm install -g @deepseek-ai/dsh
-dsh plugin --profile headless add dsh-llm-newapi
-```
-
-然后在 `$DSH_HOME`（默认 `~/.dsh`）下：
-
-- `profiles/headless/package.json` 的 `dsh.profile.bundles` 加入 `"dsh-llm-newapi"`
-- `profiles/headless/cordis.patch.yml` 把 `agent-default-model` 指向
-  `deepseek-official` / `deepseek-v4-flash`（如需百炼 qwen，可换成 `newapi` / `qwen3.8-max`
-  并配置 `baseURL: https://dashscope.aliyuncs.com/compatible-mode/v1`）
-- `.credentials.yaml` 写入 `DEEPSEEK_API_KEY: <key>`（百炼 qwen 时则写 `newapi: <key>`）
-
-常用命令：
-
-| 命令                  | 说明                                                    |
-| --------------------- | ------------------------------------------------------- |
-| `npm run voice:smoke` | TTS → STT 回环冒烟测试（需真实 Key）                    |
-| `npm run server:up`   | 构建并启动 Docker 服务端（Ubuntu 镜像，默认 3000 端口） |
-| `npm run server:down` | 停止 Docker 服务端                                      |
-| `npm run server:logs` | 跟踪 Docker 服务端日志                                  |
-
-## Docker 部署（Ubuntu 服务器）
-
-服务端（agent-server + weixin-bridge）已容器化，适合部署到 Ubuntu 服务器；
-客户端只有微信 bot（扫码登录，无需本地进程）。
-
-```bash
-# 服务器上：先准备 .env（复制 .env.example 并填入 DASHSCOPE_API_KEY 等）
-npm run server:up
-```
-
-- 镜像：`Dockerfile`（Ubuntu 24.04 + Node 24，只装生产依赖），
-  健康检查 `/health`；内置 dsh（coding.run 后端，deepseek-v4-flash），
-  密钥通过 `DEEPSEEK_API_KEY` 注入
-- 端口：默认 `3000`，可用环境变量 `APP_PORT` 覆盖（如 `APP_PORT=8080 npm run server:up`）
-- 数据库：`docker compose` 里的 postgres（pgvector）服务自动先启动并等待健康
-- 环境变量：`env_file` 读取仓库根 `.env`；容器内 `DATABASE_URL` 自动指向
-  compose 网络中的 postgres（无需手动改）
-- coding.run 在服务端执行（服务器上跑 dsh）；语音/文本/任务/提醒全部在服务端，
-  微信 bot 通过 weixin-bridge 接入
-
-注意：服务器对外暴露前请设置防火墙并只开放必要端口；语音链路为 WebSocket，
-如有反代需开启 WebSocket 支持。
-
-国内网络服务器（如腾讯云 Ubuntu）可用 `scripts/deploy/install-docker.sh`
-一键安装 Docker + 镜像加速；部署完成后 `APP_PORT=3000 npm run server:up`。
-
-**bot 自我开发改动的同步**（永久保留）：bot 在服务器上写的代码先由
-`scripts/deploy/sync-bot-changes.sh` 提交到服务器 git 仓库，再用
-`npm run sync:bot`（需 `SYNC_SERVER` / `SYNC_USER` / `SYNC_PASSWORD`
-环境变量）拉回本地仓库提交；`.env` 与文件库不入库。
-
-**部署方式**：项目已托管到 `https://github.com/OpenPromise/promise-ai`
-（私有）。服务器部署统一用 `scripts/deploy/git-deploy.sh`（从 Git 主线
-reset+clean 后构建），不再用 tar 包，避免旧文件残留进镜像。
-
-## 微信 ClawBot（weixin-bridge）
-
-服务端内置微信桥接（`services/weixin-bridge`，自研轻量实现，不依赖 OpenClaw）：
-微信私聊消息直接转发给 agent-server 大脑，回复回微信。部署后：
-
-```bash
-# 服务器防火墙/安全组放行 3100 后，浏览器打开扫码页
-http://<服务器IP>:3100/weixin/login
-```
-
-- 扫码登录（手机微信扫一扫 → 确认），登录态/同步游标持久化，重启自动续接
-- 语音消息自动转文字处理；长回复自动分段；Markdown 转纯文本
-- L2/L3 敏感操作在微信里默认拒绝（群聊暂不支持）
-- 重新登录：`POST /api/weixin/logout` 后再次扫码，或直接用
-  `npm run weixin:bridge` 本地起桥调试
-
-### 微信媒体发送（图片）
-
-微信会话中可以让助手直接发图片（由 agent-server 工具触发）：
-
-- `weixin.send_image`：发一张图片，`source` 为服务器本地图片路径或 http(s) URL
-
-发送链路：agent-server 工具 → weixin-bridge（`/api/weixin/send-image`）→
-iLink CDN（AES-128-ECB 加密上传，`novac2c.cdn.weixin.qq.com`）→ 微信消息。
-只在微信发起的会话可用（会话元数据 `weixinPeer` 决定发送对象）。
-
-注：微信原生语音气泡在 iLink 服务端不可用（参考实现同样未支持），暂不提供
-语音发送；接收语音并转文字正常。
-
-### 微信收图理解 + 事件推送
-
-- **收图理解**：用户给 bot 发图片，桥自动下载解密后交给视觉模型
-  （DeepSeek 官方 API，`WEIXIN_VISION_MODEL` 默认 `deepseek-v4-flash-vision-exp`，
-  `WEIXIN_VISION_ENDPOINT` 默认 `https://api.deepseek.com/chat/completions`）描述，
-  再连同描述一起发给大脑回复
-- **提醒/任务推送**：weixin-bridge 订阅 `/api/events`，提醒与定时任务结果
-  自动推送到已登录的微信对端（⏰ 提醒 / ✅❌ 任务结果）
-
-### 微信文件库
-
-服务器上有一个专属文件夹（`<仓库>/weixin-files`，容器内
-`/data/weixin-files`），把文件丢进去就能在微信里按名索取：
-
-- `weixin.list_files`（L0）：列出文件库（名称/大小/修改时间）
-- `weixin.send_file`（L1）：按文件名精确/前缀/包含匹配并发送（≤100MB）；
-  任何会话都能用——非微信会话会自动发到绑定的微信账号
-- `weixin.delete_file`（L1）：按文件名从文件库删除（永久删除，不可恢复）
-- **后台异步发送**：调用后立即返回，上传/投递在后台执行，微信实时收到
-  进度消息（📤 开始 → ⏳ 上传完成 → ✅ 已送达 / ❌ 失败），期间可继续聊天；
-  任务状态可查 `GET /api/weixin/jobs`
-- 微信里发给 bot 的文件会自动下载解密存入文件库，之后可按名要回
-
-使用示例：在微信里说"把报告.pdf 发给我"或"发一下上周的总结"，bot 会先查
-文件库再发送。
-
-## 自我开发与更新
-
-AI 助理可以开发/更新自己（服务端能力）：
-
-- 本地运行用 `npm run serve`（守护进程，服务退出自动拉起；`system.restart`
-  依赖它）；容器部署靠 Docker 的 `restart: unless-stopped`
-- 工具：`self.info`（项目根/版本/环境）、`self.check`（typecheck + 测试门禁）、
-  `self.commit`（提交并推送 GitHub）、
-  `self.apply`（self.check 通过后自动重启激活改动，L1）、
-  `system.restart`（L3 二次确认后优雅重启）
-- 流程（已写入人格规则）：`self.info` → 读代码出方案 → `coding.run` 实现 →
-  `self.check` 全绿 → `self.commit`（推 GitHub）→ 更新 CHANGELOG →
-  `self.apply` 自动生效
-- 有界自主（Prime Agent 思路）：每次自我开发先定义 `goal`，最多 3 轮
-  "改动-验证"迭代；`self.check` 质量门（typecheck + 测试）失败即停止并回滚；
-  失败/反馈写入 `[feedback]` 记忆供后续会话复习
-- 证据驱动改进：`self.refine` 把失败反馈沉淀成一条规则，只追加到
-  `persona/refinements.md`（经验层）并写入 `[feedback]` 记忆、返回 git 快照；
-  需要撤销时 `self.rollback`（L3）回滚到快照
-- 持久目标：`goal.set` / `goal.list` / `goal.done` 管理长期目标（跨会话存活）；
-  每次对话自动注入「目标 + 近期反馈」到系统提示词
-- 安全基线：仓库已纳入 git（首次提交为回滚点）；不自动发起自我开发、
-  不改密钥、不绕权限系统、破坏性操作需确认
-
-## 常用命令
-
-| 命令                              | 说明                 |
-| --------------------------------- | -------------------- |
-| `npm run dev`                     | 开发模式（watch）    |
-| `npm run typecheck`               | TypeScript 类型检查  |
-| `npm run lint`                    | ESLint               |
-| `npm run test`                    | Vitest 单元/集成测试 |
-| `npm run format`                  | Prettier 格式化      |
-| `npm run voice:smoke`             | 语音回环冒烟测试     |
-| `npm run infra:up` / `infra:down` | 启动/停止 PostgreSQL |
-
-## API（Phase 1）
-
-```text
-GET  /health
-POST /api/sessions
-GET  /api/sessions/:id
-POST /api/sessions/:id/chat   # SSE 流式文本回复
-```
-
-`/api/sessions/:id/chat` 以 `text/event-stream` 返回统一协议信封：
-
-```json
-{"type":"chat.token","timestamp":"...","sessionId":"...","requestId":"...","payload":{"delta":"你"}}
-{"type":"chat.done","timestamp":"...","sessionId":"...","requestId":"...","payload":{"usage":{}}}
-```
-
-## 变更记录
-
-见 [CHANGELOG.md](./CHANGELOG.md)。
+© 2026 Promise AI · 本站由 AI 设计、生成并构建 —— 包括这句话。
