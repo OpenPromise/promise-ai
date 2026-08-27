@@ -10,6 +10,8 @@ import { ILinkClient } from './ilink.js';
 import { LoginManager } from './login.js';
 import { runWeixinRelay } from './relay.js';
 import { runEventPusher } from './event-pusher.js';
+import { DoneOutbox } from './outbox.js';
+import { processSendGate } from './send-gate.js';
 import {
   deleteLibraryFile,
   listLibraryFiles,
@@ -44,6 +46,7 @@ const agentApiToken = process.env.AGENT_API_TOKEN?.trim() || undefined;
 await mkdir(stateDir, { recursive: true });
 const stateFile = path.join(stateDir, 'state.json');
 const stateStore = await StateStore.open(stateFile);
+const doneOutbox = await DoneOutbox.open(path.join(stateDir, 'outbox.json'));
 
 let relayController: AbortController | null = null;
 let eventController: AbortController | null = null;
@@ -72,6 +75,7 @@ function makeClient(options: ILinkClientOptions = {}): ILinkClient {
     channelVersion,
     botAgent,
     log,
+    sendGate: options.sendGate ?? processSendGate,
   });
 }
 
@@ -156,6 +160,9 @@ function startEventPusher(): void {
       peers: () => Object.keys(stateStore.account?.peerSessions ?? {}),
       log,
       apiToken: agentApiToken,
+      lastEventId: stateStore.lastEventId,
+      onLastEventId: (id) => stateStore.setLastEventId(id),
+      outbox: doneOutbox,
     },
     eventController.signal,
   ).catch((error) => {

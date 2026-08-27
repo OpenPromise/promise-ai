@@ -5,6 +5,7 @@
 import type { ILinkClient } from './ilink.js';
 import { buildReplyMessage } from './ilink.js';
 import { clipPlainText, markdownToPlain, splitLongText } from './markdown.js';
+import { OUTBOX_DRAIN_INTERVAL_MS, type DoneOutbox, type OutboxEntry } from './outbox.js';
 import { consumeSse } from './relay.js';
 
 interface ReminderEvent {
@@ -48,6 +49,14 @@ export interface EventPusherOptions {
   fetchImpl?: typeof fetch;
   /** sendMessage 失败后的重试间隔（毫秒）。默认 1s 再 2s，共 3 次尝试。 */
   sendRetryDelaysMs?: number[];
+  /** 上次已处理的 SSE id（从 StateStore 恢复，空则不带 Last-Event-ID）。 */
+  lastEventId?: string;
+  /** lastEventId 前进时回调（用于落盘）。 */
+  onLastEventId?: (id: string) => void | Promise<void>;
+  /** 未送达的完成通知队列；进度失败不入队。 */
+  outbox?: DoneOutbox;
+  /** 出队补发间隔。默认 15s。 */
+  outboxDrainIntervalMs?: number;
 }
 
 export function formatEvent(event: string, data: unknown): string | undefined {
@@ -149,17 +158,88 @@ async function sendMessageWithRetry(
   return false;
 }
 
+async function drainOutbox(
+  outbox: DoneOutbox,
+  client: ILinkClient,
+  log: ((message: string) => void) | undefined,
+  signal: AbortSignal,
+): Promise<void> {
+  const remaining = outbox.peek();
+  if (remaining.length === 0) return;
+  while (remaining.length > 0 && !signal.aborted) {
+    const entry = remaining[0]!;
+    try {
+      await client.sendMessage(buildReplyMessage({ to: entry.peer, text: entry.text }));
+      remaining.shift();
+      log?.(`[weixin] 补发完成通知成功`);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      log?.(`[weixin] 补发完成通知失败：${detail}`);
+      break;
+    }
+  }
+  await outbox.replace(remaining);
+}
+
+function startOutboxDrainTimer(
+  outbox: DoneOutbox,
+  client: ILinkClient,
+  log: ((message: string) => void) | undefined,
+  signal: AbortSignal,
+  intervalMs: number,
+): void {
+  let draining = false;
+  const timer = setInterval(() => {
+    if (draining || signal.aborted) return;
+    draining = true;
+    void drainOutbox(outbox, client, log, signal)
+      .catch((error) => {
+        log?.(
+          `[weixin] 出队补发异常：${error instanceof Error ? error.message : String(error)}`,
+        );
+      })
+      .finally(() => {
+        draining = false;
+      });
+  }, intervalMs);
+  timer.unref?.();
+  signal.addEventListener(
+    'abort',
+    () => {
+      clearInterval(timer);
+    },
+    { once: true },
+  );
+}
+
 /** 持续订阅 /api/events 并推送（断线自动重连，指数退避）。 */
 export async function runEventPusher(
   options: EventPusherOptions,
   signal: AbortSignal,
 ): Promise<void> {
-  const { agentUrl, client, peers, log, apiToken } = options;
+  const { agentUrl, client, peers, log, apiToken, outbox } = options;
   const fetchImpl = options.fetchImpl ?? fetch;
   const retryDelaysMs = options.sendRetryDelaysMs ?? SEND_RETRY_DELAYS_MS;
   let failures = 0;
   /** 最近一次已处理事件的 SSE id：断线重连时回传 Last-Event-ID 拉回错过的通知。 */
-  let lastEventId = '';
+  let lastEventId = options.lastEventId ?? '';
+
+  if (outbox && !signal.aborted) {
+    try {
+      await drainOutbox(outbox, client, log, signal);
+    } catch (error) {
+      log?.(
+        `[weixin] 启动补发失败：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    startOutboxDrainTimer(
+      outbox,
+      client,
+      log,
+      signal,
+      options.outboxDrainIntervalMs ?? OUTBOX_DRAIN_INTERVAL_MS,
+    );
+  }
 
   while (!signal.aborted) {
     try {
@@ -195,6 +275,7 @@ export async function runEventPusher(
           const targets = peers();
           const chunks = splitLongText(text);
           let anyChunkOk = false;
+          const failedDone: OutboxEntry[] = [];
           await Promise.all(
             targets.map(async (peer) => {
               for (const chunk of chunks) {
@@ -206,14 +287,33 @@ export async function runEventPusher(
                   signal,
                   retryDelaysMs,
                 );
-                if (ok) anyChunkOk = true;
+                if (ok) {
+                  anyChunkOk = true;
+                } else if (currentEvent === 'engineer.task.done') {
+                  failedDone.push({
+                    peer,
+                    text: chunk,
+                    ts: Date.now(),
+                    event: currentEvent,
+                  });
+                }
               }
             }),
           );
-          // 至少一个 chunk 投递到某个对端成功才推进 Last-Event-ID；全部失败则不推进，
-          // 断线重连后服务端会按 Last-Event-ID 重放错过的通知（N-P2-1）。
-          if (currentId && anyChunkOk) {
+          // 完成通知三次都失败则落入盘队列，并推进 Last-Event-ID，避免重启后
+          // SSE 重放与 outbox 补发各送一次。进度失败不入队、不推进。
+          let queued = false;
+          if (outbox && failedDone.length > 0) {
+            for (const entry of failedDone) {
+              await outbox.enqueue(entry);
+            }
+            queued = true;
+            log?.(`[weixin] 完成通知入队待重试 ${failedDone.length} 条`);
+          }
+          // 至少一个 chunk 投递到某个对端成功（或完成通知已入队）才推进 Last-Event-ID。
+          if (currentId && (anyChunkOk || queued) && currentId !== lastEventId) {
             lastEventId = currentId;
+            await options.onLastEventId?.(lastEventId);
           }
           if (targets.length > 0) {
             if (anyChunkOk) {

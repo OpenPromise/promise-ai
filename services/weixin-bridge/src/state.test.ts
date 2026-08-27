@@ -54,4 +54,35 @@ describe('StateStore', () => {
     expect(() => JSON.parse(raw)).not.toThrow();
     expect(JSON.parse(raw).account.token).toBe(store.account?.token);
   });
+
+  it('persists lastEventId independently of account; empty id is a no-op', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'wxstate-'));
+    const file = path.join(dir, 'state.json');
+    const store = await StateStore.open(file);
+    expect(store.lastEventId).toBe('');
+
+    await store.setLastEventId('');
+    expect(store.lastEventId).toBe('');
+
+    await store.setLastEventId('42');
+    expect(store.lastEventId).toBe('42');
+
+    const reloaded = await StateStore.open(file);
+    expect(reloaded.lastEventId).toBe('42');
+    expect(reloaded.account).toBeUndefined();
+
+    await reloaded.setLastEventId('42');
+    await reloaded.setLastEventId('43');
+    expect((await StateStore.open(file)).lastEventId).toBe('43');
+  });
+
+  it('clearAccount drops lastEventId so a fresh login does not replay', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'wxstate-'));
+    const file = path.join(dir, 'state.json');
+    const store = await StateStore.open(file);
+    await store.setLastEventId('9');
+    await store.clearAccount();
+    expect(store.lastEventId).toBe('');
+    expect(JSON.parse(await readFile(file, 'utf8')).lastEventId).toBeUndefined();
+  });
 });

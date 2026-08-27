@@ -6,6 +6,7 @@
  * - 鉴权：AuthorizationType=ilink_bot_token + Bearer token + X-WECHAT-UIN
  */
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
+import { processSendGate, type SendGate } from './send-gate.js';
 
 export const ILINK_DEFAULT_BASE_URL = 'https://ilinkai.weixin.qq.com';
 /** 微信 CDN（媒体加密上传/下载）域名。 */
@@ -208,6 +209,8 @@ export interface ILinkClientOptions {
   fetchImpl?: typeof fetch;
   /** 故障日志回调（当前只用于二维码轮询失败）。默认写 console.warn。 */
   log?: (message: string) => void;
+  /** 发送闸门；默认用进程单例，让 event-pusher 与 relay 共用一条队列。 */
+  sendGate?: SendGate;
 }
 
 function encodeClientVersion(version: string): number {
@@ -245,6 +248,7 @@ export class ILinkClient {
   readonly #channelVersion: string;
   readonly #fetch: typeof fetch;
   readonly #log: (message: string) => void;
+  readonly #sendGate: SendGate;
   /** 二维码状态轮询的连续失败次数（成功一次即清零）。 */
   #qrPollFailures = 0;
 
@@ -261,6 +265,7 @@ export class ILinkClient {
       ((message: string) => {
         console.warn(`[ilink] ${message}`);
       });
+    this.#sendGate = options.sendGate ?? processSendGate;
   }
 
   #commonHeaders(): Record<string, string> {
@@ -402,15 +407,17 @@ export class ILinkClient {
   }
 
   async sendMessage(msg: WeixinMessage): Promise<void> {
-    const resp = await this.#postJson<SendMessageResp>(
-      'ilink/bot/sendmessage',
-      { msg, base_info: this.#baseInfo() },
-      // 大文件（几十 MB）时服务端要校验 CDN 文件后才回执，15s 会假超时。
-      120_000,
-    );
-    if (resp.ret !== undefined && resp.ret !== 0) {
-      throw new ILinkError(`sendMessage ret=${resp.ret} errmsg=${resp.errmsg ?? ''}`, resp.ret);
-    }
+    return this.#sendGate.run(async () => {
+      const resp = await this.#postJson<SendMessageResp>(
+        'ilink/bot/sendmessage',
+        { msg, base_info: this.#baseInfo() },
+        // 大文件（几十 MB）时服务端要校验 CDN 文件后才回执，15s 会假超时。
+        120_000,
+      );
+      if (resp.ret !== undefined && resp.ret !== 0) {
+        throw new ILinkError(`sendMessage ret=${resp.ret} errmsg=${resp.errmsg ?? ''}`, resp.ret);
+      }
+    });
   }
 
   async getConfig(ilinkUserId: string, contextToken?: string): Promise<GetConfigResp> {

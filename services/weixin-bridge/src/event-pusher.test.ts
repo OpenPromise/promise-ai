@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { formatEvent, runEventPusher, SEND_RETRY_DELAYS_MS } from './event-pusher.js';
+import { DoneOutbox } from './outbox.js';
+import { StateStore } from './state.js';
 
 describe('formatEvent', () => {
   afterEach(() => {
@@ -437,5 +442,227 @@ describe('runEventPusher 投递重试', () => {
       logs.some((line) => line.includes('推送失败（未送达）') && line.includes('reminder.due')),
     ).toBe(true);
     expect(calls[1]?.headers ?? {}).not.toHaveProperty('Last-Event-ID');
+  });
+});
+
+
+function sseResponse(payload: string): Response {
+  const encoder = new TextEncoder();
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(payload));
+        controller.close();
+      },
+    }),
+    { status: 200 },
+  );
+}
+
+function hangUntilAbort(signal: AbortSignal): Promise<never> {
+  return new Promise((_, reject) => {
+    const onAbort = () => reject(new Error('aborted'));
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+describe('runEventPusher lastEventId 落盘', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('pusher 写入 lastEventId；新实例读出并带 Last-Event-ID', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'wxpush-'));
+    const store = await StateStore.open(path.join(dir, 'state.json'));
+    const controller = new AbortController();
+    const calls: Array<{ headers?: Record<string, string> }> = [];
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      calls.push({ headers: (init?.headers ?? {}) as Record<string, string> });
+      if (calls.length === 1) {
+        return sseResponse('id: 5\nevent: reminder.due\ndata: {"text":"喝水"}\n\n');
+      }
+      return hangUntilAbort(controller.signal);
+    });
+    const client = { async sendMessage() { return; } } as never;
+
+    const first = runEventPusher(
+      {
+        agentUrl: 'http://agent:3000',
+        client,
+        peers: () => ['wx_peer'],
+        fetchImpl: fetchMock as unknown as typeof fetch,
+        lastEventId: store.lastEventId,
+        onLastEventId: (id) => store.setLastEventId(id),
+      },
+      controller.signal,
+    );
+    await vi.waitFor(() => expect(store.lastEventId).toBe('5'), { timeout: 5000 });
+    controller.abort();
+    await first.catch(() => {});
+
+    expect(JSON.parse(await readFile(path.join(dir, 'state.json'), 'utf8')).lastEventId).toBe('5');
+
+    const controller2 = new AbortController();
+    const calls2: Array<{ headers?: Record<string, string> }> = [];
+    const store2 = await StateStore.open(path.join(dir, 'state.json'));
+    const fetchMock2 = vi.fn(async (_url: string, init?: RequestInit) => {
+      calls2.push({ headers: (init?.headers ?? {}) as Record<string, string> });
+      return hangUntilAbort(controller2.signal);
+    });
+    const second = runEventPusher(
+      {
+        agentUrl: 'http://agent:3000',
+        client,
+        peers: () => ['wx_peer'],
+        fetchImpl: fetchMock2 as unknown as typeof fetch,
+        lastEventId: store2.lastEventId,
+        onLastEventId: (id) => store2.setLastEventId(id),
+      },
+      controller2.signal,
+    );
+    await vi.waitFor(() => expect(calls2.length).toBeGreaterThanOrEqual(1), { timeout: 5000 });
+    controller2.abort();
+    await second.catch(() => {});
+
+    expect(store2.lastEventId).toBe('5');
+    expect(calls2[0]?.headers).toEqual({ 'Last-Event-ID': '5' });
+  });
+
+  it('stored id 为空（新登录）时不带 Last-Event-ID', async () => {
+    const controller = new AbortController();
+    const calls: Array<{ headers?: Record<string, string> }> = [];
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      calls.push({ headers: (init?.headers ?? {}) as Record<string, string> });
+      return hangUntilAbort(controller.signal);
+    });
+    const runPromise = runEventPusher(
+      {
+        agentUrl: 'http://agent:3000',
+        client: { async sendMessage() { return; } } as never,
+        peers: () => ['wx_peer'],
+        fetchImpl: fetchMock as unknown as typeof fetch,
+        lastEventId: '',
+      },
+      controller.signal,
+    );
+    await vi.waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(1));
+    controller.abort();
+    await runPromise.catch(() => {});
+    expect(Object.keys(calls[0]?.headers ?? {})).toHaveLength(0);
+  });
+});
+
+describe('runEventPusher done outbox', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('failed done lands in outbox; later successful drain removes it', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'wxoutbox-'));
+    const outbox = await DoneOutbox.open(path.join(dir, 'outbox.json'));
+    const controller = new AbortController();
+    const calls: Array<{ headers?: Record<string, string> }> = [];
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      calls.push({ headers: (init?.headers ?? {}) as Record<string, string> });
+      if (calls.length === 1) {
+        return sseResponse(
+          'id: 20\nevent: engineer.task.done\ndata: {"type":"done","taskId":"abcdef01-xxxx","status":"success","result":"小黑把 typecheck 跑通了，这单可以收。"}\n\n',
+        );
+      }
+      return hangUntilAbort(controller.signal);
+    });
+    const client = {
+      async sendMessage() {
+        throw new Error('sendMessage ret=-2 errmsg=prepare failed');
+      },
+    } as never;
+
+    const runPromise = runEventPusher(
+      {
+        agentUrl: 'http://agent:3000',
+        client,
+        peers: () => ['wx_peer'],
+        fetchImpl: fetchMock as unknown as typeof fetch,
+        sendRetryDelaysMs: [5, 5],
+        outbox,
+        outboxDrainIntervalMs: 60_000,
+      },
+      controller.signal,
+    );
+    await vi.waitFor(() => expect(outbox.size).toBe(1), { timeout: 5000 });
+    controller.abort();
+    await runPromise.catch(() => {});
+
+    expect(outbox.peek()[0]?.event).toBe('engineer.task.done');
+    expect(outbox.peek()[0]?.peer).toBe('wx_peer');
+    expect(outbox.peek()[0]?.text).toContain('typecheck');
+
+    const controller2 = new AbortController();
+    const sent: string[] = [];
+    const fetchMock2 = vi.fn(async () => hangUntilAbort(controller2.signal));
+    const client2 = {
+      async sendMessage(message: { item_list?: Array<{ text_item?: { text?: string } }> }) {
+        sent.push(message.item_list?.[0]?.text_item?.text ?? '');
+      },
+    } as never;
+    const leftover = await DoneOutbox.open(path.join(dir, 'outbox.json'));
+    expect(leftover.size).toBe(1);
+    const drainPromise = runEventPusher(
+      {
+        agentUrl: 'http://agent:3000',
+        client: client2,
+        peers: () => ['wx_peer'],
+        fetchImpl: fetchMock2 as unknown as typeof fetch,
+        outbox: leftover,
+        outboxDrainIntervalMs: 60_000,
+      },
+      controller2.signal,
+    );
+    await vi.waitFor(() => expect(leftover.size).toBe(0), { timeout: 5000 });
+    controller2.abort();
+    await drainPromise.catch(() => {});
+    expect(sent.join('')).toContain('typecheck');
+    expect(JSON.parse(await readFile(path.join(dir, 'outbox.json'), 'utf8'))).toEqual([]);
+  });
+
+  it('progress fail does not queue', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'wxoutbox-'));
+    const outbox = await DoneOutbox.open(path.join(dir, 'outbox.json'));
+    const controller = new AbortController();
+    const calls: Array<{ headers?: Record<string, string> }> = [];
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      calls.push({ headers: (init?.headers ?? {}) as Record<string, string> });
+      if (calls.length === 1) {
+        return sseResponse(
+          'id: 21\nevent: engineer.task.progress\ndata: {"type":"progress","taskId":"abcdef01-xxxx","text":"正在跑测试"}\n\n',
+        );
+      }
+      return hangUntilAbort(controller.signal);
+    });
+    const client = {
+      async sendMessage() {
+        throw new Error('sendMessage ret=-2 errmsg=prepare failed');
+      },
+    } as never;
+    const runPromise = runEventPusher(
+      {
+        agentUrl: 'http://agent:3000',
+        client,
+        peers: () => ['wx_peer'],
+        fetchImpl: fetchMock as unknown as typeof fetch,
+        sendRetryDelaysMs: [5, 5],
+        outbox,
+        outboxDrainIntervalMs: 60_000,
+      },
+      controller.signal,
+    );
+    await vi.waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(2), { timeout: 5000 });
+    controller.abort();
+    await runPromise.catch(() => {});
+    expect(outbox.size).toBe(0);
   });
 });

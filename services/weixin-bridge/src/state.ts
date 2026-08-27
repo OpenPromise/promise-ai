@@ -16,6 +16,8 @@ export interface AccountState {
 
 export interface BridgeState {
   account?: AccountState;
+  /** 事件推送已处理的 SSE id，容器重启后带 Last-Event-ID 重放缓冲的 done。 */
+  lastEventId?: string;
 }
 
 export class StateStore {
@@ -54,13 +56,25 @@ export class StateStore {
     return this.#state.account;
   }
 
+  get lastEventId(): string {
+    return this.#state.lastEventId ?? '';
+  }
+
   async setAccount(account: AccountState): Promise<void> {
     this.#state.account = account;
     await this.save();
   }
 
+  async setLastEventId(id: string): Promise<void> {
+    // 只在前进时落盘；空 id（新登录）不写，避免带着空头去重放。
+    if (!id || id === this.#state.lastEventId) return;
+    this.#state.lastEventId = id;
+    await this.save();
+  }
+
   async clearAccount(): Promise<void> {
     this.#state.account = undefined;
+    this.#state.lastEventId = undefined;
     await this.save();
   }
 

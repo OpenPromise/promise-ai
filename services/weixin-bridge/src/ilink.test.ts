@@ -10,6 +10,7 @@ import {
   QR_POLL_MAX_FAILURES,
   STALE_TOKEN_ERRCODE,
 } from './ilink.js';
+import { SendGate } from './send-gate.js';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -21,7 +22,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 describe('ILinkClient headers', () => {
   it('sends app id, version and token auth headers', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ ret: 0 }));
-    const client = new ILinkClient({ token: 'tok-1', channelVersion: '2.4.6', fetchImpl });
+    const client = new ILinkClient({ token: 'tok-1', channelVersion: '2.4.6', fetchImpl, sendGate: new SendGate({ minGapMs: 0 }) });
     await client.sendMessage(buildReplyMessage({ to: 'wx_user', text: 'hi' }));
 
     const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
@@ -72,10 +73,41 @@ describe('getUpdates', () => {
 describe('sendMessage', () => {
   it('throws when ret is non-zero', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ ret: 1, errmsg: 'boom' }));
-    const client = new ILinkClient({ token: 't', fetchImpl });
+    const client = new ILinkClient({ token: 't', fetchImpl, sendGate: new SendGate({ minGapMs: 0 }) });
     await expect(client.sendMessage(buildReplyMessage({ to: 'u', text: 'x' }))).rejects.toThrow(
       /ret=1/,
     );
+  });
+
+  it('two overlapping sendMessage calls run strictly sequential', async () => {
+    let inflight = 0;
+    let maxInflight = 0;
+    const order: string[] = [];
+    let releaseFirst!: () => void;
+    const firstHold = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let calls = 0;
+    const fetchImpl = vi.fn(async () => {
+      calls += 1;
+      inflight += 1;
+      maxInflight = Math.max(maxInflight, inflight);
+      const label = calls === 1 ? 'first' : 'second';
+      order.push(`${label}-start`);
+      if (calls === 1) await firstHold;
+      inflight -= 1;
+      order.push(`${label}-end`);
+      return jsonResponse({ ret: 0 });
+    });
+    const gate = new SendGate({ minGapMs: 0 });
+    const client = new ILinkClient({ token: 't', fetchImpl, sendGate: gate });
+    const p1 = client.sendMessage(buildReplyMessage({ to: 'u', text: 'a' }));
+    const p2 = client.sendMessage(buildReplyMessage({ to: 'u', text: 'b' }));
+    await vi.waitFor(() => expect(order).toEqual(['first-start']));
+    releaseFirst();
+    await Promise.all([p1, p2]);
+    expect(maxInflight).toBe(1);
+    expect(order).toEqual(['first-start', 'first-end', 'second-start', 'second-end']);
   });
 });
 
