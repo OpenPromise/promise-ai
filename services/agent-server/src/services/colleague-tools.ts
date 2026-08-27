@@ -2,6 +2,27 @@ import path from 'node:path';
 import { access } from 'node:fs/promises';
 import type { PermissionLevel, Tool, ToolContext, ToolResult } from '@personal-ai/tools';
 import type { ColleagueTask, ColleagueTaskRunner } from './colleague-task-runner.js';
+import type { ColleagueDispatchOptions, ColleagueId } from './colleague-office.js';
+
+const COLLEAGUE_NAME_TO_ID: Record<string, ColleagueId> = {
+  小黑: 'xiaohei',
+  小优: 'xiaoyou',
+  小美: 'xiaomei',
+  小真: 'xiaozhen',
+  小知: 'xiaozhi',
+};
+
+function isXiaoyeRef(value: string): boolean {
+  const key = value.trim();
+  return key === '小夜' || key === 'xiaoye';
+}
+
+/** 接受短 id 或中文名（小真 / xiaozhen）。与 office.parseColleagueId 同语义。 */
+export function parseColleagueId(value: string): ColleagueId | undefined {
+  const key = value.trim();
+  if ((Object.values(COLLEAGUE_NAME_TO_ID) as string[]).includes(key)) return key as ColleagueId;
+  return COLLEAGUE_NAME_TO_ID[key];
+}
 
 interface DelegateInput {
   task?: string;
@@ -27,6 +48,18 @@ export interface ColleagueMailboxGateway {
   recentMail(colleagueId: string, limit?: number): ColleagueMailPreview[];
   getTask?(id: string): ColleagueTask | undefined;
   listTasks?(limit?: number): ColleagueTask[];
+  ask?(
+    to: string,
+    question: string,
+    options: ColleagueDispatchOptions & { from: ColleagueId },
+  ): Promise<ColleagueTask>;
+  sendFrom?(
+    from: ColleagueId,
+    to: string,
+    body: string,
+    options?: ColleagueDispatchOptions,
+  ): Promise<ColleagueTask>;
+  colleagueIdForSession?(sessionId: string): ColleagueId | undefined;
 }
 
 export interface ColleagueDelegateToolOptions {
@@ -206,6 +239,119 @@ export function createColleagueStatusTool(options: ColleagueStatusToolOptions): 
         ok: true,
         data: { count: tasks.length, tasks, ...(mailbox ? { mailbox } : {}) },
       };
+    },
+  };
+}
+
+const MAIL_ASK_TIMEOUT_MS = 9 * 60 * 1000;
+
+function callerColleagueId(
+  office: ColleagueMailboxGateway,
+  context: ToolContext,
+): ColleagueId | { error: string } {
+  const sessionId = typeof context?.sessionId === 'string' ? context.sessionId.trim() : '';
+  if (!sessionId) return { error: '缺少调用方会话' };
+  const from = office.colleagueIdForSession?.(sessionId);
+  if (!from) {
+    return { error: 'mail.ask / mail.send 仅供同事使用；小夜请用 *.delegate' };
+  }
+  return from;
+}
+
+function parseTo(raw: unknown): { to: ColleagueId } | { error: string } {
+  if (typeof raw !== 'string' || !raw.trim()) return { error: '缺少 to 参数' };
+  if (isXiaoyeRef(raw)) return { error: '不能写信给小夜' };
+  const to = parseColleagueId(raw);
+  if (!to) return { error: `unknown colleague: ${raw.trim()}` };
+  return { to };
+}
+
+/**
+ * mail.ask（同步问）：给另一位同事写信并等回信。调用方必须是五位同事之一。
+ * ToolContext.sessionId 是同事会话，用来认 from；hub 只从父信拷贝。
+ */
+export function createMailAskTool(office: ColleagueMailboxGateway): Tool {
+  return {
+    name: 'mail.ask',
+    description: '给另一位同事写信并等回信',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        to: {
+          type: 'string',
+          description: '同事：小黑/小优/小美/小真/小知，或 xiaohei/xiaoyou/xiaomei/xiaozhen/xiaozhi',
+        },
+        question: { type: 'string', description: '要问的问题' },
+      },
+      required: ['to', 'question'],
+    },
+    permissionLevel: 1 as PermissionLevel,
+    timeoutMs: MAIL_ASK_TIMEOUT_MS,
+    async execute(input: unknown, context: ToolContext): Promise<ToolResult> {
+      const { to: toRaw, question } = (input ?? {}) as { to?: string; question?: string };
+      if (!question?.trim()) return { ok: false, error: '缺少 question 参数' };
+      const parsed = parseTo(toRaw);
+      if ('error' in parsed) return { ok: false, error: parsed.error };
+      const from = callerColleagueId(office, context);
+      if (typeof from !== 'string') return { ok: false, error: from.error };
+      if (parsed.to === from) return { ok: false, error: '不能问自己' };
+      if (!office.ask) return { ok: false, error: '办公室未接入' };
+      try {
+        const record = await office.ask(parsed.to, question.trim(), { from });
+        const reply = (record.result ?? record.error ?? '').trim();
+        if (record.status !== 'success') {
+          return { ok: false, error: reply || '对方没有回信' };
+        }
+        return { ok: true, data: reply };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+  };
+}
+
+/**
+ * mail.send（异步转交）：把任务转到另一位同事，立即返回 taskId。
+ */
+export function createMailSendTool(office: ColleagueMailboxGateway): Tool {
+  return {
+    name: 'mail.send',
+    description: '转交任务到另一位同事（异步）',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        to: {
+          type: 'string',
+          description: '同事：小黑/小优/小美/小真/小知，或 xiaohei/xiaoyou/xiaomei/xiaozhen/xiaozhi',
+        },
+        body: { type: 'string', description: '转交的任务正文' },
+      },
+      required: ['to', 'body'],
+    },
+    permissionLevel: 1 as PermissionLevel,
+    timeoutMs: 30_000,
+    async execute(input: unknown, context: ToolContext): Promise<ToolResult> {
+      const { to: toRaw, body } = (input ?? {}) as { to?: string; body?: string };
+      if (!body?.trim()) return { ok: false, error: '缺少 body 参数' };
+      const parsed = parseTo(toRaw);
+      if ('error' in parsed) return { ok: false, error: parsed.error };
+      const from = callerColleagueId(office, context);
+      if (typeof from !== 'string') return { ok: false, error: from.error };
+      if (parsed.to === from) return { ok: false, error: '不能转交给自己' };
+      if (!office.sendFrom) return { ok: false, error: '办公室未接入' };
+      try {
+        const record = await office.sendFrom(from, parsed.to, body.trim());
+        return {
+          ok: true,
+          data: {
+            taskId: record.id,
+            status: record.status,
+            note: `已转交给对方收件箱，任务 ${record.id.slice(0, 8)} 正在后台运行。`,
+          },
+        };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
     },
   };
 }

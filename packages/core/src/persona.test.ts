@@ -81,11 +81,13 @@ describe('FilePersonaProvider', () => {
     expect(second).not.toContain('v1');
   });
 
-  it('小夜行为准则写明同事都有收件箱、不能互相派单', async () => {
+  it('小夜行为准则写明同事都有收件箱、可互问互转', async () => {
     const rulesPath = path.resolve(import.meta.dirname, '../../../persona/behavior-rules.md');
     const rules = await readFile(rulesPath, 'utf8');
     expect(rules).toContain('五位同事都有自己的收件箱');
-    expect(rules).toContain('同事不能互相派单');
+    expect(rules).toContain('mail.ask');
+    expect(rules).toContain('mail.send');
     expect(rules).toContain('不要说「没有信箱」');
+    expect(rules).not.toContain('同事不能互相派单');
   });
 });

@@ -50,6 +50,7 @@ import {
 } from './services/research-tools.js';
 import { ColleagueTaskRunner } from './services/colleague-task-runner.js';
 import { ColleagueOffice } from './services/colleague-office.js';
+import { createMailAskTool, createMailSendTool } from './services/colleague-tools.js';
 import { createSelfTools } from './services/self-tools.js';
 import { recoverInterruptedSessions } from './services/restart-recovery.js';
 import { createWeixinTools } from './services/weixin-tools.js';
@@ -424,6 +425,8 @@ toolRegistry.register(createQaTool(qaTaskRunner, colleagueOffice));
 toolRegistry.register(createQaStatusTool(qaTaskRunner, colleagueOffice));
 toolRegistry.register(createResearchTool(researchTaskRunner, colleagueOffice));
 toolRegistry.register(createResearchStatusTool(researchTaskRunner, colleagueOffice));
+toolRegistry.register(createMailAskTool(colleagueOffice));
+toolRegistry.register(createMailSendTool(colleagueOffice));
 // server.shell：容器内终端（L3）——"云服务器即她的世界"的自主操作入口。
 toolRegistry.register(createServerShellTool());
 // system.status：服务器健康巡检（L0 只读）——定时任务自主监控用。

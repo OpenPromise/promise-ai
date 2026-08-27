@@ -52,6 +52,8 @@ export interface ColleagueTask {
   lastProgressLabel?: string;
   /** 派单方小夜微信会话 id。验收 wrap-up 用；不能是同事自己的 session。 */
   hubSessionId?: string;
+  /** 同事互转链路（ColleagueId[]），防打转；小夜派单可为空。 */
+  chain?: string[];
   /** 累计输出（截断保存，供查询/复盘）。 */
   output: string;
   /** 累计输出超过上限被截断（grok-build 思路：一旦置 true 不再回退）。 */

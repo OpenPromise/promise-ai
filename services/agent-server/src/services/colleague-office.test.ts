@@ -16,6 +16,7 @@ import {
   COLLEAGUE_ROSTER,
   ColleagueOffice,
   colleagueToolAllowlist,
+  parseColleagueId,
   wrapUpFallback,
   type ColleagueConversation,
   type ColleagueId,
@@ -228,6 +229,8 @@ describe('ColleagueOffice', () => {
       'github.create_issue',
       'github.comment',
       'server.shell',
+      'mail.ask',
+      'mail.send',
     ]);
     expect(colleagueToolAllowlist('xiaoyou')).toContain('system.status');
     expect(colleagueToolAllowlist('xiaoyou')).toContain('server.shell');
@@ -238,6 +241,8 @@ describe('ColleagueOffice', () => {
       'memory.remember',
       'coding.run',
       'server.shell',
+      'mail.ask',
+      'mail.send',
     ]);
     expect(colleagueToolAllowlist('xiaozhi')).toEqual([
       'filesystem.search',
@@ -247,7 +252,15 @@ describe('ColleagueOffice', () => {
       'web.fetch',
       'github.search_repos',
       'time.get',
+      'mail.ask',
+      'mail.send',
     ]);
+    for (const id of COLLEAGUE_IDS) {
+      expect(colleagueToolAllowlist(id)).toContain('mail.ask');
+      expect(colleagueToolAllowlist(id)).toContain('mail.send');
+      expect(colleagueToolAllowlist(id, { nested: true })).not.toContain('mail.ask');
+      expect(colleagueToolAllowlist(id, { nested: true })).not.toContain('mail.send');
+    }
   });
 
   it('conversation.runChat：立即返回 running；drain 后收件箱 done 且 allowlist 无 *.delegate', async () => {
@@ -651,5 +664,156 @@ describe('ColleagueOffice', () => {
     await throwOffice.delegate('xiaomei', '出视觉稿');
     await waitFor(() => throwOffice.listMailbox('xiaomei')[0]?.status === 'failed');
     expect(throwOffice.listMailbox('xiaomei')[0]?.reply).toContain('boom');
+  });
+
+  it('parseColleagueId 接受中文名与短 id', () => {
+    expect(parseColleagueId('小真')).toBe('xiaozhen');
+    expect(parseColleagueId('xiaozhen')).toBe('xiaozhen');
+    expect(parseColleagueId('小美')).toBe('xiaomei');
+    expect(parseColleagueId('xiaohei')).toBe('xiaohei');
+    expect(parseColleagueId('小夜')).toBeUndefined();
+    expect(parseColleagueId('nobody')).toBeUndefined();
+  });
+
+  it('office.ask：小美问小真拿到回信；from=xiaomei；无 wrap-up、无 done 事件', async () => {
+    const captured: Array<{ sessionId: string; userMessage: string; toolAllowlist?: string[] }> = [];
+    const conversation: ColleagueConversation = {
+      async *runChat(input) {
+        captured.push(input);
+        if (input.userMessage.startsWith('【同事回信】')) {
+          yield { type: 'chat.done', payload: { text: '不该跑验收' } };
+          return;
+        }
+        if (input.userMessage.startsWith('【小美来信】')) {
+          yield {
+            type: 'agent.tool_call',
+            payload: { toolCalls: [{ name: 'filesystem.search' }] },
+          };
+          yield { type: 'chat.done', payload: { text: '视觉可以再收一点，对比度够。' } };
+          return;
+        }
+        yield { type: 'chat.done', payload: { text: '小美还在做' } };
+      },
+    };
+    const { office } = await makeOffice({
+      runTask: async () => {
+        throw new Error('conversation 路径不应调用 runner');
+      },
+    });
+    const events: ColleagueTaskEvent[] = [];
+    office.onEvent((event) => events.push(event));
+    office.attachConversation(conversation);
+
+    const hubSessionId = 'weixin-hub-ask';
+    const parent = await office.delegate('xiaomei', '做小真主页', { hubSessionId });
+    await waitFor(() => office.listMailbox('xiaomei')[0]?.status === 'done', 1000);
+
+    const asked = await office.ask('xiaozhen', '视觉能不能再收一点', { from: 'xiaomei' });
+    expect(asked.status).toBe('success');
+    expect(asked.result).toContain('视觉可以再收一点');
+
+    const zhenMail = office.listMailbox('xiaozhen')[0];
+    expect(zhenMail?.from).toBe('xiaomei');
+    expect(zhenMail?.to).toBe('xiaozhen');
+    expect(zhenMail?.nested).toBe(true);
+    expect(zhenMail?.hubSessionId).toBe(hubSessionId);
+    expect(zhenMail?.reply).toContain('视觉可以再收一点');
+    expect(zhenMail?.chain).toEqual(['xiaomei']);
+
+    const zhenSession = office.getSessionId('xiaozhen')!;
+    const zhenCalls = captured.filter((row) => row.sessionId === zhenSession);
+    expect(zhenCalls).toHaveLength(1);
+    expect(zhenCalls[0]?.userMessage).toBe('【小美来信】\n视觉能不能再收一点');
+    expect(zhenCalls[0]?.toolAllowlist).toEqual(colleagueToolAllowlist('xiaozhen', { nested: true }));
+    expect(zhenCalls[0]?.toolAllowlist).not.toContain('mail.ask');
+    expect(zhenCalls[0]?.toolAllowlist).not.toContain('mail.send');
+
+    expect(captured.some((row) => row.userMessage.startsWith('【同事回信】') && row.userMessage.includes('小真'))).toBe(false);
+    expect(events.filter((event) => event.type === 'done' && event.taskId === asked.id)).toHaveLength(
+      0,
+    );
+    expect(events.some((event) => event.type === 'progress' && event.colleague === '小真')).toBe(
+      true,
+    );
+    // 小美自己的派单可以有 done；小真这封 ask 不能有
+    expect(events.some((event) => event.type === 'done' && event.taskId === parent.id)).toBe(true);
+  });
+
+  it('nested ask 被拒绝：小真回答小美时不能再问小美', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const conversation: ColleagueConversation = {
+      async *runChat(input) {
+        if (input.userMessage.startsWith('【小美来信】')) {
+          await gate;
+          yield { type: 'chat.done', payload: { text: '小真答完了' } };
+          return;
+        }
+        yield { type: 'chat.done', payload: { text: 'ok' } };
+      },
+    };
+    const { office } = await makeOffice({
+      runTask: async () => {
+        throw new Error('不应走 runner');
+      },
+    });
+    office.attachConversation(conversation);
+
+    const pending = office.ask('xiaozhen', '帮我看下对比度', { from: 'xiaomei' });
+    await waitFor(() => office.listMailbox('xiaozhen')[0]?.status === 'running', 1000);
+    await expect(office.ask('xiaomei', '那你再问我？', { from: 'xiaozhen' })).rejects.toThrow(
+      /不能再问/,
+    );
+    await expect(office.sendFrom('xiaozhen', 'xiaohei', '转给小黑')).rejects.toThrow(/不能再转交/);
+    release();
+    const done = await pending;
+    expect(done.status).toBe('success');
+  });
+
+  it('mail.send 从小美到小黑：写信、返回 taskId、记录 chain；小黑再转小美被拒', async () => {
+    const captured: Array<{ userMessage: string; sessionId: string }> = [];
+    const conversation: ColleagueConversation = {
+      async *runChat(input) {
+        captured.push({ userMessage: input.userMessage, sessionId: input.sessionId });
+        if (input.userMessage.startsWith('【同事回信】')) {
+          yield { type: 'chat.done', payload: { text: '小夜：小黑把实现交来了。' } };
+          return;
+        }
+        yield { type: 'chat.done', payload: { text: '小黑做完了' } };
+      },
+    };
+    const { office } = await makeOffice({
+      runTask: async () => {
+        throw new Error('不应走 runner');
+      },
+    });
+    const events: ColleagueTaskEvent[] = [];
+    office.onEvent((event) => events.push(event));
+    office.attachConversation(conversation);
+
+    await office.delegate('xiaomei', '出 DESIGN_SPEC', { hubSessionId: 'weixin-hub-send' });
+    await waitFor(() => office.listMailbox('xiaomei')[0]?.status === 'done', 1000);
+
+    const record = await office.sendFrom('xiaomei', 'xiaohei', '按 spec 实现首页');
+    expect(record.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(record.status).toBe('running');
+    const heMail = office.listMailbox('xiaohei')[0];
+    expect(heMail?.from).toBe('xiaomei');
+    expect(heMail?.to).toBe('xiaohei');
+    expect(heMail?.chain).toEqual(['xiaomei']);
+    expect(heMail?.hubSessionId).toBe('weixin-hub-send');
+    expect(heMail?.nested).toBeUndefined();
+    expect(heMail?.taskId).toBe(record.id);
+
+    await waitFor(() => events.some((event) => event.type === 'done' && event.taskId === record.id), 1000);
+    expect(office.listMailbox('xiaohei')[0]?.status).toBe('done');
+    expect(captured.some((row) => row.userMessage === '【小美来信】\n按 spec 实现首页')).toBe(true);
+    expect(captured.some((row) => row.userMessage.startsWith('【同事回信】'))).toBe(true);
+    const done = events.find((event) => event.type === 'done' && event.taskId === record.id);
+    expect(done?.result).toContain('小黑把实现交来了');
+
+    await expect(office.sendFrom('xiaohei', 'xiaomei', '退回给你')).rejects.toThrow(/打转/);
   });
 });

@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { ColleagueTaskRunner, type ColleagueTask } from './colleague-task-runner.js';
-import { createColleagueDelegateTool, createColleagueStatusTool, type ColleagueMailboxGateway } from './colleague-tools.js';
+import {
+  createColleagueDelegateTool,
+  createColleagueStatusTool,
+  createMailAskTool,
+  createMailSendTool,
+  type ColleagueMailboxGateway,
+} from './colleague-tools.js';
+import { parseColleagueId } from './colleague-office.js';
 
 describe('createColleagueStatusTool', () => {
   it('taskId 在 runner 没有时回退 office.getTask（会话路径）', async () => {
@@ -109,5 +116,94 @@ describe('createColleagueDelegateTool', () => {
     expect(captured[0]?.colleagueId).toBe('xiaozhi');
     expect(captured[0]?.task).toBe('调研三家竞品');
     expect(captured[0]?.options?.hubSessionId).toBe('weixin-hub-1');
+  });
+});
+
+
+describe('parseColleagueId / mail tools', () => {
+  it('解析 小真 与 xiaozhen 为同一人', () => {
+    expect(parseColleagueId('小真')).toBe('xiaozhen');
+    expect(parseColleagueId('xiaozhen')).toBe('xiaozhen');
+    expect(parseColleagueId(' 小美 ')).toBe('xiaomei');
+    expect(parseColleagueId('小夜')).toBeUndefined();
+  });
+
+  it('mail.ask 把 小真/xiaozhen 都交给 office.ask，from 来自同事 session 不是 hub', async () => {
+    const captured: Array<{ to: string; question: string; from: string }> = [];
+    const record: ColleagueTask = {
+      id: '33333333-3333-4333-8333-333333333333',
+      colleague: '小真',
+      task: '收一点',
+      directory: '/app',
+      status: 'success',
+      createdAt: new Date().toISOString(),
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+      output: '',
+      result: '可以再收一点',
+    };
+    const office: ColleagueMailboxGateway = {
+      delegate: async () => record,
+      recentMail: () => [],
+      colleagueIdForSession: (sessionId) => (sessionId === 'sess-xiaomei' ? 'xiaomei' : undefined),
+      ask: async (to, question, options) => {
+        captured.push({ to, question, from: options.from });
+        return record;
+      },
+    };
+    const tool = createMailAskTool(office);
+    const byName = await tool.execute(
+      { to: '小真', question: '视觉能不能再收一点' },
+      { sessionId: 'sess-xiaomei' },
+    );
+    expect(byName.ok).toBe(true);
+    expect(byName.data).toBe('可以再收一点');
+    const byId = await tool.execute(
+      { to: 'xiaozhen', question: '再问一次' },
+      { sessionId: 'sess-xiaomei' },
+    );
+    expect(byId.ok).toBe(true);
+    expect(captured).toEqual([
+      { to: 'xiaozhen', question: '视觉能不能再收一点', from: 'xiaomei' },
+      { to: 'xiaozhen', question: '再问一次', from: 'xiaomei' },
+    ]);
+
+    const asXiaoye = await tool.execute(
+      { to: '小真', question: 'hub 不是同事' },
+      { sessionId: 'weixin-hub-1' },
+    );
+    expect(asXiaoye.ok).toBe(false);
+    expect(asXiaoye.error).toMatch(/仅供同事/);
+  });
+
+  it('mail.send 返回 taskId；to=小黑', async () => {
+    const captured: Array<{ from: string; to: string; body: string }> = [];
+    const record: ColleagueTask = {
+      id: '44444444-4444-4444-8444-444444444444',
+      colleague: '小黑',
+      task: '实现',
+      directory: '/app',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      startedAt: new Date().toISOString(),
+      output: '',
+    };
+    const office: ColleagueMailboxGateway = {
+      delegate: async () => record,
+      recentMail: () => [],
+      colleagueIdForSession: (sessionId) => (sessionId === 'sess-xiaomei' ? 'xiaomei' : undefined),
+      sendFrom: async (from, to, body) => {
+        captured.push({ from, to, body });
+        return record;
+      },
+    };
+    const tool = createMailSendTool(office);
+    const result = await tool.execute(
+      { to: '小黑', body: '按 spec 实现' },
+      { sessionId: 'sess-xiaomei' },
+    );
+    expect(result.ok).toBe(true);
+    expect((result.data as { taskId: string }).taskId).toBe(record.id);
+    expect(captured).toEqual([{ from: 'xiaomei', to: 'xiaohei', body: '按 spec 实现' }]);
   });
 });

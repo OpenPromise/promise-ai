@@ -52,6 +52,21 @@ export interface MailItem {
   reply?: string;
   /** 小夜微信会话 id（派单方）。验收 wrap-up 必须跑在这个会话上，不能是同事会话。 */
   hubSessionId?: string;
+  /** 本封信的同事链路：parent.chain + from（from 为同事时）。用于 cycle / 跳数。 */
+  chain?: ColleagueId[];
+  /** 由 mail.ask 触发：被问方不允许再 mail.ask / mail.send。 */
+  nested?: boolean;
+}
+
+/** 派单 / 互问 / 转交共用选项。hubSessionId 只来自父信，不是调用方同事 session。 */
+export interface ColleagueDispatchOptions {
+  directory?: string;
+  timeoutMinutes?: number;
+  hubSessionId?: string;
+  from?: 'xiaoye' | ColleagueId;
+  wait?: boolean;
+  nested?: boolean;
+  chain?: ColleagueId[];
 }
 
 export interface MailPreview {
@@ -90,6 +105,8 @@ const RESULT_CAP = 8_000;
 const MAX_MAIL = 100;
 const TOOL_BUDGET = 12;
 const DEFAULT_TIMEOUT_MINUTES = 15;
+const ASK_TIMEOUT_CAP_MINUTES = 8;
+const MAX_MAIL_CHAIN = 3;
 const PROGRESS_DEBOUNCE_MS = 20_000;
 const WRAPUP_TIMEOUT_MS = 60_000;
 const WRAPUP_TOOL_BUDGET = 2;
@@ -117,6 +134,9 @@ export const SHARED_COLLEAGUE_TOOLS: readonly string[] = [
   'memory.remember',
 ];
 
+/** 五位同事互问 / 转交；嵌套 ask 时从 allowlist 剥掉。*.delegate 仍只给小夜。 */
+export const COLLEAGUE_MAIL_TOOLS: readonly string[] = ['mail.ask', 'mail.send'];
+
 export const COLLEAGUE_EXTRA_TOOLS: Record<ColleagueId, readonly string[]> = {
   xiaohei: [
     'coding.run',
@@ -136,11 +156,15 @@ export const COLLEAGUE_EXTRA_TOOLS: Record<ColleagueId, readonly string[]> = {
  * 同事会话工具白名单：共享检索/记忆 + 岗位工具；永远不含 *.delegate 与同事 *.status。
  * system.status 是巡检工具，给小优保留。
  */
-export function colleagueToolAllowlist(colleagueId: ColleagueId): string[] {
+export function colleagueToolAllowlist(
+  colleagueId: ColleagueId,
+  options: { nested?: boolean } = {},
+): string[] {
   const blocked = new Set(BLOCKED_COLLEAGUE_TOOLS);
   const names: string[] = [];
   const seen = new Set<string>();
-  for (const name of [...SHARED_COLLEAGUE_TOOLS, ...COLLEAGUE_EXTRA_TOOLS[colleagueId]]) {
+  const mailTools = options.nested ? [] : COLLEAGUE_MAIL_TOOLS;
+  for (const name of [...SHARED_COLLEAGUE_TOOLS, ...COLLEAGUE_EXTRA_TOOLS[colleagueId], ...mailTools]) {
     if (blocked.has(name) || name.endsWith('.delegate')) continue;
     if (seen.has(name)) continue;
     seen.add(name);
@@ -173,6 +197,35 @@ function mailSubject(item: MailItem): string {
 
 function isColleagueId(value: unknown): value is ColleagueId {
   return typeof value === 'string' && (COLLEAGUE_IDS as readonly string[]).includes(value);
+}
+
+const COLLEAGUE_NAME_TO_ID: Record<string, ColleagueId> = {
+  小黑: 'xiaohei',
+  小优: 'xiaoyou',
+  小美: 'xiaomei',
+  小真: 'xiaozhen',
+  小知: 'xiaozhi',
+};
+
+/** 接受短 id 或中文名（小真 / xiaozhen）。小夜不是同事。 */
+export function parseColleagueId(value: string): ColleagueId | undefined {
+  const key = value.trim();
+  if (isColleagueId(key)) return key;
+  return COLLEAGUE_NAME_TO_ID[key];
+}
+
+export function isXiaoyeRef(value: string): boolean {
+  const key = value.trim();
+  return key === '小夜' || key === 'xiaoye';
+}
+
+function nextMailChain(
+  parent: ColleagueId[] | undefined,
+  from: 'xiaoye' | ColleagueId,
+): ColleagueId[] {
+  const base = parent ?? [];
+  if (from === 'xiaoye') return [...base];
+  return [...base, from];
 }
 
 function sessionColleagueId(session: Session): ColleagueId | undefined {
@@ -213,6 +266,8 @@ const TOOL_PROGRESS_LABEL: Record<string, string> = {
   'memory.list': '正在查阅记忆',
   'memory.remember': '正在写入记忆',
   'time.get': '正在看时间',
+  'mail.ask': '正在问同事',
+  'mail.send': '正在转交任务',
 };
 
 /** 白名单外或未知工具不冒进度；已知工具用人话，不用原始英文名。 */
@@ -320,34 +375,156 @@ export class ColleagueOffice {
 
   /**
    * 小夜派单：写信入收件箱。有 conversation 时在同事自己的会话上 headless runChat；
-   * 否则回退 runner.delegate（异步 dsh / SSE）。
+   * 否则回退 runner.delegate（异步 dsh / SSE）。同事互问 / 转交走 ask / sendFrom。
    */
   async delegate(
     colleagueId: string,
     task: string,
-    options: { directory?: string; timeoutMinutes?: number; hubSessionId?: string } = {},
+    options: ColleagueDispatchOptions = {},
+  ): Promise<ColleagueTask> {
+    return this.#dispatch(colleagueId, task.trim(), {
+      ...options,
+      from: options.from ?? 'xiaoye',
+      wait: options.wait ?? false,
+      nested: options.nested ?? false,
+    });
+  }
+
+  /**
+   * 同事同步询问：写信到对方收件箱并等待回信。被问方 allowlist 不含 mail.*（hop 1）。
+   * 不跑小夜 wrap-up，不发 done 事件（避免微信中途冒「小真回来了」）。
+   */
+  async ask(
+    to: string,
+    question: string,
+    options: ColleagueDispatchOptions & { from: ColleagueId },
+  ): Promise<ColleagueTask> {
+    const body = question.trim();
+    if (!body) throw new Error('问题不能为空');
+    if (isXiaoyeRef(to)) throw new Error('不能问小夜');
+    const toId = parseColleagueId(to);
+    if (!toId) throw new Error(`unknown colleague: ${to}`);
+    if (toId === options.from) throw new Error('不能问自己');
+    const parent = this.#callerMail(options.from);
+    if (parent?.nested) {
+      throw new Error('回答来信时不能再问其他同事');
+    }
+    return this.#dispatch(toId, body, {
+      directory: options.directory,
+      timeoutMinutes: options.timeoutMinutes,
+      hubSessionId: options.hubSessionId ?? parent?.hubSessionId,
+      from: options.from,
+      wait: true,
+      nested: true,
+      chain: options.chain ?? parent?.chain,
+    });
+  }
+
+  /**
+   * 同事异步转交：立即返回 taskId。cycle / 跳数检查；完成时用原 hubSessionId 做小夜 wrap-up。
+   */
+  async sendFrom(
+    from: ColleagueId,
+    to: string,
+    body: string,
+    options: ColleagueDispatchOptions = {},
+  ): Promise<ColleagueTask> {
+    const text = body.trim();
+    if (!text) throw new Error('正文不能为空');
+    if (isXiaoyeRef(to)) throw new Error('不能转交给小夜');
+    const toId = parseColleagueId(to);
+    if (!toId) throw new Error(`unknown colleague: ${to}`);
+    if (toId === from) throw new Error('不能转交给自己');
+    const parent = this.#callerMail(from);
+    if (parent?.nested) {
+      throw new Error('回答来信时不能再转交其他同事');
+    }
+    return this.#dispatch(toId, text, {
+      directory: options.directory,
+      timeoutMinutes: options.timeoutMinutes,
+      hubSessionId: options.hubSessionId ?? parent?.hubSessionId,
+      from,
+      wait: false,
+      nested: false,
+      chain: options.chain ?? parent?.chain,
+    });
+  }
+
+  /** ToolContext.sessionId 是调用方同事会话，用来认 from；不是微信 hub。 */
+  colleagueIdForSession(sessionId: string): ColleagueId | undefined {
+    const id = sessionId.trim();
+    if (!id) return undefined;
+    for (const [colleagueId, sid] of this.#sessionIds) {
+      if (sid === id) return colleagueId;
+    }
+    return undefined;
+  }
+
+  async #dispatch(
+    colleagueId: string,
+    body: string,
+    options: ColleagueDispatchOptions,
   ): Promise<ColleagueTask> {
     if (!isColleagueId(colleagueId)) {
       throw new Error(`unknown colleague: ${colleagueId}`);
     }
-    const body = task.trim();
+    const from = options.from ?? 'xiaoye';
+    if (from === colleagueId) {
+      throw new Error('不能给自己写信');
+    }
+    const chain = this.#assertSendChain(colleagueId, from, options.chain, options.wait === true);
     const hubSessionId = this.#sanitizeHubSessionId(options.hubSessionId);
     const mail: MailItem = {
       id: randomUUID(),
-      from: 'xiaoye',
+      from,
       to: colleagueId,
       body,
       createdAt: new Date().toISOString(),
       status: 'queued',
       ...(hubSessionId ? { hubSessionId } : {}),
+      ...(chain.length ? { chain } : {}),
+      ...(options.nested ? { nested: true } : {}),
     };
     this.#pushMail(colleagueId, mail);
     await this.#persist(colleagueId);
 
+    if (options.wait && !this.#conversation) {
+      throw new Error('同事会话未接入，无法同步询问');
+    }
     if (this.#conversation) {
       return this.#delegateViaConversation(colleagueId, mail, body, options);
     }
     return this.#delegateViaRunner(colleagueId, mail, body, options);
+  }
+
+  /**
+   * 转交：to 已在链路中则拒绝（防打转）；链路过长拒绝。
+   * 同步 ask 不走跳数上限（hop 1 由 nested allowlist 保证）。
+   */
+  #assertSendChain(
+    to: ColleagueId,
+    from: 'xiaoye' | ColleagueId,
+    parentChain: ColleagueId[] | undefined,
+    isAsk: boolean,
+  ): ColleagueId[] {
+    const chain = nextMailChain(parentChain, from);
+    if (from === 'xiaoye' || isAsk) return chain;
+    if (chain.includes(to)) {
+      throw new Error(`不能转交给已在链路中的同事，防止打转`);
+    }
+    if (chain.length > MAX_MAIL_CHAIN) {
+      throw new Error(`转交跳数已达上限（${MAX_MAIL_CHAIN}）`);
+    }
+    return chain;
+  }
+
+  #callerMail(colleagueId: ColleagueId): MailItem | undefined {
+    const items = this.#mail.get(colleagueId) ?? [];
+    for (let i = items.length - 1; i >= 0; i -= 1) {
+      const item = items[i];
+      if (item && (item.status === 'queued' || item.status === 'running')) return item;
+    }
+    return items.at(-1);
   }
 
   /** 最近几封信的主题/状态，供 *.status 让小夜说「小黑收件箱还有一封在跑」。 */
@@ -374,10 +551,11 @@ export class ColleagueOffice {
     colleagueId: ColleagueId,
     mail: MailItem,
     body: string,
-    options: { directory?: string; timeoutMinutes?: number },
+    options: ColleagueDispatchOptions,
   ): Promise<ColleagueTask> {
     const name = colleagueName(colleagueId);
-    const timeoutMinutes = clampTimeoutMinutes(options.timeoutMinutes);
+    let timeoutMinutes = clampTimeoutMinutes(options.timeoutMinutes);
+    if (mail.nested) timeoutMinutes = Math.min(timeoutMinutes, ASK_TIMEOUT_CAP_MINUTES);
     const directory = path.resolve(options.directory ?? '/app');
     const taskId = randomUUID();
     mail.taskId = taskId;
@@ -394,6 +572,7 @@ export class ColleagueOffice {
       startedAt: new Date().toISOString(),
       output: '',
       ...(mail.hubSessionId ? { hubSessionId: mail.hubSessionId } : {}),
+      ...(mail.chain ? { chain: mail.chain } : {}),
     };
     this.#tasks.set(taskId, record);
 
@@ -406,8 +585,12 @@ export class ColleagueOffice {
       text: startedText,
     });
 
-    void this.#runLoop(colleagueId, mail, record, timeoutMinutes);
-    return record;
+    if (options.wait) {
+      await this.#runLoop(colleagueId, mail, record, timeoutMinutes);
+    } else {
+      void this.#runLoop(colleagueId, mail, record, timeoutMinutes);
+    }
+    return this.#tasks.get(taskId) ?? record;
   }
 
   async #delegateViaRunner(
@@ -475,8 +658,9 @@ export class ColleagueOffice {
       return;
     }
 
-    const userMessage = `【小夜来信】\n${mail.body}`;
-    const toolAllowlist = colleagueToolAllowlist(colleagueId);
+    const fromName = mail.from === 'xiaoye' ? '小夜' : colleagueName(mail.from);
+    const userMessage = `【${fromName}来信】\n${mail.body}`;
+    const toolAllowlist = colleagueToolAllowlist(colleagueId, { nested: Boolean(mail.nested) });
     let finished = false;
     try {
       const iterator = conversation.runChat({
@@ -554,6 +738,8 @@ export class ColleagueOffice {
     record.finishedAt = new Date().toISOString();
     if (outcome.ok) record.result = reply;
     else record.error = reply || '任务失败';
+    // mail.ask（nested）：不跑小夜 wrap-up、不发 done，避免微信中途冒「小真回来了」。
+    if (mail.nested) return;
     const wrapUp = await this.#wrapUpOnHub({
       mail,
       record,
