@@ -4,17 +4,18 @@
 
 本项目在腾讯云轻量服务器上运行，使用 Docker Compose 编排。
 
-### 安全加固措施
+### 小夜对宿主机的权限（有意为之）
 
-1. **Docker 套接字隔离**
-   - 容器内 **不挂载** `/var/run/docker.sock`
-   - 容器内 agent 无法启动新容器或映射端口
-   - 降低容器逃逸与横向移动风险
+这台云服务器是小夜的工作环境。`assistant-app` **会挂载**：
 
-2. **SSH 密钥最小权限**
-   - **不挂载** 宿主机全部 `~/.ssh` 目录
-   - 如需 git push SSH 认证，仅挂载指定部署密钥（如 `/home/ubuntu/.ssh/promise-ai-deploy`）
-   - 当前配置优先使用 GitHub App / token 认证（通过 `.env` 注入），无需 SSH 挂载
+1. **Docker 套接字 + CLI**
+   - `/var/run/docker.sock`
+   - `/usr/bin/docker` 以及 compose 插件目录
+   - 容器内 agent 可以起停容器、映射端口、管理本机 Docker
+
+2. **宿主机 SSH 目录（只读）**
+   - `/home/ubuntu/.ssh` → 容器内 `/root/.ssh:ro`
+   - 用于 git push，以及她作为这台机器主人时需要的密钥
 
 3. **端口绑定**
    - Postgres: `127.0.0.1:5432`（仅本机）
@@ -49,39 +50,7 @@
 
 ### Git Push 认证配置
 
-#### 方案一：GitHub Token（推荐）
-
-在 `.env` 中配置 GitHub Personal Access Token 或 GitHub App：
-
-```bash
-GITHUB_TOKEN=ghp_xxxxxxxxxxxxx
-```
-
-容器内 git 使用 HTTPS + token 认证，无需 SSH。
-
-#### 方案二：SSH 部署密钥
-
-1. 生成专用部署密钥（read-write）：
-
-   ```bash
-   ssh-keygen -t ed25519 -C "promise-ai-deploy" -f ~/.ssh/promise-ai-deploy
-   ```
-
-2. 将公钥添加到 GitHub 仓库 Deploy Keys（勾选 "Allow write access"）
-
-3. 修改 `docker-compose.yml` app 服务挂载：
-
-   ```yaml
-   volumes:
-     - /home/ubuntu/.ssh/promise-ai-deploy:/root/.ssh/id_ed25519:ro
-   ```
-
-4. 容器内配置 git 使用该 key：
-
-   ```bash
-   # 在容器内或 entrypoint 脚本中
-   git config --global core.sshCommand "ssh -i /root/.ssh/id_ed25519"
-   ```
+仓库已把宿主机 `/home/ubuntu/.ssh` 只读挂进容器，git 走 SSH 即可。`.env` 里的 GitHub token 也可以用，两者都能推。
 
 ### 启动与重启
 

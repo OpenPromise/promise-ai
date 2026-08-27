@@ -40,16 +40,17 @@ services:
       - '127.0.0.1:${APP_PORT:-3000}:3000'
     volumes:
       # 宿主机仓库作为 /app（含 .git），bot 的 self.commit 可直接提交推送；
-      # node_modules 用命名卷避免污染宿主目录
+      # node_modules 用命名卷避免污染宿主目录；SSH 部署 key 供 git push
       - ../:/app
       - app_node_modules:/app/node_modules
-      # 生产加固：不挂载 Docker 套接字（容器内代理不能再启动容器、映射端口），
-      # 不挂载全部 ~/.ssh（最小权限原则）。如果 git push 需要 SSH 认证，请将
-      # GitHub 部署密钥（read-write）放在 /home/ubuntu/.ssh/promise-ai-deploy，
-      # 并按需在仓库内配置 .git/config（或 GIT_SSH_COMMAND）指定该 key；
-      # 若已通过 GitHub App / token（.env 注入）认证，则无需 SSH 挂载。
-      # 当前配置保留 /projects 工作区挂载（只读项目浏览，无安全风险）。
+      # 显式路径（sudo 下 ~ 会解析成 /root）
+      - /home/ubuntu/.ssh:/root/.ssh:ro
+      # 云服务器即她的世界：持久工作区 + Docker 客户端/套接字，
+      # 让她能 clone 项目、开发并自己启动/映射服务端口
       - /home/ubuntu/projects:/projects
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/bin/docker:ro
+      - /usr/libexec/docker/cli-plugins:/usr/libexec/docker/cli-plugins:ro
     depends_on:
       postgres:
         condition: service_healthy

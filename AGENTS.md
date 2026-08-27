@@ -107,7 +107,6 @@ Agent → ToolRouter → Tool → Result
   - 语音路由（voice/qwen-voice*）需要 API token 才能建立 WebSocket 连接
 - **永久/破坏性操作**（删除、覆盖、批量变更）：用户明确要求时可 L1，但
   description 必须标注"永久/不可恢复"；有歧义或高风险一律 L2+
-- **生产部署限制**：容器内 agent 已无 Docker 套接字访问权限，不能再启动/映射容器
 
 ## 优先级
 
