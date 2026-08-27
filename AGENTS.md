@@ -37,9 +37,22 @@
 
 ## 当前阶段
 
-当前项目处于 Phase 5：Agent Core。
+当前项目已进入**生产运行**阶段，包含六位 AI 同事：
 
-重点研究：
+- **小夜**（Agent Server）：私人助理 · 团队中枢，负责所有对话、派单与协调
+- **小黑**（工程师）：软件工程师，通过 dsh 执行编码任务
+- **小优**（运维）：SRE，通过 dsh 执行运维任务
+- **小美**（设计）：产品/UI/视觉设计师，通过 dsh 执行设计任务
+- **小真**（QA）：QA 工程师，通过 dsh 执行测试任务
+- **小知**（情报）：研究员/情报官，通过 dsh 执行研究任务
+
+系统架构为：
+
+```
+用户（微信）→ weixin-bridge → agent-server（小夜）→ 派单给五位同事（dsh）
+```
+
+重点维护：
 
 - Agent Loop
 - Tool Registry
@@ -49,15 +62,15 @@
 - Agent Context
 - Session
 - Event System
-- Permission
+- Permission (L0-L3 分级授权)
 - Error Handling
 - Cancellation
 - Timeout
 - Streaming
 
-暂时不要实现：
+暂时不要新增：
 
-- 多 Agent
+- 更多 Agent 角色
 - 电话
 - SIP
 - 车机
@@ -88,13 +101,13 @@ Agent → ToolRouter → Tool → Result
 ## 新增工具权限准则
 
 - 每个新工具必须显式选择 `permissionLevel` 并在方案/提交说明理由
-- **通道约束**：微信通道（weixin-bridge）走**文字审批**——L2/L3 工具触发时
-  桥会推送"需要授权，回复允许/拒绝"，用户文字答复后放行；L0/L1 自动执行。
-  服务端内部工具按既有权限表（桌面端已下线）；语音路由（voice/qwen-voice*）
-  需要 API token 才能建立 WebSocket 连接。
+- **通道约束**：
+  - 微信通道（weixin-bridge）走**文字审批**——L2/L3 工具触发时桥会推送"需要授权，回复允许/拒绝"，用户文字答复后放行；L0/L1 自动执行
+  - 新增 weixin.* 工具时，仓库测试会校验权限 ≤ L1（微信通道约束）
+  - 语音路由（voice/qwen-voice*）需要 API token 才能建立 WebSocket 连接
 - **永久/破坏性操作**（删除、覆盖、批量变更）：用户明确要求时可 L1，但
   description 必须标注"永久/不可恢复"；有歧义或高风险一律 L2+
-- 新增 weixin.* 工具时，仓库测试会校验权限 ≤ L1（微信通道约束）
+- **生产部署限制**：容器内 agent 已无 Docker 套接字访问权限，不能再启动/映射容器
 
 ## 优先级
 
