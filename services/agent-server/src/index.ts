@@ -36,10 +36,19 @@ import {
   createEngineerTool,
 } from './services/engineer-tools.js';
 import { EngineerTaskRunner } from './services/engineer-task-runner.js';
-import { createOpsTool } from './services/ops-tools.js';
-import { createDesignerTool } from './services/designer-tools.js';
-import { createQaTool } from './services/qa-tools.js';
-import { createResearchTool } from './services/research-tools.js';
+import { createOpsStatusTool, createOpsTaskRunner, createOpsTool } from './services/ops-tools.js';
+import {
+  createDesignerStatusTool,
+  createDesignerTool,
+  XIAO_MEI_COLLEAGUE,
+} from './services/designer-tools.js';
+import { createQaStatusTool, createQaTool, XIAO_ZHEN_COLLEAGUE } from './services/qa-tools.js';
+import {
+  createResearchStatusTool,
+  createResearchTool,
+  XIAO_ZHI_COLLEAGUE,
+} from './services/research-tools.js';
+import { ColleagueTaskRunner } from './services/colleague-task-runner.js';
 import { createSelfTools } from './services/self-tools.js';
 import { recoverInterruptedSessions } from './services/restart-recovery.js';
 import { createWeixinTools } from './services/weixin-tools.js';
@@ -339,32 +348,52 @@ for (const tool of tools) {
 }
 // coding.run 是服务端能力（服务器上驱动 dsh 开源编码代理），不属于桌面客户端。
 toolRegistry.register(createCodingTool());
-// engineer.*：把开发任务派给"小黑"（专属工程师子代理）异步执行——工具立即返回
-// taskId，dsh 在后台独立运行，进度/完成通过事件推送，不阻塞小夜对话。
+// 五位同事 *.delegate 都是异步派单：工具立即返回 taskId，dsh 在后台独立运行，
+// 进度/完成通过事件推送，不阻塞小夜对话。小夜用对应 *.status 查询。
 const engineerTaskRunner = new EngineerTaskRunner({
   timeline: timelineStore,
   persistDir: process.env.ENGINEER_TASK_DIR ?? './data/engineer-tasks',
 });
+const opsTaskRunner = createOpsTaskRunner({
+  timeline: timelineStore,
+  persistDir: process.env.OPS_TASK_DIR ?? './data/ops-tasks',
+});
+const designerTaskRunner = new ColleagueTaskRunner(XIAO_MEI_COLLEAGUE, {
+  timeline: timelineStore,
+  persistDir: process.env.DESIGNER_TASK_DIR ?? './data/designer-tasks',
+});
+const qaTaskRunner = new ColleagueTaskRunner(XIAO_ZHEN_COLLEAGUE, {
+  timeline: timelineStore,
+  persistDir: process.env.QA_TASK_DIR ?? './data/qa-tasks',
+});
+const researchTaskRunner = new ColleagueTaskRunner(XIAO_ZHI_COLLEAGUE, {
+  timeline: timelineStore,
+  persistDir: process.env.RESEARCH_TASK_DIR ?? './data/research-tasks',
+});
+const colleagueRunners = [
+  engineerTaskRunner,
+  opsTaskRunner,
+  designerTaskRunner,
+  qaTaskRunner,
+  researchTaskRunner,
+];
 // 返回中断任务列表（进程重启时被杀的 running 任务），事件通道就绪后补发通知
-const interruptedEngineerTasks = await engineerTaskRunner.loadPersisted();
+const interruptedColleagueTasks: Array<{ runner: ColleagueTaskRunner; id: string }> = [];
+for (const runner of colleagueRunners) {
+  for (const task of await runner.loadPersisted()) {
+    interruptedColleagueTasks.push({ runner, id: task.id });
+  }
+}
 toolRegistry.register(createEngineerTool(engineerTaskRunner));
 toolRegistry.register(createEngineerStatusTool(engineerTaskRunner));
-// ops.delegate：把服务器运维任务派给"小优"（专属运维工程师子代理）同步执行——
-// 全权限（danger-full-access）驱动 dsh 管理整台服务器（监控/部署/巡检/故障/安全/自动化），
-// 权限与小夜同级；小优是小夜手下的运维专员。
-toolRegistry.register(createOpsTool());
-// designer.delegate：把产品设计/UX/UI/视觉设计任务派给"小美"（专属 Product/UI/Visual
-// Designer 子代理）同步执行——工作区权限（workspace-write）驱动 dsh 产出设计文档与
-// DESIGN_SPEC 契约（给小黑开发用），不改生产代码；小美是小夜手下的设计师。
-toolRegistry.register(createDesignerTool());
-// qa.delegate：把测试/质量验收任务派给“小真”（专属 QA 工程师子代理）同步执行——
-// 工作区权限（workspace-write）驱动 dsh 跑 typecheck/测试/构建/冒烟，产出证据化验收报告；
-// 发现缺陷只报告不修复（修复归小黑），验收方与实现方独立；小真是小夜手下的质量守门人。
-toolRegistry.register(createQaTool());
-// research.delegate：把研究/调研/情报任务派给“小知”（专属研究员/情报官子代理）同步执行——
-// 工作区权限（workspace-write）驱动 dsh 产出结构化简报（结论先行/来源/置信度），
-// 沉淀到 /app/xiaozhi/ 知识库并供养官网情报板块；小知是小夜手下的研究员。
-toolRegistry.register(createResearchTool());
+toolRegistry.register(createOpsTool(opsTaskRunner));
+toolRegistry.register(createOpsStatusTool(opsTaskRunner));
+toolRegistry.register(createDesignerTool(designerTaskRunner));
+toolRegistry.register(createDesignerStatusTool(designerTaskRunner));
+toolRegistry.register(createQaTool(qaTaskRunner));
+toolRegistry.register(createQaStatusTool(qaTaskRunner));
+toolRegistry.register(createResearchTool(researchTaskRunner));
+toolRegistry.register(createResearchStatusTool(researchTaskRunner));
 // server.shell：容器内终端（L3）——"云服务器即她的世界"的自主操作入口。
 toolRegistry.register(createServerShellTool());
 // system.status：服务器健康巡检（L0 只读）——定时任务自主监控用。
@@ -439,7 +468,12 @@ const app = buildApp({
   subscribeTaskEvents: (listener) => taskService.onRun(listener),
   subscribeReminderEvents: (listener) => reminderService.onDue(listener),
   subscribeHookEvents: (listener) => hookService.onRun(listener),
-  subscribeEngineerEvents: (listener) => engineerTaskRunner.onEvent(listener),
+  subscribeEngineerEvents: (listener) => {
+    const unsubs = colleagueRunners.map((runner) => runner.onEvent(listener));
+    return () => {
+      for (const unsub of unsubs) unsub();
+    };
+  },
   hooks: hookService,
   hookSecret: config.hookSecret,
   processStartedAt,
@@ -449,10 +483,10 @@ const app = buildApp({
   createQwen,
 });
 
-// 事件订阅（registerEventRoutes）已建立：补发重启中断的小黑任务完成通知，
+// 事件订阅（registerEventRoutes）已建立：补发重启中断的同事任务完成通知，
 // 这些事件会进 SSE 缓冲，晚连接的 weixin event-pusher 也能靠 Last-Event-ID 拉到。
-for (const task of interruptedEngineerTasks) {
-  engineerTaskRunner.emitTaskDone(task.id);
+for (const item of interruptedColleagueTasks) {
+  item.runner.emitTaskDone(item.id);
 }
 
 try {

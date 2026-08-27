@@ -3,9 +3,16 @@
  * 在容器内执行：npx tsx scripts/ask-self-brief.mts
  */
 import { writeFile } from 'node:fs/promises';
-import { createDesignerTool } from '../services/agent-server/src/services/designer-tools.js';
-import { createQaTool } from '../services/agent-server/src/services/qa-tools.js';
-import { createResearchTool } from '../services/agent-server/src/services/research-tools.js';
+import { ColleagueTaskRunner } from '../services/agent-server/src/services/colleague-task-runner.js';
+import {
+  createDesignerTool,
+  XIAO_MEI_COLLEAGUE,
+} from '../services/agent-server/src/services/designer-tools.js';
+import { createQaTool, XIAO_ZHEN_COLLEAGUE } from '../services/agent-server/src/services/qa-tools.js';
+import {
+  createResearchTool,
+  XIAO_ZHI_COLLEAGUE,
+} from '../services/agent-server/src/services/research-tools.js';
 
 const SHARED = `CEO 现在只问你两件事。这是你自己的声音，不要照抄建档代拟稿，不要改生产代码，不要改别人的主页。
 
@@ -24,11 +31,24 @@ const SHARED = `CEO 现在只问你两件事。这是你自己的声音，不要
 
 请把完整回答写入指定的 self-brief.md（Markdown）。报告正文也附上全文。`;
 
+const designerRunner = new ColleagueTaskRunner(XIAO_MEI_COLLEAGUE);
+const qaRunner = new ColleagueTaskRunner(XIAO_ZHEN_COLLEAGUE);
+const researchRunner = new ColleagueTaskRunner(XIAO_ZHI_COLLEAGUE);
+
+async function waitForTask(runner: ColleagueTaskRunner, taskId: string) {
+  for (;;) {
+    const record = runner.get(taskId);
+    if (record && record.status !== 'running') return record;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+}
+
 const jobs = [
   {
     name: '小美',
     file: '/app/xiaomei/self-brief.md',
-    tool: createDesignerTool(),
+    runner: designerRunner,
+    tool: createDesignerTool(designerRunner),
     task: `${SHARED}
 
 输出文件：/app/xiaomei/self-brief.md
@@ -37,7 +57,8 @@ const jobs = [
   {
     name: '小真',
     file: '/app/xiaozhen/self-brief.md',
-    tool: createQaTool(),
+    runner: qaRunner,
+    tool: createQaTool(qaRunner),
     task: `${SHARED}
 
 输出文件：/app/xiaozhen/self-brief.md
@@ -46,7 +67,8 @@ const jobs = [
   {
     name: '小知',
     file: '/app/xiaozhi/self-brief.md',
-    tool: createResearchTool(),
+    runner: researchRunner,
+    tool: createResearchTool(researchRunner),
     task: `${SHARED}
 
 输出文件：/app/xiaozhi/self-brief.md
@@ -61,12 +83,23 @@ for (const job of jobs) {
     { task: job.task, directory: '/app', timeoutMinutes: 25 },
     { sessionId: `self-brief-${job.name}` },
   );
+  if (!result.ok) {
+    const ms = Date.now() - started;
+    const dump = `/app/data/${job.name}-self-brief-raw.txt`;
+    await writeFile(dump, JSON.stringify(result, null, 2), 'utf8');
+    console.log(`${job.name} ok=${result.ok} ${ms}ms raw=${dump}`);
+    console.error(result.error);
+    process.exitCode = 1;
+    continue;
+  }
+  const taskId = (result.data as { taskId: string }).taskId;
+  const record = await waitForTask(job.runner, taskId);
   const ms = Date.now() - started;
   const dump = `/app/data/${job.name}-self-brief-raw.txt`;
-  await writeFile(dump, JSON.stringify(result, null, 2), 'utf8');
-  console.log(`${job.name} ok=${result.ok} ${ms}ms raw=${dump}`);
-  if (!result.ok) {
-    console.error(result.error);
+  await writeFile(dump, JSON.stringify({ ok: record.status === 'success', record }, null, 2), 'utf8');
+  console.log(`${job.name} ok=${record.status === 'success'} ${ms}ms raw=${dump}`);
+  if (record.status !== 'success') {
+    console.error(record.error);
     process.exitCode = 1;
   }
 }

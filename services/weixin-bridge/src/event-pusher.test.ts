@@ -69,6 +69,24 @@ describe('formatEvent', () => {
     ).toBe('❌ 小黑任务失败（#12345678）\n编译失败');
   });
 
+  it('formats colleague-named progress/done（小优/小美）', () => {
+    expect(
+      formatEvent('engineer.task.progress', {
+        taskId: 'abcdef01-xxxx',
+        colleague: '小优',
+        text: '正在重启容器',
+      }),
+    ).toBe('🔧 小优任务进行中（#abcdef01）：正在重启容器');
+    expect(
+      formatEvent('engineer.task.done', {
+        taskId: 'abcdef01-xxxx',
+        colleague: '小美',
+        status: 'success',
+        result: '【DESIGN_SPEC】完成',
+      }),
+    ).toBe('✅ 小美任务完成（#abcdef01）\n【DESIGN_SPEC】完成');
+  });
+
   it('ignores unknown events', () => {
     expect(formatEvent('something.else', {})).toBeUndefined();
   });

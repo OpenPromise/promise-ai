@@ -96,10 +96,21 @@ const STRONG_BOUNDARY_CHARS = '。！？!?…';
 const WEAK_BOUNDARY_CHARS = '；;，,、：:';
 
 /** 长任务工具白名单：这些工具执行时向微信推送"已派出/已完成"进度节点。 */
-const LONG_TASK_TOOLS = ['engineer.delegate', 'coding.run'];
+const LONG_TASK_TOOLS = [
+  'engineer.delegate',
+  'ops.delegate',
+  'designer.delegate',
+  'qa.delegate',
+  'research.delegate',
+  'coding.run',
+];
 /** 长任务工具开始时的确认文案（程序保证，不依赖模型输出文字）。 */
 const TOOL_START_HINTS: Record<string, string> = {
   'engineer.delegate': '🔧 收到，已派给小黑！预计几分钟，干完我验收后向你汇报。',
+  'ops.delegate': '🔧 收到，已派给小优！预计几分钟，干完我验收后向你汇报。',
+  'designer.delegate': '🔧 收到，已派给小美！预计几分钟，干完我验收后向你汇报。',
+  'qa.delegate': '🔧 收到，已派给小真！预计几分钟，干完我验收后向你汇报。',
+  'research.delegate': '🔧 收到，已派给小知！预计几分钟，干完我验收后向你汇报。',
   'coding.run': '🔧 收到，开始执行开发任务，预计几分钟，完成后向你汇报。',
 };
 

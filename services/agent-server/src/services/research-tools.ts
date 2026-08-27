@@ -1,15 +1,8 @@
-import path from 'node:path';
-import { access } from 'node:fs/promises';
-import type { PermissionLevel, Tool, ToolContext, ToolResult } from '@personal-ai/tools';
-import { runDshHeadless, type DshRunResult } from './coding-tool.js';
-
-/**
- * research.delegate：把研究/调研/情报任务派给"小知"（专属研究员/情报官
- * 子代理）执行。与 designer.delegate 同构：工作区权限（workspace-write）
- * 同步驱动 dsh，调用后等待小知跑完并返回结构化简报（结论先行/证据与来源/
- * 置信度/未验证假设）。小知的产出沉淀到 /app/xiaozhi/ 知识库，可直接
- * 供养官网"情报"板块与团队决策。
- */
+import type { ColleagueSpec, ColleagueTaskRunner } from './colleague-task-runner.js';
+import {
+  createColleagueDelegateTool,
+  createColleagueStatusTool,
+} from './colleague-tools.js';
 
 export const XIAO_ZHI_PROMPT = `你是"小知"，用户团队的专属研究员/情报官（Researcher & Intelligence）。你温和、好奇、严谨；你负责技术调研、竞品与开源项目分析、模型与接口变更跟踪、以及团队对外情报内容的产出。你的信条是："先看清世界，再动手改变它。"小夜姐（私人助理/大脑）是你的监督者，你是她手下的研究员；你的简报是 CEO 决策、小黑选型、团队学习的依据。
 
@@ -48,99 +41,31 @@ ${userRequest.trim()}
 请按上述工作准则执行，完成后输出结构化简报。`;
 }
 
-interface ResearchInput {
-  task?: string;
-  directory?: string;
-  timeoutMinutes?: number;
+export const XIAO_ZHI_COLLEAGUE: ColleagueSpec = {
+  id: 'research',
+  name: '小知',
+  permissionMode: 'workspace-write',
+  buildTask: buildXiaoZhiTask,
+  startedText: '小知已开工，正在执行任务',
+  persistFileName: 'research-tasks.json',
+};
+
+export function createResearchTool(runner: ColleagueTaskRunner) {
+  return createColleagueDelegateTool({
+    name: 'research.delegate',
+    displayName: '小知',
+    statusToolName: 'research.status',
+    runner,
+    defaultTimeoutMinutes: 15,
+    description:
+      '把研究/调研/情报任务派给"小知"（专属研究员/情报官子代理）执行：技术调研、竞品与开源项目分析、模型与接口变更跟踪、对外情报内容产出。小知温和严谨、结论先行、逢结论必标来源与置信度，产出沉淀到 /app/xiaozhi/ 知识库。她只读代码、只写研究文档：不改产品代码（归小黑）、不做部署（归小优）。由助理（小夜）作为监督者调用。这是异步任务：调用后立即返回 taskId（任务在后台运行，可继续与用户聊天），进度与完成会自动通知，也可用 research.status 查询。directory 用 /app 等持久目录。轻量问题（查文件、看状态）不要用此工具，用 filesystem.search / server.shell / system.status 等轻量工具。她已有 web.search / web.fetch 做快速检索；只有需要专门调研/写简报时才派给小知。',
+  });
 }
 
-/**
- * research.delegate（同步版）：把研究/调研/情报任务派给"小知"（专属
- * 研究员/情报官子代理）执行。小知以工作区权限（workspace-write）驱动 dsh
- * 阅读材料并产出结构化简报，沉淀到 /app/xiaozhi/ 知识库。
- * permissionLevel=1：只读代码 + 写研究文档，无系统级破坏性操作。
- */
-export function createResearchTool(): Tool {
-  return {
-    name: 'research.delegate',
-    description:
-      '把研究/调研/情报任务派给"小知"（专属研究员/情报官子代理）执行：' +
-      '技术调研、竞品与开源项目分析、模型与接口变更跟踪、对外情报内容产出。' +
-      '小知温和严谨、结论先行、逢结论必标来源与置信度，产出沉淀到 /app/xiaozhi/ 知识库。' +
-      '她只读代码、只写研究文档：不改产品代码（归小黑）、不做部署（归小优）。' +
-      '由助理（小夜）作为监督者调用。' +
-      '这是同步任务：调用后等待小知跑完（通常数分钟），直接返回结构化简报。' +
-      'directory 用 /app 等持久目录。' +
-      '轻量问题（查文件、看状态）不要用此工具，用 filesystem / terminal 等轻量工具。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        task: { type: 'string', description: '要小知调研的问题或主题（越具体越好）' },
-        directory: {
-          type: 'string',
-          description: '工作目录绝对路径，默认 /app（bind mount 持久目录）',
-        },
-        timeoutMinutes: {
-          type: 'number',
-          minimum: 1,
-          maximum: 60,
-          description: '等待上限（分钟），默认 15',
-        },
-      },
-      required: ['task'],
-    },
-    permissionLevel: 1 as PermissionLevel,
-    timeoutMs: 60 * 60 * 1000,
-    async execute(input: unknown, context: ToolContext): Promise<ToolResult> {
-      const { task, directory = '/app', timeoutMinutes = 15 } = (input ?? {}) as ResearchInput;
-      if (!task?.trim()) {
-        return { ok: false, error: '缺少 task 参数' };
-      }
-      const resolvedDir = path.resolve(directory);
-      try {
-        await access(resolvedDir);
-      } catch {
-        return { ok: false, error: `目录不存在：${resolvedDir}` };
-      }
-      if (task.trim().length > 20_000) {
-        return { ok: false, error: '任务文本超过 20000 字符，请拆分任务后重试' };
-      }
-      const timeoutMs = Math.min(Math.max(1, Math.floor(timeoutMinutes)), 60) * 60 * 1000;
-      let run: DshRunResult;
-      try {
-        run = await runDshHeadless(buildXiaoZhiTask(task.trim()), {
-          cwd: resolvedDir,
-          timeoutMs,
-          // 小知读材料/写知识库：工作区权限即可，不触达系统级操作。
-          permissionMode: 'workspace-write',
-          signal: context.signal,
-        });
-      } catch (error) {
-        return {
-          ok: false,
-          error: `小知派单启动失败：${error instanceof Error ? error.message : String(error)}`,
-        };
-      }
-      const { stdout, stderr, timedOut, exitCode } = run;
-      if (timedOut) {
-        return {
-          ok: false,
-          error: `小知执行超过 ${Math.round(timeoutMs / 60_000)} 分钟被终止`,
-        };
-      }
-      if (exitCode !== 0) {
-        return {
-          ok: false,
-          error: `小知执行失败（exit ${exitCode}）：${(stderr.trim() || stdout.trim()).slice(0, 2000)}`,
-        };
-      }
-      return {
-        ok: true,
-        data: {
-          text: (stdout.trim() || stderr.trim()).slice(0, 40_000),
-          backend: 'dsh',
-        },
-      };
-    },
-  };
+export function createResearchStatusTool(runner: ColleagueTaskRunner) {
+  return createColleagueStatusTool({
+    name: 'research.status',
+    displayName: '小知',
+    runner,
+  });
 }

@@ -1,16 +1,8 @@
-import path from 'node:path';
-import { access } from 'node:fs/promises';
-import type { PermissionLevel, Tool, ToolContext, ToolResult } from '@personal-ai/tools';
-import { runDshHeadless, type DshRunResult } from './coding-tool.js';
-
-/**
- * qa.delegate：把测试/质量验收任务派给"小真"（专属 QA 工程师子代理）执行。
- * 与 designer.delegate 同构：工作区权限（workspace-write）同步驱动 dsh，
- * 调用后等待小真跑完并返回结构化报告（验收标准 / 测试执行 / 缺陷清单 /
- * PASS-FAIL 结论）。小真只做独立验收：跑 typecheck / 测试 / 构建 / 冒烟，
- * 产出证据化的缺陷清单——**发现缺陷不修复**，修复是小黑（工程师）的职责，
- * 这样验收方与实现方保持独立。
- */
+import type { ColleagueSpec, ColleagueTaskRunner } from './colleague-task-runner.js';
+import {
+  createColleagueDelegateTool,
+  createColleagueStatusTool,
+} from './colleague-tools.js';
 
 export const XIAO_ZHEN_PROMPT = `你是"小真"，用户团队的专属测试/QA 工程师（QA Engineer）。你较真、挑剔、对事不对人；你只对质量负责，不给任何人面子——包括小黑。你的信条是："没有证据的'能用'，等于不能用。"小夜姐（私人助理/大脑）是你的监督者，你是她手下的质量守门人；你验收的对象主要是小黑（工程师）的交付与线上系统的真实状态。
 
@@ -47,98 +39,31 @@ ${userRequest.trim()}
 请按上述工作准则执行，完成后输出结构化报告。`;
 }
 
-interface QaInput {
-  task?: string;
-  directory?: string;
-  timeoutMinutes?: number;
+export const XIAO_ZHEN_COLLEAGUE: ColleagueSpec = {
+  id: 'qa',
+  name: '小真',
+  permissionMode: 'workspace-write',
+  buildTask: buildXiaoZhenTask,
+  startedText: '小真已开工，正在执行任务',
+  persistFileName: 'qa-tasks.json',
+};
+
+export function createQaTool(runner: ColleagueTaskRunner) {
+  return createColleagueDelegateTool({
+    name: 'qa.delegate',
+    displayName: '小真',
+    statusToolName: 'qa.status',
+    runner,
+    defaultTimeoutMinutes: 20,
+    description:
+      '把测试/质量验收任务派给"小真"（专属 QA 工程师子代理）执行：验收标准梳理、测试计划、typecheck/单元测试/构建/冒烟执行、缺陷清单、回归验证。小真较真挑剔、证据驱动，是独立的质量守门人：发现缺陷只报告不修复（修复归小黑），只允许新增/修改测试代码与测试报告，绝不改产品代码。由助理（小夜）作为监督者调用。这是异步任务：调用后立即返回 taskId（任务在后台运行，可继续与用户聊天），进度与完成会自动通知，也可用 qa.status 查询。directory 用 /app 等持久目录。轻量问题（查文件、看状态）不要用此工具，用 filesystem.search / server.shell / system.status 等轻量工具。',
+  });
 }
 
-/**
- * qa.delegate（同步版）：把测试/质量验收任务派给"小真"（专属 QA 工程师
- * 子代理）执行。小真以工作区权限（workspace-write）驱动 dsh 跑
- * typecheck/测试/构建/冒烟，返回证据化的验收报告与缺陷清单。
- * permissionLevel=1：只读产品代码 + 写测试与报告，无系统级破坏性操作。
- */
-export function createQaTool(): Tool {
-  return {
-    name: 'qa.delegate',
-    description:
-      '把测试/质量验收任务派给"小真"（专属 QA 工程师子代理）执行：' +
-      '验收标准梳理、测试计划、typecheck/单元测试/构建/冒烟执行、缺陷清单、回归验证。' +
-      '小真较真挑剔、证据驱动，是独立的质量守门人：发现缺陷只报告不修复（修复归小黑），' +
-      '只允许新增/修改测试代码与测试报告，绝不改产品代码。由助理（小夜）作为监督者调用。' +
-      '这是同步任务：调用后等待小真跑完（通常数分钟），直接返回结构化报告（结论 PASS/FAIL）。' +
-      'directory 用 /app 等持久目录。' +
-      '轻量问题（查文件、看状态）不要用此工具，用 filesystem / terminal 等轻量工具。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        task: { type: 'string', description: '要小真验收的任务描述（验收对象与标准，越具体越好）' },
-        directory: {
-          type: 'string',
-          description: '工作目录绝对路径，默认 /app（bind mount 持久目录）',
-        },
-        timeoutMinutes: {
-          type: 'number',
-          minimum: 1,
-          maximum: 60,
-          description: '等待上限（分钟），默认 20',
-        },
-      },
-      required: ['task'],
-    },
-    permissionLevel: 1 as PermissionLevel,
-    timeoutMs: 60 * 60 * 1000,
-    async execute(input: unknown, context: ToolContext): Promise<ToolResult> {
-      const { task, directory = '/app', timeoutMinutes = 20 } = (input ?? {}) as QaInput;
-      if (!task?.trim()) {
-        return { ok: false, error: '缺少 task 参数' };
-      }
-      const resolvedDir = path.resolve(directory);
-      try {
-        await access(resolvedDir);
-      } catch {
-        return { ok: false, error: `目录不存在：${resolvedDir}` };
-      }
-      if (task.trim().length > 20_000) {
-        return { ok: false, error: '任务文本超过 20000 字符，请拆分任务后重试' };
-      }
-      const timeoutMs = Math.min(Math.max(1, Math.floor(timeoutMinutes)), 60) * 60 * 1000;
-      let run: DshRunResult;
-      try {
-        run = await runDshHeadless(buildXiaoZhenTask(task.trim()), {
-          cwd: resolvedDir,
-          timeoutMs,
-          // 小真跑测试/写报告：工作区权限即可，不触达系统级操作。
-          permissionMode: 'workspace-write',
-          signal: context.signal,
-        });
-      } catch (error) {
-        return {
-          ok: false,
-          error: `小真派单启动失败：${error instanceof Error ? error.message : String(error)}`,
-        };
-      }
-      const { stdout, stderr, timedOut, exitCode } = run;
-      if (timedOut) {
-        return {
-          ok: false,
-          error: `小真执行超过 ${Math.round(timeoutMs / 60_000)} 分钟被终止`,
-        };
-      }
-      if (exitCode !== 0) {
-        return {
-          ok: false,
-          error: `小真执行失败（exit ${exitCode}）：${(stderr.trim() || stdout.trim()).slice(0, 2000)}`,
-        };
-      }
-      return {
-        ok: true,
-        data: {
-          text: (stdout.trim() || stderr.trim()).slice(0, 40_000),
-          backend: 'dsh',
-        },
-      };
-    },
-  };
+export function createQaStatusTool(runner: ColleagueTaskRunner) {
+  return createColleagueStatusTool({
+    name: 'qa.status',
+    displayName: '小真',
+    runner,
+  });
 }

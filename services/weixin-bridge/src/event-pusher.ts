@@ -30,6 +30,7 @@ interface EngineerTaskEvent {
   type?: 'started' | 'progress' | 'done';
   taskId?: string;
   status?: string;
+  colleague?: string;
   text?: string;
   result?: string;
   error?: string;
@@ -84,15 +85,17 @@ export function formatEvent(event: string, data: unknown): string | undefined {
   if (event === 'engineer.task.progress') {
     const task = data as EngineerTaskEvent;
     const id = (task.taskId ?? '').slice(0, 8);
+    const who = task.colleague || '小黑';
     const text = task.text ?? '正在执行';
-    return `🔧 小黑任务进行中${id ? `（#${id}）` : ''}：${text.slice(0, 120)}`;
+    return `🔧 ${who}任务进行中${id ? `（#${id}）` : ''}：${text.slice(0, 120)}`;
   }
   if (event === 'engineer.task.done') {
     const task = data as EngineerTaskEvent;
     const id = (task.taskId ?? '').slice(0, 8);
+    const who = task.colleague || '小黑';
     const ok = task.status === 'success';
     const detail = (task.result || task.error || '').toString().trim().slice(0, 400);
-    return `${ok ? '✅' : '❌'} 小黑任务${ok ? '完成' : '失败'}${id ? `（#${id}）` : ''}${
+    return `${ok ? '✅' : '❌'} ${who}任务${ok ? '完成' : '失败'}${id ? `（#${id}）` : ''}${
       detail ? `\n${detail}` : ''
     }`;
   }

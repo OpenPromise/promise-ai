@@ -1,16 +1,8 @@
-import path from 'node:path';
-import { access } from 'node:fs/promises';
-import type { PermissionLevel, Tool, ToolContext, ToolResult } from '@personal-ai/tools';
-import { runDshHeadless, type DshRunResult } from './coding-tool.js';
-
-/**
- * designer.delegate：把产品设计/UX/UI/视觉设计任务派给"小美"（专属
- * Product/UI/Visual Designer 子代理）执行。与 engineer.delegate（异步派单）、
- * ops.delegate（全权限）不同：小美以工作区权限（workspace-write）同步驱动 dsh，
- * 调用后等待小美跑完并返回结构化报告（UX 分析 / 视觉方向 / DESIGN_SPEC /
- * Visual QA 结果）。小美的产出是给小黑开发的机器可读契约 DESIGN_SPEC，
- * 不是"一张图片了事"。
- */
+import type { ColleagueSpec, ColleagueTaskRunner } from './colleague-task-runner.js';
+import {
+  createColleagueDelegateTool,
+  createColleagueStatusTool,
+} from './colleague-tools.js';
 
 export const XIAO_MEI_PROMPT = `你是"小美"，用户团队的专属产品/UI/视觉设计师（Product/UI/Visual Designer）。你冷静、专业、有主见，审美在线但从不炫技；你负责产品设计、UX、UI、视觉设计、Design System、Figma 操作与视觉质量检查。你不是"网页 UI 生成器"，而是真正参与产品设计决策的专业 Agent——你的信条是："好设计不是'看起来漂亮'，而是让用户自然地完成任务。"小夜姐（私人助理/大脑）是你的监督者，你是她手下的设计师；你的产出 DESIGN_SPEC 是给小黑（工程师）的开发依据。
 
@@ -48,100 +40,31 @@ ${userRequest.trim()}
 请按上述工作准则执行，完成后输出结构化报告。`;
 }
 
-interface DesignerInput {
-  task?: string;
-  directory?: string;
-  timeoutMinutes?: number;
+export const XIAO_MEI_COLLEAGUE: ColleagueSpec = {
+  id: 'designer',
+  name: '小美',
+  permissionMode: 'workspace-write',
+  buildTask: buildXiaoMeiTask,
+  startedText: '小美已开工，正在执行任务',
+  persistFileName: 'designer-tasks.json',
+};
+
+export function createDesignerTool(runner: ColleagueTaskRunner) {
+  return createColleagueDelegateTool({
+    name: 'designer.delegate',
+    displayName: '小美',
+    statusToolName: 'designer.status',
+    runner,
+    defaultTimeoutMinutes: 15,
+    description:
+      '把产品设计/UX/UI/视觉设计任务派给"小美"（专属 Product/UI/Visual Designer 子代理）执行：产品理解、UX 分析、信息架构、视觉方向、Design System、界面设计、Visual QA。小美冷静专业不炫技，先理解产品再设计，输出机器可读契约 DESIGN_SPEC 给小黑（工程师）开发，不是"网页 UI 生成器"。由助理（小夜）作为监督者调用。这是异步任务：调用后立即返回 taskId（任务在后台运行，可继续与用户聊天），进度与完成会自动通知，也可用 designer.status 查询。小美以工作区权限（workspace-write）读写 /app 下的设计文档与 Design System，不改生产代码。directory 用 /app 等持久目录。轻量问题（查文件、看状态）不要用此工具，用 filesystem.search / server.shell / system.status 等轻量工具。',
+  });
 }
 
-/**
- * designer.delegate（同步版）：把产品设计/UX/UI/视觉设计任务派给"小美"
- * （专属 Product/UI/Visual Designer 子代理）执行。小美以工作区权限
- * （workspace-write）驱动 dsh，调用后同步等待结果（30 秒到数分钟），
- * 返回结构化报告（UX 分析 / 视觉方向 / DESIGN_SPEC / Visual QA 结果）。
- */
-export function createDesignerTool(): Tool {
-  return {
-    name: 'designer.delegate',
-    description:
-      '把产品设计/UX/UI/视觉设计任务派给"小美"（专属 Product/UI/Visual Designer 子代理）执行：' +
-      '产品理解、UX 分析、信息架构、视觉方向、Design System、界面设计、Visual QA。' +
-      '小美冷静专业不炫技，先理解产品再设计，输出机器可读契约 DESIGN_SPEC 给小黑（工程师）开发，' +
-      '不是"网页 UI 生成器"。由助理（小夜）作为监督者调用。' +
-      '这是同步任务：调用后等待小美跑完（通常 30 秒到数分钟），直接返回结构化报告。' +
-      '小美以工作区权限（workspace-write）读写 /app 下的设计文档与 Design System，不改生产代码。' +
-      '她与小黑相同，走默认 dsh + DeepSeek 官方 API。' +
-      'directory 用 /app 等持久目录。' +
-      '轻量问题（查文件、看状态）不要用此工具，用 filesystem / terminal 等轻量工具。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        task: { type: 'string', description: '要小美完成的设计任务描述（用户需求，越具体越好）' },
-        directory: {
-          type: 'string',
-          description: '工作目录绝对路径，默认 /app（bind mount 持久目录）',
-        },
-        timeoutMinutes: {
-          type: 'number',
-          minimum: 1,
-          maximum: 60,
-          description: '等待上限（分钟），默认 15',
-        },
-      },
-      required: ['task'],
-    },
-    permissionLevel: 1 as PermissionLevel,
-    timeoutMs: 60 * 60 * 1000,
-    async execute(input: unknown, context: ToolContext): Promise<ToolResult> {
-      const { task, directory = '/app', timeoutMinutes = 15 } = (input ?? {}) as DesignerInput;
-      if (!task?.trim()) {
-        return { ok: false, error: '缺少 task 参数' };
-      }
-      const resolvedDir = path.resolve(directory);
-      try {
-        await access(resolvedDir);
-      } catch {
-        return { ok: false, error: `目录不存在：${resolvedDir}` };
-      }
-      if (task.trim().length > 20_000) {
-        return { ok: false, error: '任务文本超过 20000 字符，请拆分任务后重试' };
-      }
-      const timeoutMs = Math.min(Math.max(1, Math.floor(timeoutMinutes)), 60) * 60 * 1000;
-      let run: DshRunResult;
-      try {
-        run = await runDshHeadless(buildXiaoMeiTask(task.trim()), {
-          cwd: resolvedDir,
-          timeoutMs,
-          // 与小黑相同：默认 dsh + DeepSeek 官方 API，工作区权限。
-          permissionMode: 'workspace-write',
-          signal: context.signal,
-        });
-      } catch (error) {
-        return {
-          ok: false,
-          error: `小美派单启动失败：${error instanceof Error ? error.message : String(error)}`,
-        };
-      }
-      const { stdout, stderr, timedOut, exitCode } = run;
-      if (timedOut) {
-        return {
-          ok: false,
-          error: `小美执行超过 ${Math.round(timeoutMs / 60_000)} 分钟被终止`,
-        };
-      }
-      if (exitCode !== 0) {
-        return {
-          ok: false,
-          error: `小美执行失败（exit ${exitCode}）：${(stderr.trim() || stdout.trim()).slice(0, 2000)}`,
-        };
-      }
-      return {
-        ok: true,
-        data: {
-          text: (stdout.trim() || stderr.trim()).slice(0, 40_000),
-          backend: 'dsh',
-        },
-      };
-    },
-  };
+export function createDesignerStatusTool(runner: ColleagueTaskRunner) {
+  return createColleagueStatusTool({
+    name: 'designer.status',
+    displayName: '小美',
+    runner,
+  });
 }
