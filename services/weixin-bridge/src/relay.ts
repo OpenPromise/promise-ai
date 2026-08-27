@@ -125,7 +125,8 @@ export interface ChatReply {
    */
   preflushedChars?: number;
   /**
-   * 本轮已发出长任务派单确认（🔧 toast）。为 true 时微信侧不再补发模型复述，
+   * 本轮已发出长任务派单确认（🔧 toast）。为 true 时跳过 onSegment 复读流，
+   * 最终 remaining 仅丢弃短派单复述（isDispatchRecap），方案正文仍补发。
    * 真正完成走 event-pusher 的 engineer.task.done。reply.text 仍保留给会话历史。
    */
   longTaskStarted?: boolean;
@@ -135,6 +136,8 @@ export interface ChatReply {
  * 从待发送缓冲中取出一段「已完整、可提前发送」的文本。
  * 规则（按优先级）：
  *   1. 段落边界：出现 \n\n 时，把 \n\n 之前的完整内容整段提前发（尾部半段留缓冲）；
+ *      若切出文本以冒号（：/:）结尾（如「方案明确：」），不在该处切开，
+ *      改试更早的 \n\n；都没有则继续累积，避免把方案导语和正文拆开。
  *   2. 首段：尚未提前发过首条且已积累到最小长度时，切在第一个完整句末，
  *      让「收到，已派给小黑。」这类关键节点短消息立即送达；
  *   3. 长文本兜底：无段落边界但缓冲超过阈值时，从最后一个句末标点切开，
@@ -146,10 +149,16 @@ export function takeEarlySegment(
   pending: string,
   alreadySentFirst: boolean,
 ): { send: string; keep: string } | undefined {
-  const para = pending.lastIndexOf(PARAGRAPH_SEPARATOR);
-  if (para >= 0) {
+  // 从最后一个 \n\n 往前找：切出文本若以冒号结尾则跳过该切点（方案导语未完）。
+  let from = pending.length;
+  while (from > 0) {
+    const para = pending.lastIndexOf(PARAGRAPH_SEPARATOR, from - 1);
+    if (para < 0) break;
     const send = pending.slice(0, para).trim();
-    if (send) return { send, keep: pending.slice(para + PARAGRAPH_SEPARATOR.length) };
+    if (send && !send.endsWith('：') && !send.endsWith(':')) {
+      return { send, keep: pending.slice(para + PARAGRAPH_SEPARATOR.length) };
+    }
+    from = para;
   }
   // 首段：达最小长度且有强边界时，切在第一个完整句末（关键节点短消息）。
   // 阈值提高后，「好的。」这类短句不再单发，等 chat.done 一次性发出。
@@ -185,6 +194,31 @@ export function takeEarlySegment(
     }
   }
   return undefined;
+}
+
+/**
+ * 短派单复述：长任务 🔧 toast 之后不应再发到微信的「已派给 / 任务编号」回声。
+ * 真正的方案正文（编号步骤、方案、data.ts、homepage、/xiaohei 等）返回 false，必须补发。
+ * 空字符串视为复述（没有可发内容）。
+ */
+export function isDispatchRecap(text: string): boolean {
+  const t = text.trim();
+  if (!t) return true;
+  if (t.length >= 400) return false;
+  const looksLikePlan =
+    /(?:^|\n)\s*\d+[\.、)）]\s/.test(t) ||
+    t.includes('方案') ||
+    t.includes('data.ts') ||
+    /homepage/i.test(t) ||
+    t.includes('/xiaohei');
+  if (looksLikePlan) return false;
+  return (
+    t.includes('已派给') ||
+    t.includes('任务编号') ||
+    /#[0-9a-fA-F]{8}\b/.test(t) ||
+    t.includes('正在后台检查') ||
+    t.includes('干完我验收')
+  );
 }
 
 /** 连续三个英文句点（省略号 ...）视作强边界；单个/两个点不是。 */
@@ -821,10 +855,10 @@ async function handleInboundMessage(msg: WeixinMessage, options: RelayOptions): 
       });
       const replyParts: string[] = [];
       // 已提前发送的前缀不再重复发送，只补发剩余部分（按原始字符数切，与提前发送记账一致）。
-      // 长任务已派单：🔧 toast 就是 ack，不再把模型复述（任务 id / 检查清单）发到微信。
-      if (!reply.longTaskStarted) {
-        const remaining = reply.text.slice(reply.preflushedChars ?? 0);
-        if (remaining.trim()) replyParts.push(markdownToPlain(remaining));
+      // 长任务已派单：丢掉短「已派给」复读，但方案正文仍要在 chat.done 补发。
+      const remaining = reply.text.slice(reply.preflushedChars ?? 0);
+      if (remaining.trim() && !(reply.longTaskStarted && isDispatchRecap(remaining))) {
+        replyParts.push(markdownToPlain(remaining));
       }
       if (reply.error) replyParts.push(`❌ ${reply.error}`);
       if (replyParts.length === 0) return;

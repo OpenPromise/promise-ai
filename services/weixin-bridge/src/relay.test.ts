@@ -7,6 +7,7 @@ import {
   approvalWindowMs,
   chatOnce,
   consumeSse,
+  isDispatchRecap,
   parseApprovalText,
   runWeixinRelay,
   takeEarlySegment,
@@ -397,6 +398,19 @@ describe('takeEarlySegment', () => {
     });
   });
 
+  it('不以「方案明确：」这类冒号导语切开，避免方案正文被拆走', () => {
+    const pending = '诊断完了。\n\n我派小黑去修，方案明确：\n\n1. 改 data.ts';
+    const seg = takeEarlySegment(pending, false);
+    if (seg) {
+      expect(seg.send.endsWith('方案明确：')).toBe(false);
+      expect(seg.send.endsWith('：')).toBe(false);
+      expect(seg.send.endsWith(':')).toBe(false);
+      expect(seg.send).toContain('诊断');
+    }
+    // 只有冒号导语、没有更早的安全段落时，继续累积
+    expect(takeEarlySegment('我派小黑去修，方案明确：\n\n1. 改 data.ts', false)).toBeUndefined();
+  });
+
   it('首段达最小长度且有句末标点时，切在第一个完整句末（关键节点短消息）', () => {
     expect(takeEarlySegment('已确认收到任务，马上派给小黑处理。接下来我会继续分析项目。', false)).toEqual({
       send: '已确认收到任务，马上派给小黑处理。',
@@ -464,6 +478,24 @@ describe('takeEarlySegment', () => {
     expect(seg!.send.length).toBeLessThanOrEqual(400);
     // send 不能以孤立的高代理（emoji 前半）结尾
     expect(/[\uD800-\uDBFF]$/.test(seg!.send)).toBe(false);
+  });
+});
+
+describe('isDispatchRecap', () => {
+  it('空字符串视为复述（没有可发内容）', () => {
+    expect(isDispatchRecap('')).toBe(true);
+    expect(isDispatchRecap('   ')).toBe(true);
+  });
+
+  it('短派单复述（已派给 / 任务编号）为 true', () => {
+    expect(isDispatchRecap('已经把任务派给小黑了 🖤 任务编号 c3c10a62')).toBe(true);
+    expect(isDispatchRecap('已派给小优，任务 #abcdef01。')).toBe(true);
+    expect(isDispatchRecap('正在后台检查，干完我验收后汇报')).toBe(true);
+  });
+
+  it('真实方案正文不是复述', () => {
+    expect(isDispatchRecap('1. data.ts 改成相对路径\n2. 复制到 dist')).toBe(false);
+    expect(isDispatchRecap('方案明确：改 homepage 为相对路径 /xiaohei')).toBe(false);
   });
 });
 
@@ -870,7 +902,7 @@ describe('runWeixinRelay', () => {
     await relayPromise;
   });
 
-  it('长任务派单后不把模型复述发到微信（🔧 toast 即 ack）', async () => {
+  it('长任务派单后丢掉短复读（🔧 toast 即 ack），不把任务编号复述发到微信', async () => {
     const sent: WeixinMessage[] = [];
     const controller = new AbortController();
     let polls = 0;
@@ -964,6 +996,107 @@ describe('runWeixinRelay', () => {
     await new Promise((resolve) => setTimeout(resolve, 150));
     const texts = sent.map((m) => m.item_list?.[0]?.text_item?.text);
     expect(texts).toEqual(['🔧 收到，已派给小优！预计几分钟，干完我验收后向你汇报。']);
+
+    controller.abort();
+    await relayPromise;
+  });
+
+  it('长任务派单后仍补发方案正文（只丢弃派单复读）', async () => {
+    const sent: WeixinMessage[] = [];
+    const controller = new AbortController();
+    let polls = 0;
+
+    const client = {
+      baseUrl: 'https://ilinkai.weixin.qq.com',
+      async notifyStart() {},
+      async notifyStop() {},
+      async getUpdates(_buf: string, options: { signal?: AbortSignal }) {
+        polls += 1;
+        if (polls === 1) {
+          return {
+            ret: 0,
+            get_updates_buf: 'buf-2',
+            msgs: [
+              {
+                from_user_id: 'wx_peer',
+                message_type: 1,
+                message_state: 2,
+                context_token: 'ctx',
+                run_id: 'r1',
+                item_list: [{ type: 1, text_item: { text: '修成员主页' } }],
+              },
+            ],
+          };
+        }
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, 60_000);
+          options.signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            resolve(undefined);
+          });
+        });
+        throw new Error('aborted');
+      },
+      async getConfig() {
+        return { ret: 0, typing_ticket: 'ticket' };
+      },
+      async sendTyping() {},
+      async sendMessage(msg: WeixinMessage) {
+        sent.push(msg);
+      },
+    } as unknown as ILinkClient;
+
+    const state: AccountState = {
+      token: 'tok',
+      baseUrl: 'https://ilinkai.weixin.qq.com',
+      accountId: 'bot-1',
+      peerSessions: {},
+      savedAt: new Date().toISOString(),
+    };
+
+    const plan = '诊断完了。\n\n我派小黑去修，方案明确：\n\n1. data.ts 改成相对路径\n2. 复制到 dist';
+    const fetchImpl = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith('/api/sessions')) {
+        return new Response(JSON.stringify({ id: 'session-abc' }), { status: 201 });
+      }
+      if (u.endsWith('/chat')) {
+        return sseResponse([
+          JSON.stringify({
+            type: 'agent.tool_call',
+            payload: {
+              toolCalls: [{ id: 'call_1', name: 'engineer.delegate', arguments: '{"task":"修主页"}' }],
+            },
+          }),
+          JSON.stringify({
+            type: 'chat.token',
+            payload: { delta: plan },
+          }),
+        ]);
+      }
+      return new Response('{}', { status: 200 });
+    });
+
+    const relayPromise = runWeixinRelay(
+      {
+        agentUrl: 'http://agent:3000',
+        client,
+        state,
+        persist: vi.fn(async () => {}),
+        log: () => {},
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      },
+      controller.signal,
+    );
+
+    const deadline = Date.now() + 5000;
+    while (sent.length < 2 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const texts = sent.map((m) => m.item_list?.[0]?.text_item?.text);
+    expect(texts[0]).toBe('🔧 收到，已派给小黑！预计几分钟，干完我验收后向你汇报。');
+    expect(texts.slice(1).join('\n')).toContain('1. data.ts 改成相对路径');
+    expect(texts.slice(1).join('\n')).toContain('方案明确');
 
     controller.abort();
     await relayPromise;
