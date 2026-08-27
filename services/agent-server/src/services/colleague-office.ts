@@ -107,6 +107,7 @@ const MAX_MAIL = 100;
 const TOOL_BUDGET = 12;
 const DEFAULT_TIMEOUT_MINUTES = 15;
 const ASK_TIMEOUT_CAP_MINUTES = 8;
+const WORKER_IDLE_POLL_MS = 2_000;
 const MAX_MAIL_CHAIN = 3;
 const PROGRESS_DEBOUNCE_MS = 20_000;
 const WRAPUP_TIMEOUT_MS = 60_000;
@@ -301,10 +302,10 @@ export function humanizeColleagueToolProgress(
 }
 
 /**
- * 同事办公室：五位同事各有一条持久 Postgres 会话 + 文件收件箱。
- * 小夜的 *.delegate 写信入收件箱，再在该同事自己的会话上跑 ConversationService.runChat
- * （headless + 工具白名单）。无 conversation 时回退 ColleagueTaskRunner（dsh）。
- * 不另起 Node 进程 / 容器。
+ * 同事办公室：五位同事各有一条持久 Postgres 会话 + 文件收件箱 + 独立 in-process worker。
+ * 小夜 *.delegate / mail.send / mail.ask 只入队；每位同事自己的循环取信，
+ * 在自己的会话上跑 ConversationService.runChat（headless + 工具白名单 + 单飞）。
+ * 无 conversation 时回退 ColleagueTaskRunner（dsh）。不另起 Node 进程 / 容器。
  */
 export class ColleagueOffice {
   readonly #store: SessionStore;
@@ -316,9 +317,17 @@ export class ColleagueOffice {
   readonly #pendingDone = new Map<string, ColleagueTaskEvent>();
   readonly #unsubs: Array<() => void> = [];
   readonly #listeners = new Set<(event: ColleagueTaskEvent) => void>();
+  /** 每位同事 worker 空闲时的唤醒函数（条件变量）。 */
+  readonly #wakes = new Map<ColleagueId, () => void>();
+  /** mail.ask 等待某封信 settle 的订阅者。 */
+  readonly #mailWaiters = new Map<string, Set<() => void>>();
+  /** 入队时的 directory / timeout，重启后 #tasks 为空则用默认值。 */
+  readonly #mailOptions = new Map<string, { directory: string; timeoutMinutes: number }>();
   #conversation?: ColleagueConversation;
   #persistChain: Promise<void> = Promise.resolve();
   #attached = false;
+  #workersStarted = false;
+  #stopping = false;
 
   constructor(options: ColleagueOfficeOptions) {
     this.#store = options.store;
@@ -329,6 +338,22 @@ export class ColleagueOffice {
   /** 生产在 ConversationService 建好后注入；测试可传假 runChat。 */
   attachConversation(conversation: ColleagueConversation): void {
     this.#conversation = conversation;
+  }
+
+  /**
+   * 停掉五位同事的信箱循环（清 2s idle timer）。进行中的 runChat 仍跑完当前封。
+   * 进程退出时调用；测试 afterEach 也调，避免 vitest 被 timer 挂住。
+   */
+  close(): void {
+    this.#stopping = true;
+    for (const id of COLLEAGUE_IDS) {
+      const wake = this.#wakes.get(id);
+      if (wake) wake();
+    }
+    for (const waiters of this.#mailWaiters.values()) {
+      for (const notify of waiters) notify();
+    }
+    this.#mailWaiters.clear();
   }
 
   onEvent(listener: (event: ColleagueTaskEvent) => void): () => void {
@@ -384,7 +409,7 @@ export class ColleagueOffice {
     return new Map(this.#sessionIds);
   }
 
-  /** 读盘收件箱、订阅 runner 完成事件、把重启后残留的 running 信对账成 done/failed。 */
+  /** 读盘收件箱、订阅 runner 完成事件、把重启残留的 running 重置为 queued，再启动五位 worker。 */
   async hydrate(): Promise<void> {
     await mkdir(this.#mailboxDir, { recursive: true });
     for (const id of COLLEAGUE_IDS) {
@@ -392,11 +417,13 @@ export class ColleagueOffice {
     }
     this.#attach();
     await this.#reconcile();
+    this.#startWorkers();
   }
 
   /**
-   * 小夜派单：写信入收件箱。有 conversation 时在同事自己的会话上 headless runChat；
-   * 否则回退 runner.delegate（异步 dsh / SSE）。同事互问 / 转交走 ask / sendFrom。
+   * 小夜派单：写信入收件箱并唤醒该同事 worker。有 conversation 时由 worker
+   * headless runChat；否则回退 runner.delegate（异步 dsh / SSE）。
+   * 同事互问 / 转交走 ask / sendFrom。调用方不直接跑 #runLoop。
    */
   async delegate(
     colleagueId: string,
@@ -506,15 +533,14 @@ export class ColleagueOffice {
       ...(chain.length ? { chain } : {}),
       ...(options.nested ? { nested: true } : {}),
     };
-    this.#pushMail(colleagueId, mail);
-    await this.#persist(colleagueId);
-
     if (options.wait && !this.#conversation) {
       throw new Error('同事会话未接入，无法同步询问');
     }
+    this.#pushMail(colleagueId, mail);
     if (this.#conversation) {
-      return this.#delegateViaConversation(colleagueId, mail, body, options);
+      return this.#enqueueConversation(colleagueId, mail, body, options);
     }
+    await this.#persist(colleagueId);
     return this.#delegateViaRunner(colleagueId, mail, body, options);
   }
 
@@ -568,7 +594,11 @@ export class ColleagueOffice {
     return [...(this.#mail.get(colleagueId) ?? [])];
   }
 
-  async #delegateViaConversation(
+  /**
+   * 只入队：写 task 记录、发 started、唤醒该同事 worker。不在调用栈上跑 #runLoop。
+   * mail.ask（wait）在此等待该 MailItem 被 worker settle。
+   */
+  async #enqueueConversation(
     colleagueId: ColleagueId,
     mail: MailItem,
     body: string,
@@ -580,8 +610,7 @@ export class ColleagueOffice {
     const directory = path.resolve(options.directory ?? '/app');
     const taskId = randomUUID();
     mail.taskId = taskId;
-    mail.status = 'running';
-    await this.#persist(colleagueId);
+    this.#mailOptions.set(mail.id, { directory, timeoutMinutes });
 
     const record: ColleagueTask = {
       id: taskId,
@@ -606,12 +635,153 @@ export class ColleagueOffice {
       text: startedText,
     });
 
+    await this.#persist(colleagueId);
+    this.#wake(colleagueId);
     if (options.wait) {
-      await this.#runLoop(colleagueId, mail, record, timeoutMinutes);
-    } else {
-      void this.#runLoop(colleagueId, mail, record, timeoutMinutes);
+      await this.#waitForMailSettled(
+        colleagueId,
+        mail.id,
+        timeoutMinutes * 60 * 1000,
+      );
     }
     return this.#tasks.get(taskId) ?? record;
+  }
+
+  #startWorkers(): void {
+    if (this.#workersStarted) return;
+    this.#workersStarted = true;
+    for (const id of COLLEAGUE_IDS) {
+      void this.#workerLoop(id);
+    }
+  }
+
+  async #workerLoop(colleagueId: ColleagueId): Promise<void> {
+    while (!this.#stopping) {
+      if (!this.#conversation) {
+        await this.#waitForWork(colleagueId);
+        continue;
+      }
+      const mail = this.#oldestQueued(colleagueId);
+      if (!mail) {
+        await this.#waitForWork(colleagueId);
+        continue;
+      }
+      await this.#processQueuedMail(colleagueId, mail);
+    }
+  }
+
+  #oldestQueued(colleagueId: ColleagueId): MailItem | undefined {
+    const queued = (this.#mail.get(colleagueId) ?? []).filter((item) => item.status === 'queued');
+    queued.sort((a, b) => {
+      const byTime = a.createdAt.localeCompare(b.createdAt);
+      return byTime !== 0 ? byTime : a.id.localeCompare(b.id);
+    });
+    return queued[0];
+  }
+
+  async #processQueuedMail(colleagueId: ColleagueId, mail: MailItem): Promise<void> {
+    if (mail.status !== 'queued') return;
+    const name = colleagueName(colleagueId);
+    const options = this.#mailOptions.get(mail.id);
+    const directory = options?.directory ?? path.resolve('/app');
+    let timeoutMinutes = options?.timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES;
+    if (mail.nested) timeoutMinutes = Math.min(timeoutMinutes, ASK_TIMEOUT_CAP_MINUTES);
+
+    let record = mail.taskId ? this.#tasks.get(mail.taskId) : undefined;
+    if (!record) {
+      const taskId = mail.taskId ?? randomUUID();
+      mail.taskId = taskId;
+      record = {
+        id: taskId,
+        colleague: name,
+        task: mail.body,
+        directory,
+        status: 'running',
+        createdAt: mail.createdAt,
+        startedAt: new Date().toISOString(),
+        output: '',
+        ...(mail.hubSessionId ? { hubSessionId: mail.hubSessionId } : {}),
+        ...(mail.chain ? { chain: mail.chain } : {}),
+      };
+      this.#tasks.set(taskId, record);
+      this.#emit({
+        type: 'started',
+        taskId,
+        status: 'running',
+        colleague: name,
+        text: this.#runners[colleagueId].spec.startedText,
+      });
+    }
+
+    mail.status = 'running';
+    await this.#persist(colleagueId);
+    await this.#runLoop(colleagueId, mail, record, timeoutMinutes);
+  }
+
+  #waitForWork(colleagueId: ColleagueId): Promise<void> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = (): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (this.#wakes.get(colleagueId) === done) this.#wakes.delete(colleagueId);
+        resolve();
+      };
+      const timer = setTimeout(done, WORKER_IDLE_POLL_MS);
+      this.#wakes.set(colleagueId, done);
+    });
+  }
+
+  /** 入队后唤醒；用 0ms macrotask，让 delegate/send 先返回 queued，runChat 等 worker tick。 */
+  #wake(colleagueId: ColleagueId): void {
+    const done = this.#wakes.get(colleagueId);
+    if (!done) return;
+    setTimeout(done, 0);
+  }
+
+  async #waitForMailSettled(
+    colleagueId: ColleagueId,
+    mailId: string,
+    timeoutMs: number,
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (!this.#stopping) {
+      const mail = this.#findMail(colleagueId, mailId);
+      if (mail && (mail.status === 'done' || mail.status === 'failed')) return;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        throw new Error('询问超时');
+      }
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = (): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          const waiters = this.#mailWaiters.get(mailId);
+          if (waiters) {
+            waiters.delete(finish);
+            if (waiters.size === 0) this.#mailWaiters.delete(mailId);
+          }
+          resolve();
+        };
+        const timer = setTimeout(finish, Math.min(50, Math.max(1, remaining)));
+        let waiters = this.#mailWaiters.get(mailId);
+        if (!waiters) {
+          waiters = new Set();
+          this.#mailWaiters.set(mailId, waiters);
+        }
+        waiters.add(finish);
+      });
+    }
+  }
+
+  #notifyMailWaiters(mailId: string): void {
+    const waiters = this.#mailWaiters.get(mailId);
+    if (!waiters) return;
+    this.#mailWaiters.delete(mailId);
+    for (const notify of waiters) notify();
   }
 
   async #delegateViaRunner(
@@ -799,6 +969,10 @@ export class ColleagueOffice {
   ): Promise<void> {
     const name = record.colleague ?? colleagueName(colleagueId);
     const reply = truncate(outcome.text);
+    record.status = outcome.ok ? 'success' : 'failed';
+    record.finishedAt = new Date().toISOString();
+    if (outcome.ok) record.result = reply;
+    else record.error = reply || '任务失败';
     await this.#finishMail(
       colleagueId,
       mail,
@@ -806,10 +980,6 @@ export class ColleagueOffice {
       { skipSession: outcome.skipSession },
     );
     await this.#persist(colleagueId);
-    record.status = outcome.ok ? 'success' : 'failed';
-    record.finishedAt = new Date().toISOString();
-    if (outcome.ok) record.result = reply;
-    else record.error = reply || '任务失败';
     // mail.ask（nested）：不跑小夜 wrap-up、不发 done，避免微信中途冒「小真回来了」。
     if (mail.nested) return;
     const wrapUp = await this.#wrapUpOnHub({
@@ -932,23 +1102,25 @@ export class ColleagueOffice {
     for (const id of COLLEAGUE_IDS) {
       let changed = false;
       for (const mail of this.#mail.get(id) ?? []) {
-        if ((mail.status !== 'queued' && mail.status !== 'running') || !mail.taskId) continue;
-        const task = this.#runners[id].get(mail.taskId);
-        if (task?.status === 'running') continue;
-        if (task) {
-          await this.#finishMail(id, mail, {
-            status: task.status === 'success' ? 'done' : 'failed',
-            reply: truncate(task.result ?? task.error ?? ''),
-          });
-          changed = true;
-          continue;
+        if (mail.status !== 'queued' && mail.status !== 'running') continue;
+        if (mail.taskId) {
+          const task = this.#runners[id].get(mail.taskId);
+          if (task?.status === 'running') continue;
+          if (task) {
+            await this.#finishMail(id, mail, {
+              status: task.status === 'success' ? 'done' : 'failed',
+              reply: truncate(task.result ?? task.error ?? ''),
+            });
+            changed = true;
+            continue;
+          }
         }
-        // 会话路径任务在进程内，重启后 runner 没有记录：残留 queued/running 标失败
-        await this.#finishMail(id, mail, {
-          status: 'failed',
-          reply: '进程重启，任务中断',
-        });
-        changed = true;
+        // 会话路径任务在进程内，重启后 #tasks 为空：running 退回 queued，让 worker 重试。
+        if (mail.status === 'running') {
+          mail.status = 'queued';
+          delete mail.reply;
+          changed = true;
+        }
       }
       if (changed) await this.#persist(id);
     }
@@ -979,6 +1151,7 @@ export class ColleagueOffice {
   ): Promise<void> {
     mail.status = outcome.status;
     if (outcome.reply) mail.reply = outcome.reply;
+    this.#notifyMailWaiters(mail.id);
     if (options.skipSession) return;
     const sessionId = this.#sessionIds.get(colleagueId);
     if (sessionId && outcome.reply) {

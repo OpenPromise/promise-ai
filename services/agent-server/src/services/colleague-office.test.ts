@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -52,7 +52,7 @@ function stubRunners(runTask?: RunTaskFn): ColleagueRunners {
   return runners;
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 500): Promise<void> {
+async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
   const start = Date.now();
   while (!predicate()) {
     if (Date.now() - start > timeoutMs) {
@@ -64,8 +64,10 @@ async function waitFor(predicate: () => boolean, timeoutMs = 500): Promise<void>
 
 describe('ColleagueOffice', () => {
   const dirs: string[] = [];
+  const offices: ColleagueOffice[] = [];
 
   afterEach(async () => {
+    for (const office of offices.splice(0)) office.close();
     await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
@@ -75,6 +77,7 @@ describe('ColleagueOffice', () => {
     const store = options.store ?? new InMemorySessionStore();
     const runners = stubRunners(options.runTask);
     const office = new ColleagueOffice({ store, runners, mailboxDir });
+    offices.push(office);
     await office.ensureSessions();
     await office.hydrate();
     return { office, store, runners, mailboxDir };
@@ -300,19 +303,21 @@ describe('ColleagueOffice', () => {
     const record = await office.delegate('xiaohei', '修登录跳转 bug');
     expect(record.status).toBe('running');
     expect(record.id).toMatch(/^[0-9a-f-]{36}$/);
-    expect(office.listMailbox('xiaohei')[0]?.status).toBe('running');
+    expect(office.listMailbox('xiaohei')[0]?.status).toBe('queued');
     expect(office.listMailbox('xiaohei')[0]?.taskId).toBe(record.id);
     expect(events[0]).toMatchObject({
       type: 'started',
       colleague: '小黑',
       taskId: record.id,
     });
+    expect(captured).toHaveLength(0);
 
     const sessionId = office.getSessionId('xiaohei')!;
     const before = await store.getSession(sessionId);
     expect(before.messages).toHaveLength(0);
 
     await waitFor(() => captured.length === 1);
+    expect(office.listMailbox('xiaohei')[0]?.status).toBe('running');
     expect(captured[0]?.sessionId).toBe(sessionId);
     expect(captured[0]?.userMessage).toBe('【小夜来信】\n修登录跳转 bug');
     expect(captured[0]?.headless).toBe(true);
@@ -989,6 +994,225 @@ describe('ColleagueOffice', () => {
     expect(captured.some((msg) => msg.startsWith('【小夜催交】'))).toBe(false);
     expect(office.listMailbox('xiaozhen')[0]?.status).toBe('done');
     expect(office.listMailbox('xiaozhen')[0]?.reply).toContain('交付前自检');
+  });
+
+  it('enqueue-only：delegate 返回时 runChat 还没跑；worker tick 后信标 done 并有回信', async () => {
+    const captured: string[] = [];
+    const conversation: ColleagueConversation = {
+      async *runChat(input) {
+        captured.push(input.userMessage);
+        yield { type: 'chat.done', payload: { text: '回信：已看过' } };
+      },
+    };
+    const { office } = await makeOffice({
+      runTask: async () => {
+        throw new Error('不应走 runner');
+      },
+    });
+    office.attachConversation(conversation);
+    const record = await office.delegate('xiaohei', '请回信');
+    expect(office.listMailbox('xiaohei')[0]?.status).toBe('queued');
+    expect(captured).toHaveLength(0);
+    expect(record.status).toBe('running');
+
+    await waitFor(() => office.listMailbox('xiaohei')[0]?.status === 'done');
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toBe('【小夜来信】\n请回信');
+    expect(office.listMailbox('xiaohei')[0]?.reply).toContain('已看过');
+    expect(office.getTask(record.id)?.status).toBe('success');
+  });
+
+  it('同一人两封信按序单飞：小黑两封从不重叠 runChat', async () => {
+    let concurrent = 0;
+    let maxConcurrent = 0;
+    const gates: Array<() => void> = [];
+    const seen: string[] = [];
+    const conversation: ColleagueConversation = {
+      async *runChat(input) {
+        concurrent += 1;
+        maxConcurrent = Math.max(maxConcurrent, concurrent);
+        seen.push(input.userMessage);
+        await new Promise<void>((resolve) => {
+          gates.push(resolve);
+        });
+        concurrent -= 1;
+        yield { type: 'chat.done', payload: { text: `完成：${input.userMessage}` } };
+      },
+    };
+    const { office } = await makeOffice({
+      runTask: async () => {
+        throw new Error('不应走 runner');
+      },
+    });
+    office.attachConversation(conversation);
+    await office.delegate('xiaohei', '第一封');
+    await office.delegate('xiaohei', '第二封');
+    await waitFor(() => gates.length === 1);
+    expect(maxConcurrent).toBe(1);
+    const statuses = office.listMailbox('xiaohei').map((item) => item.status);
+    expect(statuses).toEqual(['running', 'queued']);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain('第一封');
+
+    gates[0]?.();
+    await waitFor(() => gates.length === 2);
+    expect(maxConcurrent).toBe(1);
+    expect(office.listMailbox('xiaohei')[0]?.status).toBe('done');
+    expect(office.listMailbox('xiaohei')[1]?.status).toBe('running');
+
+    gates[1]?.();
+    await waitFor(() => office.listMailbox('xiaohei').every((item) => item.status === 'done'));
+    expect(maxConcurrent).toBe(1);
+    expect(seen[1]).toContain('第二封');
+  });
+
+  it('小美和小黑同时入队：两人 worker 并行跑', async () => {
+    let concurrent = 0;
+    let maxConcurrent = 0;
+    const started = new Set<string>();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const conversation: ColleagueConversation = {
+      async *runChat(input) {
+        concurrent += 1;
+        maxConcurrent = Math.max(maxConcurrent, concurrent);
+        started.add(input.sessionId);
+        await gate;
+        concurrent -= 1;
+        yield { type: 'chat.done', payload: { text: 'ok' } };
+      },
+    };
+    const { office } = await makeOffice({
+      runTask: async () => {
+        throw new Error('不应走 runner');
+      },
+    });
+    office.attachConversation(conversation);
+    await office.delegate('xiaomei', '出视觉');
+    await office.delegate('xiaohei', '写代码');
+    await waitFor(() => started.size === 2);
+    expect(maxConcurrent).toBe(2);
+    expect(started).toEqual(
+      new Set([office.getSessionId('xiaomei')!, office.getSessionId('xiaohei')!]),
+    );
+    release();
+    await waitFor(
+      () =>
+        office.listMailbox('xiaomei')[0]?.status === 'done' &&
+        office.listMailbox('xiaohei')[0]?.status === 'done',
+    );
+  });
+
+  it('mail.ask：小美等小真 worker 回信；小真 from=xiaomei；无 wrap-up/done；小美自己的信仍在跑', async () => {
+    let releaseMei!: () => void;
+    const meiGate = new Promise<void>((resolve) => {
+      releaseMei = resolve;
+    });
+    const captured: Array<{ sessionId: string; userMessage: string; toolAllowlist?: string[] }> = [];
+    const conversation: ColleagueConversation = {
+      async *runChat(input) {
+        captured.push(input);
+        if (input.userMessage.startsWith('【同事回信】')) {
+          yield { type: 'chat.done', payload: { text: '不该跑验收' } };
+          return;
+        }
+        if (input.userMessage.startsWith('【小美来信】')) {
+          yield { type: 'chat.done', payload: { text: '对比度够，可以再收一点。' } };
+          return;
+        }
+        if (input.userMessage.startsWith('【小夜来信】')) {
+          await meiGate;
+          yield { type: 'chat.done', payload: { text: '小美主页做完了' } };
+          return;
+        }
+        yield { type: 'chat.done', payload: { text: 'ok' } };
+      },
+    };
+    const { office } = await makeOffice({
+      runTask: async () => {
+        throw new Error('不应走 runner');
+      },
+    });
+    const events: ColleagueTaskEvent[] = [];
+    office.onEvent((event) => events.push(event));
+    office.attachConversation(conversation);
+
+    const parent = await office.delegate('xiaomei', '做小真主页', { hubSessionId: 'weixin-hub-ask-parallel' });
+    await waitFor(() => captured.some((row) => row.userMessage.startsWith('【小夜来信】')));
+    expect(office.listMailbox('xiaomei')[0]?.status).toBe('running');
+
+    const asked = await office.ask('xiaozhen', '视觉能不能再收一点', { from: 'xiaomei' });
+    expect(asked.status).toBe('success');
+    expect(asked.result).toContain('可以再收一点');
+    expect(office.listMailbox('xiaomei')[0]?.status).toBe('running');
+
+    const zhenMail = office.listMailbox('xiaozhen')[0];
+    expect(zhenMail?.from).toBe('xiaomei');
+    expect(zhenMail?.to).toBe('xiaozhen');
+    expect(zhenMail?.nested).toBe(true);
+    expect(zhenMail?.hubSessionId).toBe('weixin-hub-ask-parallel');
+    expect(zhenMail?.reply).toContain('可以再收一点');
+
+    const zhenSession = office.getSessionId('xiaozhen')!;
+    const zhenCalls = captured.filter((row) => row.sessionId === zhenSession);
+    expect(zhenCalls).toHaveLength(1);
+    expect(zhenCalls[0]?.toolAllowlist).toEqual(colleagueToolAllowlist('xiaozhen', { nested: true }));
+    expect(zhenCalls[0]?.toolAllowlist).not.toContain('mail.ask');
+    expect(zhenCalls[0]?.toolAllowlist).not.toContain('mail.send');
+    expect(
+      captured.some((row) => row.userMessage.startsWith('【同事回信】') && row.userMessage.includes('小真')),
+    ).toBe(false);
+    expect(events.filter((event) => event.type === 'done' && event.taskId === asked.id)).toHaveLength(0);
+
+    releaseMei();
+    await waitFor(() => office.listMailbox('xiaomei')[0]?.status === 'done');
+    expect(events.some((event) => event.type === 'done' && event.taskId === parent.id)).toBe(true);
+  });
+
+  it('重启 reconcile：残留 running 退回 queued，不标失败', async () => {
+    const mailboxDir = await mkdtemp(path.join(tmpdir(), 'mailboxes-'));
+    dirs.push(mailboxDir);
+    const leftover = {
+      id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      from: 'xiaoye',
+      to: 'xiaohei',
+      body: '重启前没跑完',
+      createdAt: new Date().toISOString(),
+      status: 'running',
+      taskId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      reply: '半成品回信',
+    };
+    const queued = {
+      id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      from: 'xiaoye',
+      to: 'xiaohei',
+      body: '还在排队',
+      createdAt: new Date().toISOString(),
+      status: 'queued',
+      taskId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeeee',
+    };
+    await writeFile(
+      path.join(mailboxDir, 'xiaohei.json'),
+      JSON.stringify([leftover, queued], null, 2),
+      'utf8',
+    );
+    const store = new InMemorySessionStore();
+    const office = new ColleagueOffice({ store, runners: stubRunners(), mailboxDir });
+    offices.push(office);
+    await office.ensureSessions();
+    await office.hydrate();
+
+    const items = office.listMailbox('xiaohei');
+    expect(items).toHaveLength(2);
+    expect(items[0]?.status).toBe('queued');
+    expect(items[0]?.reply).toBeUndefined();
+    expect(items[0]?.body).toBe('重启前没跑完');
+    expect(items[1]?.status).toBe('queued');
+    expect(items.every((item) => item.status !== 'failed')).toBe(true);
+    expect(items.some((item) => (item.reply ?? '').includes('进程重启'))).toBe(false);
+    expect(office.getTask(leftover.taskId)).toBeUndefined();
   });
 
 });

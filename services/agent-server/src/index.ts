@@ -554,6 +554,7 @@ const shutdown = async (signal: string): Promise<void> => {
   app.log.info({ signal }, 'shutting down agent-server');
   taskService.stop();
   reminderService.stop();
+  colleagueOffice.close();
   await app.close();
   process.exit(0);
 };
