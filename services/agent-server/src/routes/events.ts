@@ -44,9 +44,9 @@ export interface SseEventRecord {
 
 /**
  * 有界环形事件缓冲（SSE 重放）：只记录一次性通知类事件
- * （reminder.due / task.run / hook.run / engineer.task.done / system.boot），
+ * （reminder.due / task.run / hook.run / system.boot），
  * 为每条分配自增 id；订阅方断线重连时用 Last-Event-ID 拉回错过的通知。
- * 进度类高频事件不入缓冲（避免挤掉通知、重放刷屏）。
+ * 进度/同事任务完成不入缓冲（避免挤掉通知；微信桥重启重放旧 done 刷屏）。
  */
 export class SseEventBuffer {
   readonly #entries: SseEventRecord[] = [];
@@ -107,7 +107,10 @@ export function registerEventRoutes(app: FastifyInstance, deps: EventRouteDeps):
           deps.subscribeEngineerEvents((event) => {
             const sseEvent =
               event.type === 'done' ? 'engineer.task.done' : 'engineer.task.progress';
-            broadcast(sseEvent, event, event.type === 'done');
+            // 进度与完成都不入重放缓冲：微信桥重启时若无 Last-Event-ID，
+            // 会把缓冲里旧的 task.done 再推一遍（同一任务号刷屏）。
+            // 短暂断线错过完成通知可接受——用户问进度时小夜能查 *.status。
+            broadcast(sseEvent, event, false);
           }),
         ]
       : []),

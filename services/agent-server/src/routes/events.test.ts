@@ -115,3 +115,48 @@ describe('registerEventRoutes 的 system.boot 通知', () => {
     }
   });
 });
+
+describe('registerEventRoutes 的同事任务完成', () => {
+  it('engineer.task.done 不入重放缓冲：晚连接/无 Last-Event-ID 不会再收到旧完成', async () => {
+    const app = Fastify({ logger: false });
+    const listeners: Array<(event: { type: string; taskId: string; status: string; colleague: string; result: string }) => void> =
+      [];
+    registerEventRoutes(app, {
+      subscribeTaskEvents: () => () => {},
+      subscribeReminderEvents: () => () => {},
+      subscribeEngineerEvents: (listener) => {
+        listeners.push(listener);
+        return () => {};
+      },
+    });
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    const { port } = app.server.address() as AddressInfo;
+    const url = `http://127.0.0.1:${port}/api/events`;
+
+    const streams: Array<{ text: () => string; close: () => void }> = [];
+    try {
+      const first = await readSse(url, () => true, 500);
+      streams.push(first);
+      for (const listener of listeners) {
+        listener({
+          type: 'done',
+          taskId: 'c3c10a62-xxxx',
+          status: 'success',
+          colleague: '小优',
+          result: '旧报告',
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(first.text()).toContain('engineer.task.done');
+      expect(first.text()).toContain('c3c10a62');
+
+      const second = await readSse(url, () => true, 500);
+      streams.push(second);
+      expect(second.text()).not.toContain('engineer.task.done');
+      expect(second.text()).not.toContain('c3c10a62');
+    } finally {
+      for (const stream of streams) stream.close();
+      await app.close();
+    }
+  });
+});
