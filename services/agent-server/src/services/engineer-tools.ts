@@ -9,9 +9,9 @@ export { XIAO_HEI_PROMPT, buildXiaoHeiTask } from './engineer-task-runner.js';
 
 /**
  * engineer.delegate（异步版）：给小黑收件箱写信，把开发/修改代码的任务交给他。
- * 小黑有自己的持久会话记忆，不是一次性脚本。工具立即返回 taskId，dsh 在后台
- * 独立运行；小夜派完单就能继续陪用户聊天。进度与完成通过事件（SSE → 微信）
- * 主动推送；可用 engineer.status 查询状态/结果/收件箱。
+ * 小黑有自己的持久会话记忆，不是一次性脚本。工具立即返回 taskId；小黑在自己的
+ * 会话里读小夜来信并调用编码工具，小夜派完单就能继续陪用户聊天。进度与完成
+ * 通过事件（SSE → 微信）主动推送；可用 engineer.status 查询状态/结果/收件箱。
  */
 export function createEngineerTool(runner: EngineerTaskRunner, office?: ColleagueMailboxGateway) {
   return createColleagueDelegateTool({

@@ -349,8 +349,9 @@ for (const tool of tools) {
 }
 // coding.run 是服务端能力（服务器上驱动 dsh 开源编码代理），不属于桌面客户端。
 toolRegistry.register(createCodingTool());
-// 五位同事 *.delegate 都是异步派单：工具立即返回 taskId，dsh 在后台独立运行，
-// 进度/完成通过事件推送，不阻塞小夜对话。小夜用对应 *.status 查询。
+// 五位同事 *.delegate 都是异步派单：工具立即返回 taskId。同事用自己的持久会话
+// headless 思考（工具白名单动手）；进度/完成通过事件推送，不阻塞小夜对话。
+// 小夜用对应 *.status 查询。未接入会话时仍可回退 dsh runner。
 const engineerTaskRunner = new EngineerTaskRunner({
   timeline: timelineStore,
   persistDir: process.env.ENGINEER_TASK_DIR ?? './data/engineer-tasks',
@@ -389,6 +390,7 @@ const colleagueOffice = new ColleagueOffice({
     xiaozhi: researchTaskRunner,
   },
 });
+colleagueOffice.attachConversation(conversation);
 try {
   const ensured = await colleagueOffice.ensureSessions();
   const ids = [...ensured.entries()].map(([id, sessionId]) => `${id}=${sessionId.slice(0, 8)}`);
@@ -497,7 +499,10 @@ const app = buildApp({
   subscribeReminderEvents: (listener) => reminderService.onDue(listener),
   subscribeHookEvents: (listener) => hookService.onRun(listener),
   subscribeEngineerEvents: (listener) => {
-    const unsubs = colleagueRunners.map((runner) => runner.onEvent(listener));
+    const unsubs = [
+      ...colleagueRunners.map((runner) => runner.onEvent(listener)),
+      colleagueOffice.onEvent(listener),
+    ];
     return () => {
       for (const unsub of unsubs) unsub();
     };

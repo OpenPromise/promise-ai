@@ -6,13 +6,17 @@ import { InMemorySessionStore } from '@personal-ai/memory';
 import {
   ColleagueTaskRunner,
   type ColleagueSpec,
+  type ColleagueTaskEvent,
   type RunTaskFn,
 } from './colleague-task-runner.js';
 import { createColleagueStatusTool } from './colleague-tools.js';
 import {
+  BLOCKED_COLLEAGUE_TOOLS,
   COLLEAGUE_IDS,
   COLLEAGUE_ROSTER,
   ColleagueOffice,
+  colleagueToolAllowlist,
+  type ColleagueConversation,
   type ColleagueId,
   type ColleagueRunners,
 } from './colleague-office.js';
@@ -203,5 +207,152 @@ describe('ColleagueOffice', () => {
     expect(mail?.reply).toBeTruthy();
     const session = await store.getSession(office.getSessionId('xiaoyou')!);
     expect(session.messages[1]?.role).toBe('assistant');
+  });
+
+  it('allowlist 递归守卫：不含 *.delegate / 同事 *.status，保留 system.status', () => {
+    for (const id of COLLEAGUE_IDS) {
+      const list = colleagueToolAllowlist(id);
+      expect(list.some((name) => name.endsWith('.delegate'))).toBe(false);
+      for (const blocked of BLOCKED_COLLEAGUE_TOOLS) {
+        expect(list).not.toContain(blocked);
+      }
+    }
+    expect(colleagueToolAllowlist('xiaohei')).toEqual([
+      'filesystem.search',
+      'memory.list',
+      'memory.remember',
+      'coding.run',
+      'github.search_repos',
+      'github.issues',
+      'github.create_issue',
+      'github.comment',
+      'server.shell',
+    ]);
+    expect(colleagueToolAllowlist('xiaoyou')).toContain('system.status');
+    expect(colleagueToolAllowlist('xiaoyou')).toContain('server.shell');
+    expect(colleagueToolAllowlist('xiaomei')).toContain('coding.run');
+    expect(colleagueToolAllowlist('xiaozhen')).toEqual([
+      'filesystem.search',
+      'memory.list',
+      'memory.remember',
+      'coding.run',
+      'server.shell',
+    ]);
+    expect(colleagueToolAllowlist('xiaozhi')).toEqual([
+      'filesystem.search',
+      'memory.list',
+      'memory.remember',
+      'web.search',
+      'web.fetch',
+      'github.search_repos',
+    ]);
+  });
+
+  it('conversation.runChat：立即返回 running；drain 后收件箱 done 且 allowlist 无 *.delegate', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const captured: Array<{
+      userMessage: string;
+      headless?: boolean;
+      toolAllowlist?: string[];
+      toolBudget?: number;
+      sessionId: string;
+    }> = [];
+    const conversation: ColleagueConversation = {
+      async *runChat(input) {
+        captured.push(input);
+        await gate;
+        yield {
+          type: 'agent.tool_call',
+          payload: { toolCalls: [{ name: 'coding.run' }] },
+        };
+        yield { type: 'chat.done', payload: { text: '【目标】修好了\n报告 ok' } };
+      },
+    };
+
+    const { office, store, runners } = await makeOffice({
+      runTask: async () => {
+        throw new Error('conversation 路径不应调用 runner.delegate / dsh');
+      },
+    });
+    const events: ColleagueTaskEvent[] = [];
+    office.onEvent((event) => events.push(event));
+    office.attachConversation(conversation);
+
+    const record = await office.delegate('xiaohei', '修登录跳转 bug');
+    expect(record.status).toBe('running');
+    expect(record.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(office.listMailbox('xiaohei')[0]?.status).toBe('running');
+    expect(office.listMailbox('xiaohei')[0]?.taskId).toBe(record.id);
+    expect(events[0]).toMatchObject({
+      type: 'started',
+      colleague: '小黑',
+      taskId: record.id,
+    });
+
+    const sessionId = office.getSessionId('xiaohei')!;
+    const before = await store.getSession(sessionId);
+    expect(before.messages).toHaveLength(0);
+
+    await waitFor(() => captured.length === 1);
+    expect(captured[0]?.sessionId).toBe(sessionId);
+    expect(captured[0]?.userMessage).toBe('【小夜来信】\n修登录跳转 bug');
+    expect(captured[0]?.headless).toBe(true);
+    expect(captured[0]?.toolBudget).toBe(12);
+    expect(captured[0]?.toolAllowlist).toEqual(colleagueToolAllowlist('xiaohei'));
+    expect(captured[0]?.toolAllowlist?.some((name) => name.endsWith('.delegate'))).toBe(false);
+    expect(captured[0]?.toolAllowlist).not.toContain('engineer.delegate');
+    expect(captured[0]?.toolAllowlist).not.toContain('engineer.status');
+
+    release();
+    await waitFor(() => office.listMailbox('xiaohei')[0]?.status === 'done');
+    const done = office.listMailbox('xiaohei')[0];
+    expect(done?.reply).toContain('修好了');
+    expect(office.getTask(record.id)?.status).toBe('success');
+    expect(events.some((event) => event.type === 'progress' && event.text === 'coding.run')).toBe(
+      true,
+    );
+    expect(events.some((event) => event.type === 'done' && event.status === 'success')).toBe(true);
+
+    const after = await store.getSession(sessionId);
+    expect(after.messages).toHaveLength(0);
+
+    const statusTool = createColleagueStatusTool({
+      name: 'engineer.status',
+      displayName: '小黑',
+      runner: runners.xiaohei,
+      colleagueId: 'xiaohei',
+      office,
+    });
+    const byId = await statusTool.execute({ taskId: record.id }, { sessionId: 's1' });
+    expect(byId.ok).toBe(true);
+    expect((byId.data as { status: string; result?: string }).status).toBe('success');
+    expect((byId.data as { result?: string }).result).toContain('修好了');
+  });
+
+  it('conversation chat.error / throw 把收件箱标 failed', async () => {
+    const errorConv: ColleagueConversation = {
+      async *runChat() {
+        yield { type: 'chat.error', payload: { error: 'llm down' } };
+      },
+    };
+    const { office: errorOffice } = await makeOffice();
+    errorOffice.attachConversation(errorConv);
+    await errorOffice.delegate('xiaozhi', '查竞品');
+    await waitFor(() => errorOffice.listMailbox('xiaozhi')[0]?.status === 'failed');
+    expect(errorOffice.listMailbox('xiaozhi')[0]?.reply).toContain('llm down');
+
+    const throwConv: ColleagueConversation = {
+      async *runChat() {
+        throw new Error('boom');
+      },
+    };
+    const { office: throwOffice } = await makeOffice();
+    throwOffice.attachConversation(throwConv);
+    await throwOffice.delegate('xiaomei', '出视觉稿');
+    await waitFor(() => throwOffice.listMailbox('xiaomei')[0]?.status === 'failed');
+    expect(throwOffice.listMailbox('xiaomei')[0]?.reply).toContain('boom');
   });
 });

@@ -25,6 +25,8 @@ export interface ColleagueMailboxGateway {
     options?: { directory?: string; timeoutMinutes?: number },
   ): Promise<ColleagueTask>;
   recentMail(colleagueId: string, limit?: number): ColleagueMailPreview[];
+  getTask?(id: string): ColleagueTask | undefined;
+  listTasks?(limit?: number): ColleagueTask[];
 }
 
 export interface ColleagueDelegateToolOptions {
@@ -40,8 +42,9 @@ export interface ColleagueDelegateToolOptions {
 }
 
 /**
- * 通用 *.delegate：立即创建后台任务并返回 taskId，dsh 由 ColleagueTaskRunner
- * 在后台跑。接入办公室时先写信到该同事收件箱并记入其持久会话。
+ * 通用 *.delegate：立即创建后台任务并返回 taskId。接入办公室时写信到该同事
+ * 收件箱，由同事自己的持久会话 headless 思考（工具白名单动手）；未接入时回退
+ * ColleagueTaskRunner（dsh）。
  */
 export function createColleagueDelegateTool(options: ColleagueDelegateToolOptions): Tool {
   const defaultDirectory = options.defaultDirectory ?? '/app';
@@ -119,9 +122,26 @@ export interface ColleagueStatusToolOptions {
   office?: ColleagueMailboxGateway;
 }
 
+function mergeTaskLists(
+  runner: ColleagueTaskRunner,
+  office: ColleagueMailboxGateway | undefined,
+  limit: number,
+): ColleagueTask[] {
+  const merged = new Map<string, ColleagueTask>();
+  for (const record of office?.listTasks?.(limit) ?? []) {
+    merged.set(record.id, record);
+  }
+  for (const record of runner.list(limit)) {
+    merged.set(record.id, record);
+  }
+  return [...merged.values()]
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, Math.max(1, Math.floor(limit)));
+}
+
 /**
  * 通用 *.status（L0 只读）：按 taskId 查询同事后台任务；不传则列出最近任务。
- * 接入办公室时附带收件箱最近 3 封主题/状态。
+ * 接入办公室时附带收件箱最近 3 封主题/状态；会话路径任务走 office.getTask。
  */
 export function createColleagueStatusTool(options: ColleagueStatusToolOptions): Tool {
   const { name, displayName, runner, office, colleagueId } = options;
@@ -147,7 +167,7 @@ export function createColleagueStatusTool(options: ColleagueStatusToolOptions): 
       const mailbox =
         office && colleagueId ? office.recentMail(colleagueId, 3) : undefined;
       if (taskId?.trim()) {
-        const record = runner.get(taskId.trim());
+        const record = runner.get(taskId.trim()) ?? office?.getTask?.(taskId.trim());
         if (!record) {
           return {
             ok: false,
@@ -171,7 +191,7 @@ export function createColleagueStatusTool(options: ColleagueStatusToolOptions): 
           },
         };
       }
-      const tasks = runner.list(10).map((record) => ({
+      const tasks = mergeTaskLists(runner, office, 10).map((record) => ({
         taskId: record.id,
         colleague: record.colleague ?? displayName,
         status: record.status,
