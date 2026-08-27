@@ -103,6 +103,13 @@ const DISPATCH_CHECK_PROMPT =
   '2. 如果你并没有派单（只是在复述/讨论/引用）：向用户澄清"我还没有派单"，' +
   '并停止使用"已派"这类表述。\n' +
   '不要为了消除本提示而强行调用工具——除非用户确实下达了派单指令。';
+/** WeChat/user 成功 *.delegate 后，若本轮还没开口，只允许一句无工具收束。 */
+const DISPATCH_CLOSE_PROMPT =
+  '任务已派给同事。请用一句话向用户交代，不要再调用工具，不要复述任务内容、机制或检查清单。';
+
+function isDelegateTool(name: string): boolean {
+  return name.endsWith('.delegate') && LONG_TASK_TOOLS.includes(name);
+}
 const COMPACTION_PROMPT = [
   '你是对话摘要助手。请把下面这段 AI 助理与用户的对话压缩成一份简洁的中文摘要，',
   '保留：用户的重要事实与偏好、已完成的任务和关键结果、尚未解决的事项。',
@@ -513,6 +520,8 @@ export class ConversationService {
     let stopToolLoop = false;
     /** 本请求内是否已真正调用过派单工具（跨轮）：真派过就不再核查打扰。 */
     let dispatchedLongTask = false;
+    /** 非 headless 成功 *.delegate 且本轮无口头文字：循环外再跑一次无工具收束。 */
+    let dispatchedNeedShortClose = false;
 
     await this.#store.addMessage(input.sessionId, {
       role: 'user',
@@ -667,6 +676,7 @@ export class ConversationService {
         payload: { toolCalls },
       });
 
+      let successfulDelegateThisTurn = false;
       for (const call of toolCalls) {
         const fingerprint = approvalFingerprint(call.name, parseToolCallArgs(call.arguments));
         if (fingerprint === lastToolFingerprint) {
@@ -764,6 +774,38 @@ export class ConversationService {
               : {}),
           },
         });
+        if (result.ok && isDelegateTool(call.name)) {
+          successfulDelegateThisTurn = true;
+        }
+      }
+
+      // 用户（微信）轮成功派单后不要再开一轮带工具的 LLM：系统 🔧 toast 已是 ack。
+      // headless 同事会话不变（他们没有 *.delegate，且仍需多轮工具）。
+      if (!input.headless && successfulDelegateThisTurn) {
+        if (fullText.trim().length > 0) {
+          this.#profileIngest?.(input.userMessage);
+          void this.#timeline?.addEvent({
+            type: 'chat',
+            summary: `和用户对话：${input.userMessage.trim().slice(0, 120)}`,
+            sessionId: input.sessionId,
+          });
+          yield createEnvelope({
+            type: 'chat.done',
+            sessionId: input.sessionId,
+            requestId,
+            payload: { text: fullText, usage, durationMs: Date.now() - requestStartedAt },
+          });
+          yield createEnvelope({
+            type: 'agent.state',
+            sessionId: input.sessionId,
+            requestId,
+            payload: { state: 'listening' },
+          });
+          return;
+        }
+        messages.push({ role: 'user', content: DISPATCH_CLOSE_PROMPT });
+        dispatchedNeedShortClose = true;
+        break;
       }
 
       if (stopToolLoop) {
@@ -773,6 +815,52 @@ export class ConversationService {
         });
         break;
       }
+    }
+
+    if (dispatchedNeedShortClose) {
+      let closeText = '';
+      try {
+        for await (const chunk of chatWithTimeoutAndRetry(this.#llm, {
+          messages,
+          ...(input.signal ? { signal: input.signal } : {}),
+        })) {
+          if (chunk.delta.length > 0) {
+            closeText += chunk.delta;
+            yield createEnvelope({
+              type: 'chat.token',
+              sessionId: input.sessionId,
+              requestId,
+              payload: { delta: chunk.delta },
+            });
+          }
+        }
+      } catch {
+        closeText = '已经派出去了。';
+      }
+      const finalClose = closeText.trim().length > 0 ? closeText : '已经派出去了。';
+      await this.#store.addMessage(input.sessionId, {
+        role: 'assistant',
+        content: finalClose,
+      });
+      this.#profileIngest?.(input.userMessage);
+      void this.#timeline?.addEvent({
+        type: 'chat',
+        summary: `和用户对话：${input.userMessage.trim().slice(0, 120)}`,
+        sessionId: input.sessionId,
+      });
+      yield createEnvelope({
+        type: 'chat.done',
+        sessionId: input.sessionId,
+        requestId,
+        payload: { text: finalClose, usage: undefined, durationMs: Date.now() - requestStartedAt },
+      });
+      yield createEnvelope({
+        type: 'agent.state',
+        sessionId: input.sessionId,
+        requestId,
+        payload: { state: 'listening' },
+      });
+      return;
     }
 
     // 工具轮次用尽或预算/循环熔断：再跑一次不带工具的总结，避免只丢一句熔断提示。

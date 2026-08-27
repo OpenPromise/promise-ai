@@ -1189,6 +1189,276 @@ describe('ConversationService', () => {
     expect(callSeq).toBe(1);
     expect(checkPromptSeen).toBe(false);
   });
+
+  it('非 headless 成功 *.delegate 且已有口头文字：不再开下一轮 LLM，chat.done 用已流式文本', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    let delegated = 0;
+    const tools = new ToolRegistry();
+    tools.register({
+      name: 'designer.delegate',
+      description: '派给小美',
+      inputSchema: { type: 'object', properties: { task: { type: 'string' } } },
+      permissionLevel: 1,
+      async execute() {
+        delegated += 1;
+        return { ok: true, data: { text: '小美已接单' } };
+      },
+    });
+
+    let callSeq = 0;
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'test',
+      configured: true,
+      async *chat(): AsyncIterable<ChatChunk> {
+        callSeq += 1;
+        if (callSeq === 1) {
+          yield {
+            delta: '好，我让小美去设计。',
+            finishReason: 'tool_calls',
+            toolCalls: [
+              {
+                id: 'call_delegate',
+                name: 'designer_delegate',
+                arguments: JSON.stringify({ task: '设计主页' }),
+              },
+            ],
+          };
+          return;
+        }
+        yield { delta: '小真没有独立信箱，我再查一下能不能让小美写信……' };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+    const service = new ConversationService({
+      store,
+      llm,
+      tools,
+      approvals: new ApprovalRegistry(),
+      memory: new InMemoryMemoryStore(),
+    });
+    let finalText = '';
+    let doneNote: string | undefined;
+    for await (const envelope of service.runChat({
+      sessionId: session.id,
+      userMessage: '让小美去给小真设计一个主页',
+    })) {
+      if (envelope.type === 'chat.done') {
+        const payload = envelope.payload as { text?: string; note?: string };
+        finalText = payload.text ?? '';
+        doneNote = payload.note;
+      }
+    }
+    expect(delegated).toBe(1);
+    expect(callSeq).toBe(1);
+    expect(finalText).toBe('好，我让小美去设计。');
+    expect(doneNote).toBeUndefined();
+    const messages = (await store.getSession(session.id)).messages;
+    expect(messages.some((m) => (m.content ?? '').includes('没有独立信箱'))).toBe(false);
+  });
+
+  it('非 headless 成功 *.delegate 但本轮无口头文字：只再跑一次无工具收束', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    let delegated = 0;
+    const tools = new ToolRegistry();
+    tools.register({
+      name: 'designer.delegate',
+      description: '派给小美',
+      inputSchema: { type: 'object', properties: { task: { type: 'string' } } },
+      permissionLevel: 1,
+      async execute() {
+        delegated += 1;
+        return { ok: true, data: { text: '小美已接单' } };
+      },
+    });
+
+    let callSeq = 0;
+    let secondHadTools: boolean | undefined;
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'test',
+      configured: true,
+      async *chat(input: ChatInput): AsyncIterable<ChatChunk> {
+        callSeq += 1;
+        if (callSeq === 1) {
+          yield {
+            delta: '',
+            finishReason: 'tool_calls',
+            toolCalls: [
+              {
+                id: 'call_delegate',
+                name: 'designer_delegate',
+                arguments: JSON.stringify({ task: '设计主页' }),
+              },
+            ],
+          };
+          return;
+        }
+        secondHadTools = Array.isArray(input.tools) && input.tools.length > 0;
+        yield { delta: '已经派给小美了。' };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+    const service = new ConversationService({
+      store,
+      llm,
+      tools,
+      approvals: new ApprovalRegistry(),
+      memory: new InMemoryMemoryStore(),
+    });
+    let finalText = '';
+    let doneNote: string | undefined;
+    for await (const envelope of service.runChat({
+      sessionId: session.id,
+      userMessage: '让小美设计主页',
+    })) {
+      if (envelope.type === 'chat.done') {
+        const payload = envelope.payload as { text?: string; note?: string };
+        finalText = payload.text ?? '';
+        doneNote = payload.note;
+      }
+    }
+    expect(delegated).toBe(1);
+    expect(callSeq).toBe(2);
+    expect(secondHadTools).toBe(false);
+    expect(finalText).toBe('已经派给小美了。');
+    expect(doneNote).toBeUndefined();
+  });
+
+  it('headless 成功 *.delegate 后继续工具轮（同事/验收路径不变）', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    let delegated = 0;
+    const tools = new ToolRegistry();
+    tools.register({
+      name: 'engineer.delegate',
+      description: '派给小黑',
+      inputSchema: { type: 'object', properties: { task: { type: 'string' } } },
+      permissionLevel: 1,
+      async execute() {
+        delegated += 1;
+        return { ok: true, data: { text: '小黑已接单' } };
+      },
+    });
+
+    let callSeq = 0;
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'test',
+      configured: true,
+      async *chat(): AsyncIterable<ChatChunk> {
+        callSeq += 1;
+        if (callSeq === 1) {
+          yield {
+            delta: '派给小黑。',
+            finishReason: 'tool_calls',
+            toolCalls: [
+              {
+                id: 'call_delegate',
+                name: 'engineer_delegate',
+                arguments: JSON.stringify({ task: '修 bug' }),
+              },
+            ],
+          };
+          return;
+        }
+        yield { delta: 'headless 继续说完。' };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+    const service = new ConversationService({
+      store,
+      llm,
+      tools,
+      approvals: new ApprovalRegistry(),
+      memory: new InMemoryMemoryStore(),
+    });
+    let finalText = '';
+    for await (const envelope of service.runChat({
+      sessionId: session.id,
+      userMessage: '【小夜来信】修 bug',
+      headless: true,
+    })) {
+      if (envelope.type === 'chat.done') {
+        finalText = (envelope.payload as { text?: string }).text ?? '';
+      }
+    }
+    expect(delegated).toBe(1);
+    expect(callSeq).toBe(2);
+    expect(finalText).toBe('headless 继续说完。');
+  });
+
+  it('非 headless 派单失败不提前结束，可继续工具轮', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    let delegated = 0;
+    const tools = new ToolRegistry();
+    tools.register({
+      name: 'designer.delegate',
+      description: '派给小美',
+      inputSchema: { type: 'object', properties: { task: { type: 'string' } } },
+      permissionLevel: 1,
+      async execute() {
+        delegated += 1;
+        return { ok: false, error: '收件箱忙' };
+      },
+    });
+
+    let callSeq = 0;
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'test',
+      configured: true,
+      async *chat(): AsyncIterable<ChatChunk> {
+        callSeq += 1;
+        if (callSeq === 1) {
+          yield {
+            delta: '我去派给小美。',
+            finishReason: 'tool_calls',
+            toolCalls: [
+              {
+                id: 'call_delegate',
+                name: 'designer_delegate',
+                arguments: JSON.stringify({ task: '设计主页' }),
+              },
+            ],
+          };
+          return;
+        }
+        yield { delta: '派单没成功，我再想想办法。' };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+    const service = new ConversationService({
+      store,
+      llm,
+      tools,
+      approvals: new ApprovalRegistry(),
+      memory: new InMemoryMemoryStore(),
+    });
+    let finalText = '';
+    for await (const envelope of service.runChat({
+      sessionId: session.id,
+      userMessage: '让小美设计主页',
+    })) {
+      if (envelope.type === 'chat.done') {
+        finalText = (envelope.payload as { text?: string }).text ?? '';
+      }
+    }
+    expect(delegated).toBe(1);
+    expect(callSeq).toBe(2);
+    expect(finalText).toContain('没成功');
+  });
 });
 
 function failLlm(): never {

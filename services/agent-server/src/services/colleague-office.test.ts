@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InMemorySessionStore } from '@personal-ai/memory';
 import {
   ColleagueTaskRunner,
@@ -557,6 +557,76 @@ describe('ColleagueOffice', () => {
     expect(progress).toHaveLength(1);
     expect(progress[0]?.text).toBe('正在检索网页');
     expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
+  });
+
+  it('进度：相同 coding.run 文案即使隔 20s 也只 toast 一次', async () => {
+    let now = 1_700_000_000_000;
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const conversation: ColleagueConversation = {
+        async *runChat() {
+          yield {
+            type: 'agent.tool_call',
+            payload: { toolCalls: [{ name: 'coding.run' }] },
+          };
+          now += 25_000;
+          yield {
+            type: 'agent.tool_call',
+            payload: { toolCalls: [{ name: 'coding.run' }] },
+          };
+          now += 25_000;
+          yield {
+            type: 'agent.tool_call',
+            payload: { toolCalls: [{ name: 'coding.run' }] },
+          };
+          yield { type: 'chat.done', payload: { text: '写完了' } };
+        },
+      };
+      const { office } = await makeOffice();
+      const events: ColleagueTaskEvent[] = [];
+      office.onEvent((event) => events.push(event));
+      office.attachConversation(conversation);
+      await office.delegate('xiaohei', '写代码');
+      await waitFor(() => events.some((event) => event.type === 'done'));
+      const progress = events.filter((event) => event.type === 'progress');
+      expect(progress).toHaveLength(1);
+      expect(progress[0]?.text).toBe('正在写代码');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('进度：搜索后过 20s 写代码会 toast 两次', async () => {
+    let now = 1_700_000_000_000;
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const conversation: ColleagueConversation = {
+        async *runChat() {
+          yield {
+            type: 'agent.tool_call',
+            payload: { toolCalls: [{ name: 'filesystem.search' }] },
+          };
+          now += 25_000;
+          yield {
+            type: 'agent.tool_call',
+            payload: { toolCalls: [{ name: 'coding.run' }] },
+          };
+          yield { type: 'chat.done', payload: { text: '好了' } };
+        },
+      };
+      const { office } = await makeOffice();
+      const events: ColleagueTaskEvent[] = [];
+      office.onEvent((event) => events.push(event));
+      office.attachConversation(conversation);
+      await office.delegate('xiaohei', '先搜再写');
+      await waitFor(() => events.some((event) => event.type === 'done'));
+      const progress = events
+        .filter((event) => event.type === 'progress')
+        .map((event) => event.text);
+      expect(progress).toEqual(['正在搜索文件', '正在写代码']);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('conversation chat.error / throw 把收件箱标 failed', async () => {

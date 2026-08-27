@@ -48,6 +48,8 @@ export interface ColleagueTask {
   progress?: string;
   /** 最近一次进度 toast 发出时间（ms）。办公室路径 20s 合并用。 */
   progressEmittedAt?: number;
+  /** 最近一次真正发出的进度文案；相同文案对本任务只 toast 一次。 */
+  lastProgressLabel?: string;
   /** 派单方小夜微信会话 id。验收 wrap-up 用；不能是同事自己的 session。 */
   hubSessionId?: string;
   /** 累计输出（截断保存，供查询/复盘）。 */

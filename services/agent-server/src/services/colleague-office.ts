@@ -633,15 +633,18 @@ export class ColleagueOffice {
 
   /**
    * 每任务最多 20s 一条进度 toast；第一条人话永远放行。
-   * 窗口内同文案连发也跳过。非白名单工具在调用方已过滤。
+   * 相同文案对本任务只报一次（过了 20s 也不再重复「正在写代码」）。
+   * 窗口内不同文案仍被 debounce 合并。非白名单工具在调用方已过滤。
    */
   #emitProgress(record: ColleagueTask, name: string, text: string): void {
     const now = Date.now();
     const lastAt = record.progressEmittedAt ?? 0;
     const first = lastAt === 0;
     record.progress = text;
+    if (record.lastProgressLabel === text) return;
     if (!first && now - lastAt < PROGRESS_DEBOUNCE_MS) return;
     record.progressEmittedAt = now;
+    record.lastProgressLabel = text;
     this.#emit({
       type: 'progress',
       taskId: record.id,

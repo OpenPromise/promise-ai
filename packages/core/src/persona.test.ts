@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -79,5 +79,13 @@ describe('FilePersonaProvider', () => {
     const second = await provider.getSystemPrompt();
     expect(second).toContain('v2');
     expect(second).not.toContain('v1');
+  });
+
+  it('小夜行为准则写明同事都有收件箱、不能互相派单', async () => {
+    const rulesPath = path.resolve(import.meta.dirname, '../../../persona/behavior-rules.md');
+    const rules = await readFile(rulesPath, 'utf8');
+    expect(rules).toContain('五位同事都有自己的收件箱');
+    expect(rules).toContain('同事不能互相派单');
+    expect(rules).toContain('不要说「没有信箱」');
   });
 });
