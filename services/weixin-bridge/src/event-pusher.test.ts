@@ -69,6 +69,23 @@ describe('formatEvent', () => {
     ).toBe('❌ 小黑任务失败（#12345678）\n编译失败');
   });
 
+  it('skips 开工瞬间进度（与已派给确认重复）', () => {
+    expect(
+      formatEvent('engineer.task.progress', {
+        type: 'started',
+        taskId: 'c3c10a62-xxxx',
+        colleague: '小优',
+        text: '小优已开工，正在执行任务',
+      }),
+    ).toBeUndefined();
+    expect(
+      formatEvent('engineer.task.progress', {
+        colleague: '小优',
+        text: '小优已开工，正在执行任务',
+      }),
+    ).toBeUndefined();
+  });
+
   it('formats colleague-named progress/done（小优/小美）', () => {
     expect(
       formatEvent('engineer.task.progress', {

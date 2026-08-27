@@ -95,7 +95,7 @@ const STRONG_BOUNDARY_CHARS = '。！？!?…';
 /** 弱句边界（长文本无强边界时的兜底）：分号/逗号/顿号/冒号（中英）。 */
 const WEAK_BOUNDARY_CHARS = '；;，,、：:';
 
-/** 长任务工具白名单：这些工具执行时向微信推送"已派出/已完成"进度节点。 */
+/** 长任务工具白名单：这些工具执行时向微信推送「已派出」确认。真正完成走 SSE engineer.task.done，不在 tool_result 上报完成。 */
 const LONG_TASK_TOOLS = [
   'engineer.delegate',
   'ops.delegate',
@@ -795,8 +795,8 @@ async function handleInboundMessage(msg: WeixinMessage, options: RelayOptions): 
             }),
           );
         },
-        // 长任务进度节点：派单确认 + 完成提示，让用户知道任务在进行。
-        // 失败由 chatOnce 吞掉，完整报告仍会随 chat.done 发出。
+        // 长任务进度节点：只推派单确认。失败由 chatOnce 吞掉。
+        // 真正完成由 event-pusher 的 engineer.task.done 推送。
         onLongTaskStarted: async (toolName) => {
           await client.sendMessage(
             buildReplyMessage({
@@ -809,16 +809,8 @@ async function handleInboundMessage(msg: WeixinMessage, options: RelayOptions): 
             }),
           );
         },
-        onLongTaskFinished: async () => {
-          await client.sendMessage(
-            buildReplyMessage({
-              to: peer,
-              text: '✔️ 任务完成，正在整理报告…',
-              contextToken: msg.context_token,
-              runId: msg.run_id,
-            }),
-          );
-        },
+        // 不在 tool_result 上报「任务完成」：*.delegate 是异步派单，
+        // tool 一返回只代表已入队，真正干完由 event-pusher 推 engineer.task.done。
       });
       const replyParts: string[] = [];
       // 已提前发送的前缀不再重复发送，只补发剩余部分（按原始字符数切，与提前发送记账一致）。

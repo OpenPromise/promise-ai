@@ -84,10 +84,15 @@ export function formatEvent(event: string, data: unknown): string | undefined {
   }
   if (event === 'engineer.task.progress') {
     const task = data as EngineerTaskEvent;
+    const text = (task.text ?? '').trim();
+    // 开工瞬间与「已派给 xxx」重复，等后面有实质进度再冒泡。
+    if (task.type === 'started' || /已开工，正在执行任务/.test(text)) {
+      return undefined;
+    }
     const id = (task.taskId ?? '').slice(0, 8);
     const who = task.colleague || '小黑';
-    const text = task.text ?? '正在执行';
-    return `🔧 ${who}任务进行中${id ? `（#${id}）` : ''}：${text.slice(0, 120)}`;
+    const body = text || '正在执行';
+    return `🔧 ${who}任务进行中${id ? `（#${id}）` : ''}：${body.slice(0, 120)}`;
   }
   if (event === 'engineer.task.done') {
     const task = data as EngineerTaskEvent;
