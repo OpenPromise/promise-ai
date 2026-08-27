@@ -1,8 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { ChildProcess } from 'node:child_process';
 import type { SessionStore } from '@personal-ai/memory';
 import type { Session } from '@personal-ai/types';
+import { withExclusiveFileLock } from './file-lock.js';
+import { colleagueForkEnabled, forkColleagueWorker } from './colleague-fork.js';
+import { publishColleagueEvent, type ColleagueChildEvent } from './colleague-internal.js';
 import type {
   ColleagueTask,
   ColleagueTaskEvent,
@@ -103,6 +107,9 @@ export interface ColleagueConversation {
   isSessionBusy?(sessionId: string): boolean;
 }
 
+/** inprocess=测试默认；parent=生产主进程 fork；child=同事信箱子进程。 */
+export type ColleagueIsolation = 'inprocess' | 'parent' | 'child';
+
 export interface ColleagueOfficeOptions {
   store: SessionStore;
   runners: ColleagueRunners;
@@ -110,6 +117,17 @@ export interface ColleagueOfficeOptions {
   mailboxDir?: string;
   /** 自动提交对照的仓库根。默认 /app（compose bind-mount）。测试传 null 禁用，勿碰直播 checkout。 */
   gitRepoDir?: string | null;
+  /**
+   * 隔离模式。缺省 inprocess（vitest / 显式关 fork）。
+   * 生产主进程传 parent；colleague-worker 传 child。
+   */
+  isolation?: ColleagueIsolation;
+  /** child 模式只跑这一位的信箱循环。 */
+  workerColleagueId?: ColleagueId;
+  /** 测试注入 fork；生产默认 forkColleagueWorker。 */
+  forkWorker?: (id: ColleagueId) => ChildProcess;
+  /** child 把 progress/done POST 给父进程；缺省 publishColleagueEvent。 */
+  publishEvent?: (event: ColleagueChildEvent) => Promise<void>;
 }
 
 const RESULT_CAP = 8_000;
@@ -313,10 +331,10 @@ export function humanizeColleagueToolProgress(
 }
 
 /**
- * 同事办公室：五位同事各有一条持久 Postgres 会话 + 文件收件箱 + 独立 in-process worker。
- * 小夜 *.delegate / mail.send / mail.ask 只入队；每位同事自己的循环取信，
- * 在自己的会话上跑 ConversationService.runChat（headless + 工具白名单 + 单飞）。
- * 无 conversation 时回退 ColleagueTaskRunner（dsh）。不另起 Node 进程 / 容器。
+ * 同事办公室：五位同事各有一条持久 Postgres 会话 + 文件收件箱。
+ * 生产默认 child_process.fork 五份子进程（同容器），每人独立事件循环跑 runChat；
+ * vitest 保持进程内 worker。小夜 *.delegate / mail.send / mail.ask 只入队。
+ * wrap-up 始终在父进程小夜 hub 会话上跑。
  */
 export class ColleagueOffice {
   readonly #store: SessionStore;
@@ -342,12 +360,24 @@ export class ColleagueOffice {
   #attached = false;
   #workersStarted = false;
   #stopping = false;
+  #isolation: ColleagueIsolation;
+  readonly #workerColleagueId?: ColleagueId;
+  readonly #forkWorker: (id: ColleagueId) => ChildProcess;
+  readonly #publishEvent?: (event: ColleagueChildEvent) => Promise<void>;
+  readonly #children = new Map<ColleagueId, ChildRecord>();
+  readonly #wrappedMailIds = new Set<string>();
+  #mailboxWatchTimer?: ReturnType<typeof setTimeout>;
+  #usedInProcessFallback = false;
 
   constructor(options: ColleagueOfficeOptions) {
     this.#store = options.store;
     this.#runners = options.runners;
     this.#mailboxDir = options.mailboxDir ?? path.resolve('./data/mailboxes');
     this.#gitRepoDir = options.gitRepoDir === undefined ? DEFAULT_GIT_REPO_DIR : options.gitRepoDir;
+    this.#isolation = options.isolation ?? 'inprocess';
+    this.#workerColleagueId = options.workerColleagueId;
+    this.#forkWorker = options.forkWorker ?? forkColleagueWorker;
+    this.#publishEvent = options.publishEvent;
   }
 
   /** 生产在 ConversationService 建好后注入；测试可传假 runChat。 */
@@ -361,6 +391,21 @@ export class ColleagueOffice {
    */
   close(): void {
     this.#stopping = true;
+    if (this.#mailboxWatchTimer) {
+      clearTimeout(this.#mailboxWatchTimer);
+      this.#mailboxWatchTimer = undefined;
+    }
+    for (const rec of this.#children.values()) {
+      if (rec.restartTimer) {
+        clearTimeout(rec.restartTimer);
+        rec.restartTimer = undefined;
+      }
+      try {
+        rec.child.kill('SIGTERM');
+      } catch {
+        // 已退
+      }
+    }
     for (const id of COLLEAGUE_IDS) {
       const wake = this.#wakes.get(id);
       if (wake) wake();
@@ -369,6 +414,24 @@ export class ColleagueOffice {
       for (const notify of waiters) notify();
     }
     this.#mailWaiters.clear();
+  }
+
+  /** SIGTERM：先 close 再等子进程退出；超时 SIGKILL。 */
+  async closeAndWait(timeoutMs = 2_500): Promise<void> {
+    this.close();
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (![...this.#children.values()].some((rec) => rec.alive)) return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    for (const rec of this.#children.values()) {
+      if (!rec.alive) continue;
+      try {
+        rec.child.kill('SIGKILL');
+      } catch {
+        // ignore
+      }
+    }
   }
 
   onEvent(listener: (event: ColleagueTaskEvent) => void): () => void {
@@ -429,10 +492,15 @@ export class ColleagueOffice {
     await mkdir(this.#mailboxDir, { recursive: true });
     for (const id of COLLEAGUE_IDS) {
       this.#mail.set(id, await this.#loadMailbox(id));
+      for (const mail of this.#mail.get(id) ?? []) {
+        if (mail.status === 'done' || mail.status === 'failed') {
+          this.#wrappedMailIds.add(mail.id);
+        }
+      }
     }
     this.#attach();
     await this.#reconcile();
-    this.#startWorkers();
+    await this.#startWorkers();
   }
 
   /**
@@ -662,9 +730,40 @@ export class ColleagueOffice {
     return this.#tasks.get(taskId) ?? record;
   }
 
-  #startWorkers(): void {
+  async #startWorkers(): Promise<void> {
     if (this.#workersStarted) return;
     this.#workersStarted = true;
+    if (this.#isolation === 'child') {
+      const id = this.#workerColleagueId;
+      if (!id) {
+        console.error('[colleagues] child isolation 缺少 workerColleagueId');
+        return;
+      }
+      void this.#workerLoop(id);
+      return;
+    }
+    if (this.#isolation === 'parent') {
+      const spawned = this.#forkAll();
+      if (spawned === 0) {
+        this.#fallbackInProcess('fork() 一个都没拉起');
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const alive = [...this.#children.values()].filter((rec) => rec.alive).length;
+      if (alive === 0) {
+        for (const rec of this.#children.values()) {
+          if (rec.restartTimer) {
+            clearTimeout(rec.restartTimer);
+            rec.restartTimer = undefined;
+          }
+        }
+        this.#fallbackInProcess('子进程全部瞬间退出');
+        return;
+      }
+      this.#startMailboxWatcher();
+      console.log(`[colleagues] forked ${alive} mailbox worker(s)`);
+      return;
+    }
     for (const id of COLLEAGUE_IDS) {
       void this.#workerLoop(id);
     }
@@ -672,6 +771,9 @@ export class ColleagueOffice {
 
   async #workerLoop(colleagueId: ColleagueId): Promise<void> {
     while (!this.#stopping) {
+      if (this.#isolation !== 'inprocess') {
+        this.#mail.set(colleagueId, await this.#loadMailbox(colleagueId));
+      }
       if (!this.#conversation) {
         await this.#waitForWork(colleagueId);
         continue;
@@ -716,13 +818,16 @@ export class ColleagueOffice {
         ...(mail.chain ? { chain: mail.chain } : {}),
       };
       this.#tasks.set(taskId, record);
-      this.#emit({
-        type: 'started',
-        taskId,
-        status: 'running',
-        colleague: name,
-        text: this.#runners[colleagueId].spec.startedText,
-      });
+      // 父进程入队已 emit started；子进程补记录时不要再 toast「已开工」。
+      if (this.#isolation !== 'child') {
+        this.#emit({
+          type: 'started',
+          taskId,
+          status: 'running',
+          colleague: name,
+          text: this.#runners[colleagueId].spec.startedText,
+        });
+      }
     }
 
     mail.status = 'running';
@@ -760,6 +865,9 @@ export class ColleagueOffice {
   ): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (!this.#stopping) {
+      if (this.#isolation !== 'inprocess') {
+        this.#mail.set(colleagueId, await this.#loadMailbox(colleagueId));
+      }
       const mail = this.#findMail(colleagueId, mailId);
       if (mail && (mail.status === 'done' || mail.status === 'failed')) return;
       const remaining = deadline - Date.now();
@@ -1056,6 +1164,19 @@ export class ColleagueOffice {
     await this.#persist(colleagueId);
     // mail.ask（nested）：不跑小夜 wrap-up、不发 done，避免微信中途冒「小真回来了」。
     if (mail.nested) return;
+    if (this.#isolation === 'child') {
+      await this.#publishChildEvent({
+        type: 'done',
+        taskId: record.id,
+        status: record.status,
+        colleague: name,
+        result: reply,
+        ...(!outcome.ok ? { error: record.error } : {}),
+        mailId: mail.id,
+        colleagueId,
+      });
+      return;
+    }
     const wrapUp = await this.#wrapUpOnHub({
       mail,
       record,
@@ -1149,13 +1270,17 @@ export class ColleagueOffice {
     if (!first && now - lastAt < PROGRESS_DEBOUNCE_MS) return;
     record.progressEmittedAt = now;
     record.lastProgressLabel = text;
-    this.#emit({
-      type: 'progress',
+    const event = {
+      type: 'progress' as const,
       taskId: record.id,
-      status: 'running',
+      status: 'running' as const,
       colleague: name,
       text,
-    });
+    };
+    this.#emit(event);
+    if (this.#isolation === 'child') {
+      void this.#publishChildEvent({ ...event, colleagueId: this.#workerColleagueId });
+    }
   }
 
   #attach(): void {
@@ -1297,17 +1422,272 @@ export class ColleagueOffice {
   async #persist(colleagueId: ColleagueId): Promise<void> {
     const run = this.#persistChain.then(async () => {
       try {
-        await mkdir(this.#mailboxDir, { recursive: true });
-        const file = this.#mailboxPath(colleagueId);
-        const records = this.#mail.get(colleagueId) ?? [];
-        const tmp = `${file}.tmp`;
-        await writeFile(tmp, JSON.stringify(records, null, 2), 'utf8');
-        await rename(tmp, file);
-      } catch {
-        // 收件箱落盘失败不致命：内存仍可查，重启后丢失未写入的信
+        if (this.#isolation === 'inprocess') {
+          await this.#writeMailboxFile(colleagueId, this.#mail.get(colleagueId) ?? []);
+          return;
+        }
+        const mem = this.#mail.get(colleagueId) ?? [];
+        await withExclusiveFileLock(this.#mailboxLockPath(colleagueId), async () => {
+          const disk = await this.#loadMailbox(colleagueId);
+          const merged = mergeMailboxItems(disk, mem);
+          this.#mail.set(colleagueId, merged);
+          await this.#writeMailboxFile(colleagueId, merged);
+        });
+      } catch (error) {
+        console.warn(
+          `[colleagues] persist ${colleagueId} failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     });
     this.#persistChain = run.catch(() => {});
     await run;
   }
+
+  #mailboxLockPath(colleagueId: ColleagueId): string {
+    return `${this.#mailboxPath(colleagueId)}.lock`;
+  }
+
+  async #writeMailboxFile(colleagueId: ColleagueId, records: MailItem[]): Promise<void> {
+    await mkdir(this.#mailboxDir, { recursive: true });
+    const file = this.#mailboxPath(colleagueId);
+    const tmp = `${file}.tmp`;
+    await writeFile(tmp, JSON.stringify(records, null, 2), 'utf8');
+    await rename(tmp, file);
+  }
+
+  #forkAll(): number {
+    let spawned = 0;
+    for (const id of COLLEAGUE_IDS) {
+      if (this.#forkOne(id)) spawned += 1;
+    }
+    return spawned;
+  }
+
+  #forkOne(id: ColleagueId): ChildProcess | undefined {
+    try {
+      const child = this.#forkWorker(id);
+      const rec: ChildRecord = {
+        child,
+        alive: true,
+        restarts: [],
+      };
+      this.#children.set(id, rec);
+      child.on('exit', (code, signal) => {
+        rec.alive = false;
+        this.#onChildExit(id, code, signal);
+      });
+      child.on('error', (error) => {
+        rec.alive = false;
+        console.error(
+          `[colleagues] child ${id} error: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+      return child;
+    } catch (error) {
+      console.error(
+        `[colleagues] fork ${id} failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return undefined;
+    }
+  }
+
+  #onChildExit(id: ColleagueId, code: number | null, signal: NodeJS.Signals | null): void {
+    if (this.#stopping || this.#usedInProcessFallback) return;
+    const rec = this.#children.get(id);
+    if (!rec) return;
+    const now = Date.now();
+    rec.restarts = rec.restarts.filter((ts) => now - ts < RESTART_WINDOW_MS);
+    if (rec.restarts.length >= MAX_CHILD_RESTARTS) {
+      console.error(
+        `[colleagues] child ${id} 在 10 分钟内退出 ${rec.restarts.length} 次，停止拉起该同事`,
+      );
+      this.#maybeFallbackInProcess();
+      return;
+    }
+    rec.restarts.push(now);
+    const backoff = Math.min(8_000, 500 * 2 ** rec.restarts.length);
+    console.warn(
+      `[colleagues] child ${id} exited code=${code} signal=${signal}, restart in ${backoff}ms`,
+    );
+    rec.restartTimer = setTimeout(() => {
+      rec.restartTimer = undefined;
+      if (this.#stopping) return;
+      this.#forkOne(id);
+    }, backoff);
+    rec.restartTimer.unref?.();
+  }
+
+  #maybeFallbackInProcess(): void {
+    if (this.#isolation !== 'parent' || this.#usedInProcessFallback) return;
+    const busy = [...this.#children.values()].some((rec) => rec.alive || rec.restartTimer);
+    if (busy) return;
+    this.#fallbackInProcess('所有子进程已放弃重启');
+  }
+
+  #fallbackInProcess(reason: string): void {
+    if (this.#usedInProcessFallback) return;
+    this.#usedInProcessFallback = true;
+    this.#isolation = 'inprocess';
+    console.error(
+      `[colleagues] FORK FAILED（${reason}）——回退到进程内 worker。五位同事仍共享同一事件循环。`,
+    );
+    for (const id of COLLEAGUE_IDS) {
+      void this.#workerLoop(id);
+    }
+  }
+
+  #startMailboxWatcher(): void {
+    const tick = async (): Promise<void> => {
+      if (this.#stopping) return;
+      try {
+        await this.#scanSettledMail();
+      } catch (error) {
+        console.warn(
+          `[colleagues] mailbox watch: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      if (this.#stopping) return;
+      this.#mailboxWatchTimer = setTimeout(() => void tick(), MAILBOX_WATCH_MS);
+      this.#mailboxWatchTimer.unref?.();
+    };
+    void tick();
+  }
+
+  async #scanSettledMail(): Promise<void> {
+    for (const id of COLLEAGUE_IDS) {
+      const disk = await this.#loadMailbox(id);
+      const merged = mergeMailboxItems(disk, this.#mail.get(id) ?? []);
+      this.#mail.set(id, merged);
+      for (const mail of disk) {
+        if (mail.status !== 'done' && mail.status !== 'failed') continue;
+        if (mail.nested) continue;
+        if (this.#wrappedMailIds.has(mail.id)) continue;
+        await this.#wrapUpSettledMail(id, mail);
+      }
+    }
+  }
+
+  /**
+   * 子进程 POST 的 progress/done。done 后父进程跑小夜 wrap-up 再 SSE。
+   * 幂等：同一封信 wrap-up 只跑一次。
+   */
+  async ingestChildEvent(event: ColleagueChildEvent): Promise<void> {
+    if (event.type === 'progress') {
+      const record = this.#tasks.get(event.taskId);
+      if (record) {
+        record.progress = event.text ?? record.progress;
+      }
+      this.#emit(event);
+      return;
+    }
+    if (event.type !== 'done') return;
+    const colleagueId =
+      event.colleagueId ??
+      (COLLEAGUE_IDS.find((id) => colleagueName(id) === event.colleague) as ColleagueId | undefined);
+    if (colleagueId) {
+      this.#mail.set(colleagueId, await this.#loadMailbox(colleagueId));
+      const mail =
+        (event.mailId ? this.#findMail(colleagueId, event.mailId) : undefined) ??
+        this.#findByTaskId(colleagueId, event.taskId);
+      if (mail) {
+        await this.#wrapUpSettledMail(colleagueId, mail);
+        return;
+      }
+    }
+    // 找不到信也把 done 发出去（回退文案），避免微信丢完成通知。
+    this.#emit(event);
+  }
+
+  async #wrapUpSettledMail(colleagueId: ColleagueId, mail: MailItem): Promise<void> {
+    if (this.#wrappedMailIds.has(mail.id)) return;
+    if (mail.nested) return;
+    if (mail.status !== 'done' && mail.status !== 'failed') return;
+    this.#wrappedMailIds.add(mail.id);
+    const name = colleagueName(colleagueId);
+    const ok = mail.status === 'done';
+    const reply = truncate(mail.reply ?? '');
+    let record = mail.taskId ? this.#tasks.get(mail.taskId) : undefined;
+    if (!record) {
+      const taskId = mail.taskId ?? mail.id;
+      mail.taskId = taskId;
+      record = {
+        id: taskId,
+        colleague: name,
+        task: mail.body,
+        directory: path.resolve('/app'),
+        status: ok ? 'success' : 'failed',
+        createdAt: mail.createdAt,
+        startedAt: mail.createdAt,
+        finishedAt: new Date().toISOString(),
+        output: '',
+        ...(ok ? { result: reply } : { error: reply || '任务失败' }),
+        ...(mail.hubSessionId ? { hubSessionId: mail.hubSessionId } : {}),
+        ...(mail.chain ? { chain: mail.chain } : {}),
+      };
+      this.#tasks.set(taskId, record);
+    } else {
+      record.status = ok ? 'success' : 'failed';
+      record.finishedAt = record.finishedAt ?? new Date().toISOString();
+      if (ok) record.result = reply;
+      else record.error = reply || '任务失败';
+    }
+    const wrapUp = await this.#wrapUpOnHub({
+      mail,
+      record,
+      name,
+      ok,
+      reply,
+    });
+    this.#emit({
+      type: 'done',
+      taskId: record.id,
+      status: record.status,
+      colleague: name,
+      result: wrapUp,
+      ...(!ok ? { error: record.error } : {}),
+    });
+  }
+
+  async #publishChildEvent(event: ColleagueChildEvent): Promise<void> {
+    const publish = this.#publishEvent ?? publishColleagueEvent;
+    await publish(event);
+  }
+}
+
+const MAX_CHILD_RESTARTS = 5;
+const RESTART_WINDOW_MS = 10 * 60 * 1000;
+const MAILBOX_WATCH_MS = 200;
+
+interface ChildRecord {
+  child: ChildProcess;
+  alive: boolean;
+  restarts: number[];
+  restartTimer?: ReturnType<typeof setTimeout>;
+}
+
+function mergeMailboxItems(disk: MailItem[], mem: MailItem[]): MailItem[] {
+  const rank: Record<string, number> = { queued: 0, running: 1, done: 2, failed: 2 };
+  const map = new Map<string, MailItem>();
+  for (const item of disk) map.set(item.id, item);
+  for (const item of mem) {
+    const prev = map.get(item.id);
+    if (!prev) {
+      map.set(item.id, item);
+      continue;
+    }
+    const rp = rank[prev.status] ?? 0;
+    const ri = rank[item.status] ?? 0;
+    if (ri > rp) {
+      map.set(item.id, item);
+    } else if (ri === rp) {
+      map.set(item.id, {
+        ...prev,
+        ...item,
+        ...(prev.reply && !item.reply ? { reply: prev.reply } : {}),
+      });
+    }
+  }
+  const items = [...map.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  if (items.length > MAX_MAIL) items.splice(0, items.length - MAX_MAIL);
+  return items;
 }

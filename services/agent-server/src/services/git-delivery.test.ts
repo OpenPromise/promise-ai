@@ -13,6 +13,7 @@ import {
   selectDeliveryCandidates,
   shouldAutoCommitMail,
   snapshotGitStatus,
+  withGitDeliveryLock,
 } from './git-delivery.js';
 
 const execFileAsync = promisify(execFile);
@@ -284,5 +285,27 @@ describe('deliverMailChanges (hermetic tmp git repo)', () => {
       { encoding: 'utf8', windowsHide: true },
     );
     expect(log.stdout.trim().split('\n')).toHaveLength(1);
+  });
+});
+
+describe('withGitDeliveryLock', () => {
+  it('two overlapping critical sections do not interleave', async () => {
+    const work = await mkdtemp(path.join(tmpdir(), 'git-delivery-lock-'));
+    await execFileAsync('git', ['init', '-b', 'main', work], { windowsHide: true });
+    const order: number[] = [];
+    await Promise.all([
+      withGitDeliveryLock(work, async () => {
+        order.push(1);
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        order.push(2);
+      }),
+      withGitDeliveryLock(work, async () => {
+        order.push(3);
+        order.push(4);
+      }),
+    ]);
+    const serialized =
+      JSON.stringify(order) === '[1,2,3,4]' || JSON.stringify(order) === '[3,4,1,2]';
+    expect(serialized).toBe(true);
   });
 });

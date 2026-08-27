@@ -2,11 +2,34 @@ import { execFile } from 'node:child_process';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { withExclusiveFileLock } from './file-lock.js';
 
 const execFileAsync = promisify(execFile);
 
 /** compose 把仓库 bind-mount 在容器 /app（含 .git）。 */
 export const DEFAULT_GIT_REPO_DIR = '/app';
+
+/** 跨进程提交串行化。锁文件在仓库 .git 下，进程崩溃由 flock 释放。 */
+export const GIT_DELIVERY_LOCK_NAME = 'promise-ai-delivery.lock';
+
+export function gitDeliveryLockPath(cwd: string): string {
+  return path.join(cwd, '.git', GIT_DELIVERY_LOCK_NAME);
+}
+
+/**
+ * 两个子进程同时 commit 时用 flock 互斥。没有 .git 则不加锁直接跑
+ * （deliverMailChanges 随后 snapshot 也会跳过）。
+ */
+export async function withGitDeliveryLock<T>(cwd: string, fn: () => Promise<T>): Promise<T> {
+  const gitDir = path.join(cwd, '.git');
+  try {
+    await stat(gitDir);
+  } catch {
+    return fn();
+  }
+  return withExclusiveFileLock(gitDeliveryLockPath(cwd), fn);
+}
+
 
 export const GIT_BOT_IDENTITY = {
   GIT_AUTHOR_NAME: 'Promise AI Bot',
@@ -243,6 +266,16 @@ function outputTail(result: GitRun, cap = 240): string {
  * 不写 git config；身份只走 GIT_AUTHOR_* / GIT_COMMITTER_*。push 失败不抛，wrapNote 带哈希。
  */
 export async function deliverMailChanges(input: {
+  cwd: string;
+  startPorcelain: string;
+  startedAt: string;
+  colleague: string;
+  mailSubject: string;
+}): Promise<GitDeliveryResult> {
+  return withGitDeliveryLock(input.cwd, () => deliverMailChangesUnlocked(input));
+}
+
+async function deliverMailChangesUnlocked(input: {
   cwd: string;
   startPorcelain: string;
   startedAt: string;
