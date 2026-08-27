@@ -71,12 +71,19 @@ describe('ColleagueOffice', () => {
     await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
-  async function makeOffice(options: { store?: InMemorySessionStore; runTask?: RunTaskFn } = {}) {
+  async function makeOffice(
+    options: { store?: InMemorySessionStore; runTask?: RunTaskFn; gitRepoDir?: string | null } = {},
+  ) {
     const mailboxDir = await mkdtemp(path.join(tmpdir(), 'mailboxes-'));
     dirs.push(mailboxDir);
     const store = options.store ?? new InMemorySessionStore();
     const runners = stubRunners(options.runTask);
-    const office = new ColleagueOffice({ store, runners, mailboxDir });
+    const office = new ColleagueOffice({
+      store,
+      runners,
+      mailboxDir,
+      gitRepoDir: options.gitRepoDir ?? null,
+    });
     offices.push(office);
     await office.ensureSessions();
     await office.hydrate();
@@ -1199,7 +1206,7 @@ describe('ColleagueOffice', () => {
       'utf8',
     );
     const store = new InMemorySessionStore();
-    const office = new ColleagueOffice({ store, runners: stubRunners(), mailboxDir });
+    const office = new ColleagueOffice({ store, runners: stubRunners(), mailboxDir, gitRepoDir: null });
     offices.push(office);
     await office.ensureSessions();
     await office.hydrate();
@@ -1213,6 +1220,158 @@ describe('ColleagueOffice', () => {
     expect(items.every((item) => item.status !== 'failed')).toBe(true);
     expect(items.some((item) => (item.reply ?? '').includes('进程重启'))).toBe(false);
     expect(office.getTask(leftover.taskId)).toBeUndefined();
+  });
+
+  it('完整成功后把本任务新建文件自动提交；开始就脏且 mtime 未变的 leftover 不入库', async () => {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const execFileAsync = promisify(execFile);
+    const repo = await mkdtemp(path.join(tmpdir(), 'office-git-'));
+    dirs.push(repo);
+    await execFileAsync('git', ['init', '-b', 'main', repo], { windowsHide: true });
+    await writeFile(path.join(repo, 'README.md'), 'init\n', 'utf8');
+    await execFileAsync('git', ['-C', repo, 'add', 'README.md'], { windowsHide: true });
+    await execFileAsync(
+      'git',
+      ['-C', repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-m', 'init'],
+      { windowsHide: true },
+    );
+    await writeFile(path.join(repo, 'leftover.md'), 'already dirty\n', 'utf8');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const conversation: ColleagueConversation = {
+      async *runChat(input) {
+        if (input.userMessage.startsWith('【同事回信】')) {
+          yield { type: 'chat.done', payload: { text: '小真把主页交来了。' } };
+          return;
+        }
+        await writeFile(path.join(repo, 'xiaozhen-index.html'), '<h1>v2</h1>\n', 'utf8');
+        yield { type: 'chat.done', payload: { text: '结论：主页 v2 已落盘。不用再派。' } };
+      },
+    };
+    const { office } = await makeOffice({ gitRepoDir: repo });
+    const events: ColleagueTaskEvent[] = [];
+    office.onEvent((event) => events.push(event));
+    office.attachConversation(conversation);
+
+    await office.delegate('xiaozhen', '做小真主页 v2', { hubSessionId: 'hub-git' });
+    await waitFor(() => events.some((event) => event.type === 'done'), 4000);
+
+    const mail = office.listMailbox('xiaozhen')[0];
+    expect(mail?.status).toBe('done');
+    expect(mail?.reply).toMatch(/已提交但未推送/);
+    const log = await execFileAsync('git', ['-C', repo, 'log', '-1', '--format=%s%n%an'], {
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    expect(log.stdout).toContain('docs/feat(小真): 做小真主页 v2');
+    expect(log.stdout).toContain('Promise AI Bot');
+    const show = await execFileAsync('git', ['-C', repo, 'show', '--name-only', '--pretty=format:', 'HEAD'], {
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    expect(show.stdout).toContain('xiaozhen-index.html');
+    expect(show.stdout).not.toContain('leftover.md');
+    const wrap = events.find((event) => event.type === 'done');
+    expect(wrap?.result).toBeTruthy();
+  });
+
+  it('nested mail.ask 不自动提交对方工作区新文件', async () => {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const execFileAsync = promisify(execFile);
+    const repo = await mkdtemp(path.join(tmpdir(), 'office-git-ask-'));
+    dirs.push(repo);
+    await execFileAsync('git', ['init', '-b', 'main', repo], { windowsHide: true });
+    await writeFile(path.join(repo, 'README.md'), 'init\n', 'utf8');
+    await execFileAsync('git', ['-C', repo, 'add', 'README.md'], { windowsHide: true });
+    await execFileAsync(
+      'git',
+      ['-C', repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-m', 'init'],
+      { windowsHide: true },
+    );
+
+    const conversation: ColleagueConversation = {
+      async *runChat(input) {
+        if (input.userMessage.startsWith('【小美来信】')) {
+          await writeFile(path.join(repo, 'ask-notes.md'), 'from nested ask\n', 'utf8');
+          yield { type: 'chat.done', payload: { text: '对比度够。' } };
+          return;
+        }
+        if (input.userMessage.startsWith('【同事回信】')) {
+          yield { type: 'chat.done', payload: { text: '不该验收小真。' } };
+          return;
+        }
+        yield { type: 'chat.done', payload: { text: '小美做完了，结论清楚，不用再派。' } };
+      },
+    };
+    const { office } = await makeOffice({ gitRepoDir: repo });
+    office.attachConversation(conversation);
+    await office.delegate('xiaomei', '做主页', { hubSessionId: 'hub-git-ask' });
+    await waitFor(() => office.listMailbox('xiaomei')[0]?.status === 'done', 4000);
+
+    const asked = await office.ask('xiaozhen', '对比度够吗', { from: 'xiaomei' });
+    expect(asked.status).toBe('success');
+    const log = await execFileAsync('git', ['-C', repo, 'log', '--oneline'], {
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    expect(log.stdout).not.toContain('ask-notes');
+    const status = await execFileAsync('git', ['-C', repo, 'status', '--porcelain'], {
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    expect(status.stdout).toContain('ask-notes.md');
+  });
+
+  it('半成品催交失败后不提交本任务新建文件', async () => {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const execFileAsync = promisify(execFile);
+    const repo = await mkdtemp(path.join(tmpdir(), 'office-git-fail-'));
+    dirs.push(repo);
+    await execFileAsync('git', ['init', '-b', 'main', repo], { windowsHide: true });
+    await writeFile(path.join(repo, 'README.md'), 'init\n', 'utf8');
+    await execFileAsync('git', ['-C', repo, 'add', 'README.md'], { windowsHide: true });
+    await execFileAsync(
+      'git',
+      ['-C', repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-m', 'init'],
+      { windowsHide: true },
+    );
+    const dsml =
+      '现在做交付前自检…\n' +
+      `<\uFF5CDSML\uFF5Ctool_calls>\n</tool_calls>`;
+    const conversation: ColleagueConversation = {
+      async *runChat(input) {
+        if (input.userMessage.startsWith('【小夜催交】')) {
+          yield { type: 'chat.done', payload: { text: '现在做交付前自检…' } };
+          return;
+        }
+        if (input.userMessage.startsWith('【同事回信】')) {
+          yield { type: 'chat.done', payload: { text: '小美这单没交完。' } };
+          return;
+        }
+        await writeFile(path.join(repo, 'half.md'), 'half\n', 'utf8');
+        yield { type: 'chat.done', payload: { text: dsml } };
+      },
+    };
+    const { office } = await makeOffice({ gitRepoDir: repo });
+    const events: ColleagueTaskEvent[] = [];
+    office.onEvent((event) => events.push(event));
+    office.attachConversation(conversation);
+    await office.delegate('xiaomei', '做设计', { hubSessionId: 'hub-git-fail' });
+    await waitFor(() => events.some((event) => event.type === 'done'), 4000);
+    expect(office.listMailbox('xiaomei')[0]?.status).toBe('failed');
+    const log = await execFileAsync('git', ['-C', repo, 'log', '--oneline'], {
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    expect(log.stdout.trim().split('\n')).toHaveLength(1);
+    const status = await execFileAsync('git', ['-C', repo, 'status', '--porcelain'], {
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    expect(status.stdout).toContain('half.md');
   });
 
 });

@@ -14,6 +14,14 @@ import { XIAO_MEI_PROMPT } from './designer-tools.js';
 import { XIAO_ZHEN_PROMPT } from './qa-tools.js';
 import { XIAO_ZHI_PROMPT } from './research-tools.js';
 import { containsDsmlToolXml, stripDsmlToolXml } from './conversation.js';
+import {
+  DEFAULT_GIT_REPO_DIR,
+  deliverMailChanges,
+  shouldAutoCommitMail,
+  snapshotGitStatus,
+  type GitDeliveryResult,
+  type GitStatusSnapshot,
+} from './git-delivery.js';
 
 /** 五位同事短 id（小夜除外）。会话 metadata.colleagueId / 收件箱文件名用这个。 */
 export type ColleagueId = 'xiaohei' | 'xiaoyou' | 'xiaomei' | 'xiaozhen' | 'xiaozhi';
@@ -100,6 +108,8 @@ export interface ColleagueOfficeOptions {
   runners: ColleagueRunners;
   /** 收件箱 JSON 目录，默认 ./data/mailboxes */
   mailboxDir?: string;
+  /** 自动提交对照的仓库根。默认 /app（compose bind-mount）。测试传 null 禁用，勿碰直播 checkout。 */
+  gitRepoDir?: string | null;
 }
 
 const RESULT_CAP = 8_000;
@@ -118,6 +128,7 @@ const WRAPUP_TOOL_ALLOWLIST: readonly string[] = ['memory.list', 'memory.remembe
 const NUDGE_TIMEOUT_MS = 60_000;
 const NUDGE_USER_MESSAGE =
   '【小夜催交】上一封把工具调用写成了正文/只报了进度。请立刻用自然语言交完整简报：结论、要点、要不要再派。不要再调工具。';
+const COMMIT_FAIL_NUDGE_PREFIX = '【小夜催交】文件改了但提交失败';
 /** 进度半成品：开头是「现在做/接下来/正在做交付前自检」，且没有像样的简报。 */
 const PROGRESS_STUB_START_RE = /^(现在做|接下来|正在做交付前自检)/;
 const PROGRESS_STUB_PHRASE_RE = /现在做交付前自检|正在做交付前自检/;
@@ -311,6 +322,7 @@ export class ColleagueOffice {
   readonly #store: SessionStore;
   readonly #runners: ColleagueRunners;
   readonly #mailboxDir: string;
+  readonly #gitRepoDir: string | null;
   readonly #sessionIds = new Map<ColleagueId, string>();
   readonly #mail = new Map<ColleagueId, MailItem[]>();
   readonly #tasks = new Map<string, ColleagueTask>();
@@ -323,8 +335,10 @@ export class ColleagueOffice {
   readonly #mailWaiters = new Map<string, Set<() => void>>();
   /** 入队时的 directory / timeout，重启后 #tasks 为空则用默认值。 */
   readonly #mailOptions = new Map<string, { directory: string; timeoutMinutes: number }>();
+  readonly #gitSnapshots = new Map<string, GitStatusSnapshot>();
   #conversation?: ColleagueConversation;
   #persistChain: Promise<void> = Promise.resolve();
+  #gitChain: Promise<unknown> = Promise.resolve();
   #attached = false;
   #workersStarted = false;
   #stopping = false;
@@ -333,6 +347,7 @@ export class ColleagueOffice {
     this.#store = options.store;
     this.#runners = options.runners;
     this.#mailboxDir = options.mailboxDir ?? path.resolve('./data/mailboxes');
+    this.#gitRepoDir = options.gitRepoDir === undefined ? DEFAULT_GIT_REPO_DIR : options.gitRepoDir;
   }
 
   /** 生产在 ConversationService 建好后注入；测试可传假 runChat。 */
@@ -672,10 +687,7 @@ export class ColleagueOffice {
 
   #oldestQueued(colleagueId: ColleagueId): MailItem | undefined {
     const queued = (this.#mail.get(colleagueId) ?? []).filter((item) => item.status === 'queued');
-    queued.sort((a, b) => {
-      const byTime = a.createdAt.localeCompare(b.createdAt);
-      return byTime !== 0 ? byTime : a.id.localeCompare(b.id);
-    });
+    queued.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     return queued[0];
   }
 
@@ -715,6 +727,7 @@ export class ColleagueOffice {
 
     mail.status = 'running';
     await this.#persist(colleagueId);
+    await this.#snapshotGit(mail.id);
     await this.#runLoop(colleagueId, mail, record, timeoutMinutes);
   }
 
@@ -920,6 +933,23 @@ export class ColleagueOffice {
         if (stripped) text = stripped;
       }
     }
+    if (ok) {
+      const delivery = await this.#autoCommitIfNeeded(mail, record);
+      if (delivery.commitError) {
+        const continued = await this.#nudgeIncompleteReply(
+          sessionId,
+          record.id,
+          conversation,
+          `${COMMIT_FAIL_NUDGE_PREFIX}: ${delivery.commitError}。请立刻用自然语言交完整简报：结论、要点、改了哪些文件。不要再调工具。`,
+        );
+        if (continued && !isIncompleteColleagueReply(continued)) {
+          text = continued;
+        }
+      }
+      if (delivery.wrapNote) {
+        text = `${text.trimEnd()}\n\n${delivery.wrapNote}`;
+      }
+    }
     await this.#settle(colleagueId, mail, record, {
       ok,
       text,
@@ -935,11 +965,12 @@ export class ColleagueOffice {
     sessionId: string,
     taskId: string,
     conversation: ColleagueConversation,
+    userMessage = NUDGE_USER_MESSAGE,
   ): Promise<string | undefined> {
     try {
       const iterator = conversation.runChat({
         sessionId,
-        userMessage: NUDGE_USER_MESSAGE,
+        userMessage,
         headless: true,
         toolAllowlist: [],
         toolBudget: 0,
@@ -961,12 +992,55 @@ export class ColleagueOffice {
     }
   }
 
+  async #snapshotGit(mailId: string): Promise<void> {
+    if (!this.#gitRepoDir) return;
+    const snap = await snapshotGitStatus(this.#gitRepoDir);
+    if (snap) this.#gitSnapshots.set(mailId, snap);
+  }
+
+  #withGit<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.#gitChain.then(fn, fn);
+    this.#gitChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  async #autoCommitIfNeeded(mail: MailItem, record: ColleagueTask): Promise<GitDeliveryResult> {
+    const empty: GitDeliveryResult = { committed: false, pushed: false };
+    if (!this.#gitRepoDir) return empty;
+    if (!shouldAutoCommitMail(mail)) return empty;
+    const snap = this.#gitSnapshots.get(mail.id);
+    if (!snap) return empty;
+    try {
+      return await this.#withGit(() =>
+        deliverMailChanges({
+          cwd: this.#gitRepoDir as string,
+          startPorcelain: snap.porcelain,
+          startedAt: record.startedAt ?? mail.createdAt,
+          colleague: record.colleague ?? colleagueName(mail.to),
+          mailSubject: mailSubject(mail),
+        }),
+      );
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      return {
+        committed: false,
+        pushed: false,
+        commitError: detail,
+        wrapNote: `文件改了但提交失败: ${detail}`,
+      };
+    }
+  }
+
   async #settle(
     colleagueId: ColleagueId,
     mail: MailItem,
     record: ColleagueTask,
     outcome: { ok: boolean; text: string; skipSession: boolean },
   ): Promise<void> {
+    this.#gitSnapshots.delete(mail.id);
     const name = record.colleague ?? colleagueName(colleagueId);
     const reply = truncate(outcome.text);
     record.status = outcome.ok ? 'success' : 'failed';
