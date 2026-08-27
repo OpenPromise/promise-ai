@@ -13,7 +13,7 @@ import {
   type ColleagueId,
   type ColleagueRunners,
 } from './colleague-office.js';
-import { colleagueForkEnabled } from './colleague-fork.js';
+import { colleagueForkEnabled, colleagueForkStaggerMs } from './colleague-fork.js';
 
 function stubSpec(id: string, name: string): ColleagueSpec {
   return {
@@ -75,6 +75,10 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void
 describe('colleagueForkEnabled', () => {
   it('vitest 默认关 fork', () => {
     expect(colleagueForkEnabled()).toBe(false);
+  });
+
+  it('vitest 默认不错开 fork（测试不睡 500ms）', () => {
+    expect(colleagueForkStaggerMs()).toBe(0);
   });
 });
 
@@ -150,5 +154,38 @@ describe('ColleagueOffice parent isolation', () => {
     expect(calls[0]?.startsWith('【同事回信】')).toBe(true);
     const done = events.find((event) => event.type === 'done');
     expect(done?.result).toContain('验收通过');
+  });
+
+  it('parent fork 按 forkStaggerMs 错开每位同事', async () => {
+    const mailboxDir = await mkdtemp(path.join(tmpdir(), 'mailboxes-stagger-'));
+    dirs.push(mailboxDir);
+    const store = new InMemorySessionStore();
+    const stamps: number[] = [];
+    const office = new ColleagueOffice({
+      store,
+      runners: stubRunners(),
+      mailboxDir,
+      gitRepoDir: null,
+      isolation: 'parent',
+      forkStaggerMs: 40,
+      forkWorker: () => {
+        stamps.push(Date.now());
+        return fakeChild();
+      },
+    });
+    offices.push(office);
+    await office.ensureSessions();
+    office.attachConversation({
+      async *runChat() {
+        yield { type: 'chat.done', payload: { text: 'ok' } };
+      },
+    });
+    await office.hydrate();
+    expect(stamps).toHaveLength(COLLEAGUE_IDS.length);
+    const span = (stamps[stamps.length - 1] ?? 0) - (stamps[0] ?? 0);
+    expect(span).toBeGreaterThanOrEqual(40 * (COLLEAGUE_IDS.length - 1) - 15);
+    for (let i = 1; i < stamps.length; i++) {
+      expect((stamps[i] ?? 0) - (stamps[i - 1] ?? 0)).toBeGreaterThanOrEqual(20);
+    }
   });
 });

@@ -5,7 +5,11 @@ import type { ChildProcess } from 'node:child_process';
 import type { SessionStore } from '@personal-ai/memory';
 import type { Session } from '@personal-ai/types';
 import { withExclusiveFileLock } from './file-lock.js';
-import { colleagueForkEnabled, forkColleagueWorker } from './colleague-fork.js';
+import {
+  colleagueForkEnabled,
+  colleagueForkStaggerMs,
+  forkColleagueWorker,
+} from './colleague-fork.js';
 import { publishColleagueEvent, type ColleagueChildEvent } from './colleague-internal.js';
 import type {
   ColleagueTask,
@@ -126,6 +130,11 @@ export interface ColleagueOfficeOptions {
   workerColleagueId?: ColleagueId;
   /** 测试注入 fork；生产默认 forkColleagueWorker。 */
   forkWorker?: (id: ColleagueId) => ChildProcess;
+  /**
+   * 相邻 fork 间隔（ms）。默认 500；vitest 0。
+   * 错开子进程 PostgresMemoryStore.init，避免向量迁移互锁。
+   */
+  forkStaggerMs?: number;
   /** child 把 progress/done POST 给父进程；缺省 publishColleagueEvent。 */
   publishEvent?: (event: ColleagueChildEvent) => Promise<void>;
 }
@@ -363,6 +372,7 @@ export class ColleagueOffice {
   #isolation: ColleagueIsolation;
   readonly #workerColleagueId?: ColleagueId;
   readonly #forkWorker: (id: ColleagueId) => ChildProcess;
+  readonly #forkStaggerMs: number;
   readonly #publishEvent?: (event: ColleagueChildEvent) => Promise<void>;
   readonly #children = new Map<ColleagueId, ChildRecord>();
   readonly #wrappedMailIds = new Set<string>();
@@ -377,6 +387,7 @@ export class ColleagueOffice {
     this.#isolation = options.isolation ?? 'inprocess';
     this.#workerColleagueId = options.workerColleagueId;
     this.#forkWorker = options.forkWorker ?? forkColleagueWorker;
+    this.#forkStaggerMs = options.forkStaggerMs ?? colleagueForkStaggerMs();
     this.#publishEvent = options.publishEvent;
   }
 
@@ -743,7 +754,7 @@ export class ColleagueOffice {
       return;
     }
     if (this.#isolation === 'parent') {
-      const spawned = this.#forkAll();
+      const spawned = await this.#forkAll();
       if (spawned === 0) {
         this.#fallbackInProcess('fork() 一个都没拉起');
         return;
@@ -1455,9 +1466,17 @@ export class ColleagueOffice {
     await rename(tmp, file);
   }
 
-  #forkAll(): number {
+  async #forkAll(): Promise<number> {
     let spawned = 0;
+    if (this.#forkStaggerMs > 0) {
+      console.log(`[colleagues] forking workers with ${this.#forkStaggerMs}ms stagger`);
+    }
     for (const id of COLLEAGUE_IDS) {
+      if (this.#stopping) break;
+      if (spawned > 0 && this.#forkStaggerMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, this.#forkStaggerMs));
+        if (this.#stopping) break;
+      }
       if (this.#forkOne(id)) spawned += 1;
     }
     return spawned;

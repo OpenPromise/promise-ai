@@ -12,6 +12,20 @@ export function colleagueForkEnabled(): boolean {
   return true;
 }
 
+/** 相邻同事子进程 fork 间隔，避免并行 PostgresMemoryStore.init 撞向量迁移。 */
+export const DEFAULT_COLLEAGUE_FORK_STAGGER_MS = 500;
+
+export function colleagueForkStaggerMs(): number {
+  const raw = (process.env.COLLEAGUE_FORK_STAGGER_MS ?? '').trim();
+  if (raw !== '') {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed >= 0) return Math.floor(parsed);
+  }
+  if (process.env.VITEST) return 0;
+  if ((process.env.NODE_ENV ?? '').trim().toLowerCase() === 'test') return 0;
+  return DEFAULT_COLLEAGUE_FORK_STAGGER_MS;
+}
+
 function tsxExecArgv(): string[] {
   if (process.execArgv.some((arg) => arg.includes('tsx'))) return process.execArgv;
   if (process.execArgv.length > 0) return process.execArgv;

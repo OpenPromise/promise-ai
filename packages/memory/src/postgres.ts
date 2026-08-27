@@ -42,6 +42,9 @@ function toEntry(row: MemoryRow): MemoryEntry {
   };
 }
 
+/** 跨进程串行化 memories schema 迁移（CREATE EXTENSION / 改 embedding 列）。 */
+const MEMORY_SCHEMA_LOCK_KEY = 0x50524d31; // 'PRM1'
+
 /**
  * PostgreSQL + pgvector memory store. Falls back to the injected embedder for
  * vector generation; cosine distance (`<=>`) drives semantic search.
@@ -58,8 +61,31 @@ export class PostgresMemoryStore implements MemoryStore {
   }
 
   async init(): Promise<void> {
-    await this.#pool.query('CREATE EXTENSION IF NOT EXISTS vector');
-    await this.#pool.query(`
+    const client = await this.#pool.connect();
+    try {
+      await client.query('SELECT pg_advisory_lock($1)', [MEMORY_SCHEMA_LOCK_KEY]);
+      try {
+        await this.#migrateSchema(client);
+      } finally {
+        try {
+          await client.query('SELECT pg_advisory_unlock($1)', [MEMORY_SCHEMA_LOCK_KEY]);
+        } catch {
+          // 连接已死则会话级 advisory lock 随断开释放
+        }
+      }
+    } finally {
+      client.release();
+    }
+  }
+
+  async #migrateSchema(client: pg.PoolClient): Promise<void> {
+    const ext = await client.query<{ exists: boolean }>(
+      `SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'vector') AS exists`,
+    );
+    if (!ext.rows[0]?.exists) {
+      await client.query('CREATE EXTENSION IF NOT EXISTS vector');
+    }
+    await client.query(`
       CREATE TABLE IF NOT EXISTS memories (
         id uuid PRIMARY KEY,
         kind text NOT NULL CHECK (kind IN ('episodic', 'semantic')),
@@ -71,9 +97,9 @@ export class PostgresMemoryStore implements MemoryStore {
       )
     `);
     // 幂等迁移：已存在的旧表没有 tag 列（CREATE TABLE IF NOT EXISTS 不会加列）
-    await this.#pool.query('ALTER TABLE memories ADD COLUMN IF NOT EXISTS tag text');
-    await this.#pool.query('CREATE INDEX IF NOT EXISTS memories_kind_idx ON memories (kind)');
-    await this.#ensureDimensionMatches();
+    await client.query('ALTER TABLE memories ADD COLUMN IF NOT EXISTS tag text');
+    await client.query('CREATE INDEX IF NOT EXISTS memories_kind_idx ON memories (kind)');
+    await this.#ensureDimensionMatches(client);
   }
 
   /**
@@ -81,18 +107,23 @@ export class PostgresMemoryStore implements MemoryStore {
    * 重建 embedding 列并用当前嵌入器重新嵌入存量内容，保留记忆数据。
    * 迁移必须落在同一连接上才是真事务（pool.query 每次可能换连接），
    * 失败时回滚并抛错阻止启动——绝不能留下"已 DROP 又未回填"的空向量列。
+   *
+   * pgvector 的 atttypmod 就是维度本身（vector(1024) → 1024），不像 varchar 要减 4。
+   * 减 4 会把已是 1024 的列读成 1020，每次启动都 DROP/ADD，五份子进程并行时死锁。
    */
-  async #ensureDimensionMatches(): Promise<void> {
-    const dimResult = await this.#pool.query<{ atttypmod: number | null }>(
-      `SELECT atttypmod FROM pg_attribute
-       WHERE attrelid = 'memories'::regclass AND attname = 'embedding'`,
+  async #ensureDimensionMatches(client: pg.PoolClient): Promise<void> {
+    const dimResult = await client.query<{ atttypmod: number | null; formatted: string | null }>(
+      `SELECT atttypmod, format_type(atttypid, atttypmod) AS formatted
+       FROM pg_attribute
+       WHERE attrelid = 'memories'::regclass AND attname = 'embedding' AND NOT attisdropped`,
     );
-    const typmod = dimResult.rows[0]?.atttypmod;
-    if (typmod == null) return;
-    const currentDim = typmod - 4;
+    const row = dimResult.rows[0];
+    if (!row) return;
+    const parsed = row.formatted?.match(/vector\((\d+)\)/i);
+    const currentDim = parsed ? Number(parsed[1]) : row.atttypmod;
+    if (currentDim == null || currentDim < 1) return;
     if (currentDim === this.#dimensions) return;
 
-    const client = await this.#pool.connect();
     try {
       await client.query('BEGIN');
       // 行快照必须在同一事务连接上取（N-P2-3）：BEGIN 前的快照与 DDL 后状态不一致
@@ -101,10 +132,10 @@ export class PostgresMemoryStore implements MemoryStore {
       );
       await client.query('ALTER TABLE memories DROP COLUMN embedding');
       await client.query(`ALTER TABLE memories ADD COLUMN embedding vector(${this.#dimensions})`);
-      for (const row of rows.rows) {
-        const vector = await this.#embedder.embed(row.content);
+      for (const memoryRow of rows.rows) {
+        const vector = await this.#embedder.embed(memoryRow.content);
         await client.query('UPDATE memories SET embedding = $2::vector WHERE id = $1', [
-          row.id,
+          memoryRow.id,
           JSON.stringify(vector),
         ]);
       }
@@ -120,8 +151,6 @@ export class PostgresMemoryStore implements MemoryStore {
           `${error instanceof Error ? error.message : String(error)}`,
         { cause: error },
       );
-    } finally {
-      client.release();
     }
   }
 
