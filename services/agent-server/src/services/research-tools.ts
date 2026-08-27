@@ -2,6 +2,7 @@ import type { ColleagueSpec, ColleagueTaskRunner } from './colleague-task-runner
 import {
   createColleagueDelegateTool,
   createColleagueStatusTool,
+  type ColleagueMailboxGateway,
 } from './colleague-tools.js';
 
 export const XIAO_ZHI_PROMPT = `你是"小知"，用户团队的专属研究员/情报官（Researcher & Intelligence）。你温和、好奇、严谨；你负责技术调研、竞品与开源项目分析、模型与接口变更跟踪、以及团队对外情报内容的产出。你的信条是："先看清世界，再动手改变它。"小夜姐（私人助理/大脑）是你的监督者，你是她手下的研究员；你的简报是 CEO 决策、小黑选型、团队学习的依据。
@@ -50,22 +51,26 @@ export const XIAO_ZHI_COLLEAGUE: ColleagueSpec = {
   persistFileName: 'research-tasks.json',
 };
 
-export function createResearchTool(runner: ColleagueTaskRunner) {
+export function createResearchTool(runner: ColleagueTaskRunner, office?: ColleagueMailboxGateway) {
   return createColleagueDelegateTool({
     name: 'research.delegate',
     displayName: '小知',
     statusToolName: 'research.status',
     runner,
+    colleagueId: 'xiaozhi',
+    office,
     defaultTimeoutMinutes: 15,
     description:
-      '把研究/调研/情报任务派给"小知"（专属研究员/情报官子代理）执行：技术调研、竞品与开源项目分析、模型与接口变更跟踪、对外情报内容产出。小知温和严谨、结论先行、逢结论必标来源与置信度，产出沉淀到 /app/xiaozhi/ 知识库。她只读代码、只写研究文档：不改产品代码（归小黑）、不做部署（归小优）。由助理（小夜）作为监督者调用。这是异步任务：调用后立即返回 taskId（任务在后台运行，可继续与用户聊天），进度与完成会自动通知，也可用 research.status 查询。directory 用 /app 等持久目录。轻量问题（查文件、看状态）不要用此工具，用 filesystem.search / server.shell / system.status 等轻量工具。她已有 web.search / web.fetch 做快速检索；只有需要专门调研/写简报时才派给小知。',
+      '给小知发任务：把研究/调研/情报任务写到小知的收件箱（她是独立的研究员同事，有自己的会话记忆，不是一次性脚本）：技术调研、竞品与开源项目分析、模型与接口变更跟踪、对外情报内容产出。小知温和严谨、结论先行、逢结论必标来源与置信度，产出沉淀到 /app/xiaozhi/ 知识库。她只读代码、只写研究文档：不改产品代码（归小黑）、不做部署（归小优）。由助理（小夜）作为监督者调用。这是异步任务：调用后立即返回 taskId（任务在后台运行，可继续与用户聊天），进度与完成会自动通知，也可用 research.status 查询（含收件箱最近几封）。directory 用 /app 等持久目录。轻量问题（查文件、看状态）不要用此工具，用 filesystem.search / server.shell / system.status 等轻量工具。她已有 web.search / web.fetch 做快速检索；只有需要专门调研/写简报时才派给小知。',
   });
 }
 
-export function createResearchStatusTool(runner: ColleagueTaskRunner) {
+export function createResearchStatusTool(runner: ColleagueTaskRunner, office?: ColleagueMailboxGateway) {
   return createColleagueStatusTool({
     name: 'research.status',
     displayName: '小知',
     runner,
+    colleagueId: 'xiaozhi',
+    office,
   });
 }

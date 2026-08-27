@@ -49,6 +49,7 @@ import {
   XIAO_ZHI_COLLEAGUE,
 } from './services/research-tools.js';
 import { ColleagueTaskRunner } from './services/colleague-task-runner.js';
+import { ColleagueOffice } from './services/colleague-office.js';
 import { createSelfTools } from './services/self-tools.js';
 import { recoverInterruptedSessions } from './services/restart-recovery.js';
 import { createWeixinTools } from './services/weixin-tools.js';
@@ -377,6 +378,26 @@ const colleagueRunners = [
   qaTaskRunner,
   researchTaskRunner,
 ];
+const colleagueOffice = new ColleagueOffice({
+  store,
+  mailboxDir: process.env.COLLEAGUE_MAILBOX_DIR ?? './data/mailboxes',
+  runners: {
+    xiaohei: engineerTaskRunner,
+    xiaoyou: opsTaskRunner,
+    xiaomei: designerTaskRunner,
+    xiaozhen: qaTaskRunner,
+    xiaozhi: researchTaskRunner,
+  },
+});
+try {
+  const ensured = await colleagueOffice.ensureSessions();
+  const ids = [...ensured.entries()].map(([id, sessionId]) => `${id}=${sessionId.slice(0, 8)}`);
+  console.log(`[colleagues] ensured ${ensured.size} session(s): ${ids.join(', ')}`);
+} catch (error) {
+  console.warn(
+    `[colleagues] ensureSessions failed (${error instanceof Error ? error.message : String(error)}), continuing without colleague sessions`,
+  );
+}
 // 返回中断任务列表（进程重启时被杀的 running 任务），事件通道就绪后补发通知
 const interruptedColleagueTasks: Array<{ runner: ColleagueTaskRunner; id: string }> = [];
 for (const runner of colleagueRunners) {
@@ -384,16 +405,23 @@ for (const runner of colleagueRunners) {
     interruptedColleagueTasks.push({ runner, id: task.id });
   }
 }
-toolRegistry.register(createEngineerTool(engineerTaskRunner));
-toolRegistry.register(createEngineerStatusTool(engineerTaskRunner));
-toolRegistry.register(createOpsTool(opsTaskRunner));
-toolRegistry.register(createOpsStatusTool(opsTaskRunner));
-toolRegistry.register(createDesignerTool(designerTaskRunner));
-toolRegistry.register(createDesignerStatusTool(designerTaskRunner));
-toolRegistry.register(createQaTool(qaTaskRunner));
-toolRegistry.register(createQaStatusTool(qaTaskRunner));
-toolRegistry.register(createResearchTool(researchTaskRunner));
-toolRegistry.register(createResearchStatusTool(researchTaskRunner));
+try {
+  await colleagueOffice.hydrate();
+} catch (error) {
+  console.warn(
+    `[colleagues] hydrate failed (${error instanceof Error ? error.message : String(error)})`,
+  );
+}
+toolRegistry.register(createEngineerTool(engineerTaskRunner, colleagueOffice));
+toolRegistry.register(createEngineerStatusTool(engineerTaskRunner, colleagueOffice));
+toolRegistry.register(createOpsTool(opsTaskRunner, colleagueOffice));
+toolRegistry.register(createOpsStatusTool(opsTaskRunner, colleagueOffice));
+toolRegistry.register(createDesignerTool(designerTaskRunner, colleagueOffice));
+toolRegistry.register(createDesignerStatusTool(designerTaskRunner, colleagueOffice));
+toolRegistry.register(createQaTool(qaTaskRunner, colleagueOffice));
+toolRegistry.register(createQaStatusTool(qaTaskRunner, colleagueOffice));
+toolRegistry.register(createResearchTool(researchTaskRunner, colleagueOffice));
+toolRegistry.register(createResearchStatusTool(researchTaskRunner, colleagueOffice));
 // server.shell：容器内终端（L3）——"云服务器即她的世界"的自主操作入口。
 toolRegistry.register(createServerShellTool());
 // system.status：服务器健康巡检（L0 只读）——定时任务自主监控用。

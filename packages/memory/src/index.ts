@@ -36,6 +36,8 @@ export interface UpdateSessionInput {
   messages?: ChatMessage[];
   /** Merges into the existing metadata (used for compaction bookkeeping). */
   metadata?: Record<string, unknown>;
+  /** Refresh a colleague (or other) session's system prompt without wiping history. */
+  systemPrompt?: string;
   /**
    * 条件替换护栏（压缩用）：只有当前 messages 数量等于该值时才会整列替换，
    * 防止压缩的"读→LLM 摘要→写回"窗口里其它通道追加的消息被覆盖。
@@ -107,6 +109,9 @@ export class InMemorySessionStore implements SessionStore {
     }
     if (input.metadata) {
       session.metadata = { ...(session.metadata ?? {}), ...input.metadata };
+    }
+    if (input.systemPrompt !== undefined) {
+      session.systemPrompt = input.systemPrompt;
     }
     session.updatedAt = new Date().toISOString();
     return session;

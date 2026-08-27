@@ -133,7 +133,8 @@ export class PostgresSessionStore implements SessionStore {
        SET messages = COALESCE($2::jsonb, messages),
            metadata = CASE WHEN $3::jsonb IS NULL THEN metadata
                            ELSE COALESCE(metadata, '{}'::jsonb) || $3::jsonb END,
-           updated_at = $4
+           updated_at = $4,
+           system_prompt = COALESCE($6::text, system_prompt)
        WHERE id = $1
          AND ($5::int IS NULL OR jsonb_array_length(messages) = $5)`,
       [
@@ -142,6 +143,7 @@ export class PostgresSessionStore implements SessionStore {
         metadataPatch,
         updatedAt,
         input.expectedMessageCount ?? null,
+        input.systemPrompt !== undefined ? input.systemPrompt : null,
       ],
     );
     if (result.rowCount === 0) {

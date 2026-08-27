@@ -2,6 +2,7 @@ import type { ColleagueSpec, ColleagueTaskRunner } from './colleague-task-runner
 import {
   createColleagueDelegateTool,
   createColleagueStatusTool,
+  type ColleagueMailboxGateway,
 } from './colleague-tools.js';
 
 export const XIAO_ZHEN_PROMPT = `你是"小真"，用户团队的专属测试/QA 工程师（QA Engineer）。你较真、挑剔、对事不对人；你只对质量负责，不给任何人面子——包括小黑。你的信条是："没有证据的'能用'，等于不能用。"小夜姐（私人助理/大脑）是你的监督者，你是她手下的质量守门人；你验收的对象主要是小黑（工程师）的交付与线上系统的真实状态。
@@ -48,22 +49,26 @@ export const XIAO_ZHEN_COLLEAGUE: ColleagueSpec = {
   persistFileName: 'qa-tasks.json',
 };
 
-export function createQaTool(runner: ColleagueTaskRunner) {
+export function createQaTool(runner: ColleagueTaskRunner, office?: ColleagueMailboxGateway) {
   return createColleagueDelegateTool({
     name: 'qa.delegate',
     displayName: '小真',
     statusToolName: 'qa.status',
     runner,
+    colleagueId: 'xiaozhen',
+    office,
     defaultTimeoutMinutes: 20,
     description:
-      '把测试/质量验收任务派给"小真"（专属 QA 工程师子代理）执行：验收标准梳理、测试计划、typecheck/单元测试/构建/冒烟执行、缺陷清单、回归验证。小真较真挑剔、证据驱动，是独立的质量守门人：发现缺陷只报告不修复（修复归小黑），只允许新增/修改测试代码与测试报告，绝不改产品代码。由助理（小夜）作为监督者调用。这是异步任务：调用后立即返回 taskId（任务在后台运行，可继续与用户聊天），进度与完成会自动通知，也可用 qa.status 查询。directory 用 /app 等持久目录。轻量问题（查文件、看状态）不要用此工具，用 filesystem.search / server.shell / system.status 等轻量工具。',
+      '给小真发任务：把测试/质量验收任务写到小真的收件箱（她是独立的 QA 同事，有自己的会话记忆，不是一次性脚本）：验收标准梳理、测试计划、typecheck/单元测试/构建/冒烟执行、缺陷清单、回归验证。小真较真挑剔、证据驱动，是独立的质量守门人：发现缺陷只报告不修复（修复归小黑），只允许新增/修改测试代码与测试报告，绝不改产品代码。由助理（小夜）作为监督者调用。这是异步任务：调用后立即返回 taskId（任务在后台运行，可继续与用户聊天），进度与完成会自动通知，也可用 qa.status 查询（含收件箱最近几封）。directory 用 /app 等持久目录。轻量问题（查文件、看状态）不要用此工具，用 filesystem.search / server.shell / system.status 等轻量工具。',
   });
 }
 
-export function createQaStatusTool(runner: ColleagueTaskRunner) {
+export function createQaStatusTool(runner: ColleagueTaskRunner, office?: ColleagueMailboxGateway) {
   return createColleagueStatusTool({
     name: 'qa.status',
     displayName: '小真',
     runner,
+    colleagueId: 'xiaozhen',
+    office,
   });
 }

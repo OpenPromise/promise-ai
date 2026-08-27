@@ -60,4 +60,14 @@ describe('InMemorySessionStore', () => {
     });
     expect(updated.updatedAt >= session.updatedAt).toBe(true);
   });
+
+  it('can refresh systemPrompt via updateSession without wiping messages', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: 'old' });
+    await store.addMessage(session.id, { role: 'user', content: 'hi' });
+    const updated = await store.updateSession(session.id, { systemPrompt: 'new prompt' });
+    expect(updated.systemPrompt).toBe('new prompt');
+    expect(updated.messages).toHaveLength(1);
+    expect(updated.messages[0]?.content).toBe('hi');
+  });
 });

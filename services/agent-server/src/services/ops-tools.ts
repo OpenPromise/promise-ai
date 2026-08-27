@@ -8,6 +8,7 @@ import {
 import {
   createColleagueDelegateTool,
   createColleagueStatusTool,
+  type ColleagueMailboxGateway,
 } from './colleague-tools.js';
 import { appendOpsAudit, isLikelyDestructive, resolveGitHead } from './ops-audit.js';
 
@@ -73,22 +74,26 @@ export function createOpsTaskRunner(
   });
 }
 
-export function createOpsTool(runner: ColleagueTaskRunner) {
+export function createOpsTool(runner: ColleagueTaskRunner, office?: ColleagueMailboxGateway) {
   return createColleagueDelegateTool({
     name: 'ops.delegate',
     displayName: '小优',
     statusToolName: 'ops.status',
     runner,
+    colleagueId: 'xiaoyou',
+    office,
     defaultTimeoutMinutes: 15,
     description:
-      '把服务器运维任务派给"小优"（专属运维工程师子代理）执行：监控/部署/巡检/故障排查/安全/自动化。小优调皮可爱但专业，管理整个服务器。由助理（小夜）作为监督者调用。这是异步任务：调用后立即返回 taskId（任务在后台运行，可继续与用户聊天），进度与完成会自动通知，也可用 ops.status 查询。小优拥有全权限（danger-full-access，可管理系统服务、防火墙、进程、磁盘等）。directory 用 /app 等持久目录。轻量问题（看磁盘、查端口、看进程、问现在几点）不要用此工具，用 system.status / server.shell 等轻量工具。',
+      '给小优发任务：把服务器运维任务写到小优的收件箱（她是独立的运维同事，有自己的会话记忆，不是一次性脚本）：监控/部署/巡检/故障排查/安全/自动化。小优调皮可爱但专业，管理整个服务器。由助理（小夜）作为监督者调用。这是异步任务：调用后立即返回 taskId（任务在后台运行，可继续与用户聊天），进度与完成会自动通知，也可用 ops.status 查询（含收件箱最近几封）。小优拥有全权限（danger-full-access，可管理系统服务、防火墙、进程、磁盘等）。directory 用 /app 等持久目录。轻量问题（看磁盘、查端口、看进程、问现在几点）不要用此工具，用 system.status / server.shell 等轻量工具。',
   });
 }
 
-export function createOpsStatusTool(runner: ColleagueTaskRunner) {
+export function createOpsStatusTool(runner: ColleagueTaskRunner, office?: ColleagueMailboxGateway) {
   return createColleagueStatusTool({
     name: 'ops.status',
     displayName: '小优',
     runner,
+    colleagueId: 'xiaoyou',
+    office,
   });
 }

@@ -2,6 +2,7 @@ import type { ColleagueSpec, ColleagueTaskRunner } from './colleague-task-runner
 import {
   createColleagueDelegateTool,
   createColleagueStatusTool,
+  type ColleagueMailboxGateway,
 } from './colleague-tools.js';
 
 export const XIAO_MEI_PROMPT = `你是"小美"，用户团队的专属产品/UI/视觉设计师（Product/UI/Visual Designer）。你冷静、专业、有主见，审美在线但从不炫技；你负责产品设计、UX、UI、视觉设计、Design System、Figma 操作与视觉质量检查。你不是"网页 UI 生成器"，而是真正参与产品设计决策的专业 Agent——你的信条是："好设计不是'看起来漂亮'，而是让用户自然地完成任务。"小夜姐（私人助理/大脑）是你的监督者，你是她手下的设计师；你的产出 DESIGN_SPEC 是给小黑（工程师）的开发依据。
@@ -49,22 +50,26 @@ export const XIAO_MEI_COLLEAGUE: ColleagueSpec = {
   persistFileName: 'designer-tasks.json',
 };
 
-export function createDesignerTool(runner: ColleagueTaskRunner) {
+export function createDesignerTool(runner: ColleagueTaskRunner, office?: ColleagueMailboxGateway) {
   return createColleagueDelegateTool({
     name: 'designer.delegate',
     displayName: '小美',
     statusToolName: 'designer.status',
     runner,
+    colleagueId: 'xiaomei',
+    office,
     defaultTimeoutMinutes: 15,
     description:
-      '把产品设计/UX/UI/视觉设计任务派给"小美"（专属 Product/UI/Visual Designer 子代理）执行：产品理解、UX 分析、信息架构、视觉方向、Design System、界面设计、Visual QA。小美冷静专业不炫技，先理解产品再设计，输出机器可读契约 DESIGN_SPEC 给小黑（工程师）开发，不是"网页 UI 生成器"。由助理（小夜）作为监督者调用。这是异步任务：调用后立即返回 taskId（任务在后台运行，可继续与用户聊天），进度与完成会自动通知，也可用 designer.status 查询。小美以工作区权限（workspace-write）读写 /app 下的设计文档与 Design System，不改生产代码。directory 用 /app 等持久目录。轻量问题（查文件、看状态）不要用此工具，用 filesystem.search / server.shell / system.status 等轻量工具。',
+      '给小美发任务：把产品设计/UX/UI/视觉设计任务写到小美的收件箱（她是独立的设计师同事，有自己的会话记忆，不是一次性脚本）：产品理解、UX 分析、信息架构、视觉方向、Design System、界面设计、Visual QA。小美冷静专业不炫技，先理解产品再设计，输出机器可读契约 DESIGN_SPEC 给小黑（工程师）开发，不是"网页 UI 生成器"。由助理（小夜）作为监督者调用。这是异步任务：调用后立即返回 taskId（任务在后台运行，可继续与用户聊天），进度与完成会自动通知，也可用 designer.status 查询（含收件箱最近几封）。小美以工作区权限（workspace-write）读写 /app 下的设计文档与 Design System，不改生产代码。directory 用 /app 等持久目录。轻量问题（查文件、看状态）不要用此工具，用 filesystem.search / server.shell / system.status 等轻量工具。',
   });
 }
 
-export function createDesignerStatusTool(runner: ColleagueTaskRunner) {
+export function createDesignerStatusTool(runner: ColleagueTaskRunner, office?: ColleagueMailboxGateway) {
   return createColleagueStatusTool({
     name: 'designer.status',
     displayName: '小美',
     runner,
+    colleagueId: 'xiaomei',
+    office,
   });
 }
