@@ -69,6 +69,27 @@ describe('formatEvent', () => {
     ).toBe('❌ 小黑任务失败（#12345678）\n编译失败');
   });
 
+  it('engineer.task.done 把 markdown 表格转成可读纯文本，不含分隔行', () => {
+    const result = [
+      '## 巡检结果',
+      '',
+      '| 容器 | 状态 |',
+      '|---|---|',
+      '| assistant-app | Up 6 min |',
+    ].join('\n');
+    const out = formatEvent('engineer.task.done', {
+      taskId: 'abcdef01-xxxx',
+      colleague: '小优',
+      status: 'success',
+      result,
+    });
+    expect(out).toContain('✅ 小优任务完成（#abcdef01）');
+    expect(out).toContain('巡检结果');
+    expect(out).toContain('容器：assistant-app，状态：Up 6 min');
+    expect(out).not.toContain('|---|');
+    expect(out).not.toContain('| 容器');
+  });
+
   it('skips 开工瞬间进度（与已派给确认重复）', () => {
     expect(
       formatEvent('engineer.task.progress', {
@@ -217,5 +238,59 @@ describe('formatEvent', () => {
 
     expect(calls[0]?.headers).toEqual({ 'x-agent-token': 'tok-agent' });
     expect(calls[1]?.headers).toEqual({ 'x-agent-token': 'tok-agent', 'Last-Event-ID': '7' });
+  });
+
+  it('长事件按 chunk 发送；任一 chunk 成功即推进 Last-Event-ID', async () => {
+    const encoder = new TextEncoder();
+    const sent: string[] = [];
+    const controller = new AbortController();
+    const calls: Array<{ headers?: Record<string, string> }> = [];
+    const longText = Array.from({ length: 20 }, (_, i) => `第${i}行：${'字'.repeat(120)}`).join('\n');
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      calls.push({ headers: (init?.headers ?? {}) as Record<string, string> });
+      if (calls.length === 1) {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(streamController) {
+              streamController.enqueue(
+                encoder.encode(
+                  `id: 9\nevent: reminder.due\ndata: ${JSON.stringify({ text: longText })}\n\n`,
+                ),
+              );
+              streamController.close();
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      await new Promise<void>((resolve) => {
+        controller.signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      throw new Error('aborted');
+    });
+
+    const client = {
+      async sendMessage(message: { item_list?: Array<{ text_item?: { text?: string } }> }) {
+        sent.push(message.item_list?.[0]?.text_item?.text ?? '');
+        return message;
+      },
+    } as never;
+    const runPromise = runEventPusher(
+      {
+        agentUrl: 'http://agent:3000',
+        client,
+        peers: () => ['wx_peer'],
+        fetchImpl: fetchMock as unknown as typeof fetch,
+      },
+      controller.signal,
+    );
+    await vi.waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(2));
+    controller.abort();
+    await runPromise.catch(() => {});
+
+    expect(sent.length).toBeGreaterThan(1);
+    expect(sent.join('')).toContain('第0行');
+    expect(sent.join('')).toContain('第19行');
+    expect(calls[1]?.headers).toEqual({ 'Last-Event-ID': '9' });
   });
 });

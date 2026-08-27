@@ -250,6 +250,41 @@ describe('chatOnce', () => {
     expect(started).toEqual(['engineer.delegate']);
   });
 
+  it('长任务开始后不再提前推送后续模型复述，并标记 longTaskStarted', async () => {
+    const segments: string[] = [];
+    const fetchImpl = vi.fn(async (_url: unknown) =>
+      sseResponse([
+        JSON.stringify({
+          type: 'agent.tool_call',
+          payload: {
+            toolCalls: [{ id: 'call_1', name: 'ops.delegate', arguments: '{"task":"看容器"}' }],
+          },
+        }),
+        JSON.stringify({
+          type: 'chat.token',
+          payload: { delta: '已派给小优，任务 #abcdef01。\n\n检查清单：docker ps\n\n' },
+        }),
+        JSON.stringify({
+          type: 'chat.token',
+          payload: { delta: '等她干完。' },
+        }),
+      ]),
+    );
+
+    const reply = await chatOnce('http://agent:3000', 's1', '看看容器', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      onSegment: async (segmentText) => {
+        segments.push(segmentText);
+      },
+      onLongTaskStarted: async () => {},
+    });
+
+    expect(reply.longTaskStarted).toBe(true);
+    expect(segments).toEqual([]);
+    expect(reply.text).toContain('已派给小优');
+    expect(reply.text).toContain('检查清单');
+  });
+
   it('preflushedChars 按原始字符数记账：多段提前发送后补发既不重复也不丢字', async () => {
     const segments: string[] = [];
     const fetchImpl = vi.fn(async (_url: unknown) =>
@@ -830,6 +865,105 @@ describe('runWeixinRelay', () => {
     }
     const texts = sent.map((m) => m.item_list?.[0]?.text_item?.text);
     expect(texts).toEqual(['收到，已派给小黑。', '我正在处理，请稍候。']);
+
+    controller.abort();
+    await relayPromise;
+  });
+
+  it('长任务派单后不把模型复述发到微信（🔧 toast 即 ack）', async () => {
+    const sent: WeixinMessage[] = [];
+    const controller = new AbortController();
+    let polls = 0;
+
+    const client = {
+      baseUrl: 'https://ilinkai.weixin.qq.com',
+      async notifyStart() {},
+      async notifyStop() {},
+      async getUpdates(_buf: string, options: { signal?: AbortSignal }) {
+        polls += 1;
+        if (polls === 1) {
+          return {
+            ret: 0,
+            get_updates_buf: 'buf-2',
+            msgs: [
+              {
+                from_user_id: 'wx_peer',
+                message_type: 1,
+                message_state: 2,
+                context_token: 'ctx',
+                run_id: 'r1',
+                item_list: [{ type: 1, text_item: { text: '看看容器' } }],
+              },
+            ],
+          };
+        }
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, 60_000);
+          options.signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            resolve(undefined);
+          });
+        });
+        throw new Error('aborted');
+      },
+      async getConfig() {
+        return { ret: 0, typing_ticket: 'ticket' };
+      },
+      async sendTyping() {},
+      async sendMessage(msg: WeixinMessage) {
+        sent.push(msg);
+      },
+    } as unknown as ILinkClient;
+
+    const state: AccountState = {
+      token: 'tok',
+      baseUrl: 'https://ilinkai.weixin.qq.com',
+      accountId: 'bot-1',
+      peerSessions: {},
+      savedAt: new Date().toISOString(),
+    };
+
+    const fetchImpl = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith('/api/sessions')) {
+        return new Response(JSON.stringify({ id: 'session-abc' }), { status: 201 });
+      }
+      if (u.endsWith('/chat')) {
+        return sseResponse([
+          JSON.stringify({
+            type: 'agent.tool_call',
+            payload: {
+              toolCalls: [{ id: 'call_1', name: 'ops.delegate', arguments: '{"task":"看容器"}' }],
+            },
+          }),
+          JSON.stringify({
+            type: 'chat.token',
+            payload: { delta: '已派给小优，任务 #abcdef01。检查清单：docker ps。' },
+          }),
+        ]);
+      }
+      return new Response('{}', { status: 200 });
+    });
+
+    const relayPromise = runWeixinRelay(
+      {
+        agentUrl: 'http://agent:3000',
+        client,
+        state,
+        persist: vi.fn(async () => {}),
+        log: () => {},
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      },
+      controller.signal,
+    );
+
+    const deadline = Date.now() + 5000;
+    while (sent.length < 1 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const texts = sent.map((m) => m.item_list?.[0]?.text_item?.text);
+    expect(texts).toEqual(['🔧 收到，已派给小优！预计几分钟，干完我验收后向你汇报。']);
 
     controller.abort();
     await relayPromise;

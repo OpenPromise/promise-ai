@@ -124,6 +124,11 @@ export interface ChatReply {
    * 用它做偏移会把已发过的尾部再发一遍（多段落回复必然踩到）。
    */
   preflushedChars?: number;
+  /**
+   * 本轮已发出长任务派单确认（🔧 toast）。为 true 时微信侧不再补发模型复述，
+   * 真正完成走 event-pusher 的 engineer.task.done。reply.text 仍保留给会话历史。
+   */
+  longTaskStarted?: boolean;
 }
 
 /**
@@ -394,6 +399,8 @@ async function chatOnceInner(
           earlyBuffer += envelope.payload?.delta ?? '';
           // 没有提前推送回调、或提前推送已失败过：不再分段，全部随 chat.done 发出。
           if (!options.onSegment || earlySendBroken) break;
+          // 长任务已派单：系统 🔧 toast 就是 ack，丢掉后续模型复述的提前刷新。
+          if (longTaskStartedSent) break;
           // 段落感知提前推送：完整段落/句子即时发出，避免整段回复攒到最后。
           while (true) {
             const seg = takeEarlySegment(earlyBuffer, alreadySentFirst);
@@ -506,7 +513,7 @@ async function chatOnceInner(
     }
   }
 
-  return { text, preflushedChars, error };
+  return { text, preflushedChars, error, longTaskStarted: longTaskStartedSent };
 }
 
 /** 逐行消费 SSE 响应（跨 chunk 处理半行；onLine 可为异步，逐行 await 保证顺序）。 */
@@ -814,8 +821,11 @@ async function handleInboundMessage(msg: WeixinMessage, options: RelayOptions): 
       });
       const replyParts: string[] = [];
       // 已提前发送的前缀不再重复发送，只补发剩余部分（按原始字符数切，与提前发送记账一致）。
-      const remaining = reply.text.slice(reply.preflushedChars ?? 0);
-      if (remaining.trim()) replyParts.push(markdownToPlain(remaining));
+      // 长任务已派单：🔧 toast 就是 ack，不再把模型复述（任务 id / 检查清单）发到微信。
+      if (!reply.longTaskStarted) {
+        const remaining = reply.text.slice(reply.preflushedChars ?? 0);
+        if (remaining.trim()) replyParts.push(markdownToPlain(remaining));
+      }
       if (reply.error) replyParts.push(`❌ ${reply.error}`);
       if (replyParts.length === 0) return;
       for (const chunk of splitLongText(replyParts.join('\n\n'))) {

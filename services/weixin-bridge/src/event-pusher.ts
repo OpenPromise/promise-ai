@@ -4,6 +4,7 @@
  */
 import type { ILinkClient } from './ilink.js';
 import { buildReplyMessage } from './ilink.js';
+import { clipPlainText, markdownToPlain, splitLongText } from './markdown.js';
 import { consumeSse } from './relay.js';
 
 interface ReminderEvent {
@@ -99,7 +100,8 @@ export function formatEvent(event: string, data: unknown): string | undefined {
     const id = (task.taskId ?? '').slice(0, 8);
     const who = task.colleague || '小黑';
     const ok = task.status === 'success';
-    const detail = (task.result || task.error || '').toString().trim().slice(0, 400);
+    const raw = (task.result || task.error || '').toString().trim();
+    const detail = raw ? clipPlainText(markdownToPlain(raw)) : '';
     return `${ok ? '✅' : '❌'} ${who}任务${ok ? '完成' : '失败'}${id ? `（#${id}）` : ''}${
       detail ? `\n${detail}` : ''
     }`;
@@ -150,19 +152,25 @@ export async function runEventPusher(
           const text = formatEvent(currentEvent, json);
           if (!text) return;
           const targets = peers();
-          const results = await Promise.allSettled(
-            targets.map((peer) =>
-              client.sendMessage(buildReplyMessage({ to: peer, text })).catch((error) => {
-                log?.(
-                  `[weixin] 推送失败 ${peer}：${error instanceof Error ? error.message : String(error)}`,
-                );
-                throw error;
-              }),
-            ),
+          const chunks = splitLongText(text);
+          let anyChunkOk = false;
+          await Promise.all(
+            targets.map(async (peer) => {
+              for (const chunk of chunks) {
+                try {
+                  await client.sendMessage(buildReplyMessage({ to: peer, text: chunk }));
+                  anyChunkOk = true;
+                } catch (error) {
+                  log?.(
+                    `[weixin] 推送失败 ${peer}：${error instanceof Error ? error.message : String(error)}`,
+                  );
+                }
+              }
+            }),
           );
-          // 至少一个对端投递成功才推进 Last-Event-ID；全部失败则不推进，
+          // 至少一个 chunk 投递到某个对端成功才推进 Last-Event-ID；全部失败则不推进，
           // 断线重连后服务端会按 Last-Event-ID 重放错过的通知（N-P2-1）。
-          if (currentId && results.some((result) => result.status === 'fulfilled')) {
+          if (currentId && anyChunkOk) {
             lastEventId = currentId;
           }
           if (targets.length > 0) {
