@@ -44,9 +44,10 @@ export interface SseEventRecord {
 
 /**
  * 有界环形事件缓冲（SSE 重放）：只记录一次性通知类事件
- * （reminder.due / task.run / hook.run / system.boot），
+ * （reminder.due / task.run / hook.run / system.boot / engineer.task.done），
  * 为每条分配自增 id；订阅方断线重连时用 Last-Event-ID 拉回错过的通知。
- * 进度/同事任务完成不入缓冲（避免挤掉通知；微信桥重启重放旧 done 刷屏）。
+ * 进度（engineer.task.progress）不入缓冲（洪水）。冷启动无 Last-Event-ID
+ * 不重放缓冲，避免微信桥重启把旧 done 再推一遍（1a3bf99）。
  */
 export class SseEventBuffer {
   readonly #entries: SseEventRecord[] = [];
@@ -107,10 +108,9 @@ export function registerEventRoutes(app: FastifyInstance, deps: EventRouteDeps):
           deps.subscribeEngineerEvents((event) => {
             const sseEvent =
               event.type === 'done' ? 'engineer.task.done' : 'engineer.task.progress';
-            // 进度与完成都不入重放缓冲：微信桥重启时若无 Last-Event-ID，
-            // 会把缓冲里旧的 task.done 再推一遍（同一任务号刷屏）。
-            // 短暂断线错过完成通知可接受——用户问进度时小夜能查 *.status。
-            broadcast(sseEvent, event, false);
+            // 完成入缓冲：微信桥 sendMessage 失败后不推进 Last-Event-ID，
+            // 断线重连可按 Last-Event-ID 拉回。进度不入缓冲（洪水）。
+            broadcast(sseEvent, event, event.type === 'done');
           }),
         ]
       : []),
@@ -127,16 +127,17 @@ export function registerEventRoutes(app: FastifyInstance, deps: EventRouteDeps):
     reply.raw.write(': connected\n\n');
     connections.add(reply.raw);
 
-    // 断线重连恢复：重放 Last-Event-ID 之后的一次性通知（SSE 标准重放）。
+    // 断线重连恢复：仅当请求带 Last-Event-ID 时重放其后的一次性通知。
+    // 微信桥进程冷启动没有该头，不重放——否则会把缓冲里旧的
+    // engineer.task.done 再推一遍（1a3bf99：同一任务号刷屏）。
     const lastEventIdHeader = request.headers['last-event-id'];
-    const lastEventId =
-      typeof lastEventIdHeader === 'string' && Number.isFinite(Number(lastEventIdHeader))
-        ? Number(lastEventIdHeader)
-        : 0;
-    for (const record of eventBuffer.replayAfter(lastEventId)) {
-      reply.raw.write(
-        `id: ${record.id}\nevent: ${record.event}\ndata: ${JSON.stringify(record.data)}\n\n`,
-      );
+    if (typeof lastEventIdHeader === 'string' && Number.isFinite(Number(lastEventIdHeader))) {
+      const lastEventId = Number(lastEventIdHeader);
+      for (const record of eventBuffer.replayAfter(lastEventId)) {
+        reply.raw.write(
+          `id: ${record.id}\nevent: ${record.event}\ndata: ${JSON.stringify(record.data)}\n\n`,
+        );
+      }
     }
 
     // 重启完成通知：只有"宿主机真重启"（开机自启）才推送 system.boot，

@@ -48,10 +48,11 @@ async function readSse(
   url: string,
   until: (text: string) => boolean,
   timeoutMs = 2000,
+  extraHeaders: Record<string, string> = {},
 ): Promise<{ text: () => string; close: () => void }> {
   const controller = new AbortController();
   const response = await fetch(url, {
-    headers: { accept: 'text/event-stream' },
+    headers: { accept: 'text/event-stream', ...extraHeaders },
     signal: controller.signal,
   });
   const reader = response.body!.getReader();
@@ -104,7 +105,9 @@ describe('registerEventRoutes 的 system.boot 通知', () => {
       expect(countBoot(first.text())).toBe(1);
 
       // 第二个连接：靠 Last-Event-ID 重放拿到那一条 boot，但不能再广播新的一条。
-      const second = await readSse(url, (text) => countBoot(text) >= 1);
+      const second = await readSse(url, (text) => countBoot(text) >= 1, 2000, {
+        'Last-Event-ID': '0',
+      });
       streams.push(second);
       expect(countBoot(second.text())).toBe(1);
       // 修复前这里会变成 2（每连接一份 bootSent，广播给所有连接）。
@@ -117,7 +120,7 @@ describe('registerEventRoutes 的 system.boot 通知', () => {
 });
 
 describe('registerEventRoutes 的同事任务完成', () => {
-  it('engineer.task.done 不入重放缓冲：晚连接/无 Last-Event-ID 不会再收到旧完成', async () => {
+  it('engineer.task.done 入缓冲：无 Last-Event-ID 不重放，重连带 Last-Event-ID 会重放', async () => {
     const app = Fastify({ logger: false });
     const listeners: Array<(event: { type: string; taskId: string; status: string; colleague: string; result: string }) => void> =
       [];
@@ -149,11 +152,26 @@ describe('registerEventRoutes 的同事任务完成', () => {
       await new Promise((resolve) => setTimeout(resolve, 80));
       expect(first.text()).toContain('engineer.task.done');
       expect(first.text()).toContain('c3c10a62');
+      // 入缓冲所以带 SSE id
+      expect(first.text()).toMatch(/^id: \d+/m);
 
-      const second = await readSse(url, () => true, 500);
-      streams.push(second);
-      expect(second.text()).not.toContain('engineer.task.done');
-      expect(second.text()).not.toContain('c3c10a62');
+      // 冷启动 / 无 Last-Event-ID：不重放旧 done（1a3bf99）
+      const fresh = await readSse(url, () => true, 500);
+      streams.push(fresh);
+      expect(fresh.text()).not.toContain('engineer.task.done');
+      expect(fresh.text()).not.toContain('c3c10a62');
+
+      // 断线重连带 Last-Event-ID：重放错过的完成
+      const replay = await readSse(
+        url,
+        (text) => text.includes('engineer.task.done'),
+        2000,
+        { 'Last-Event-ID': '0' },
+      );
+      streams.push(replay);
+      expect(replay.text()).toContain('engineer.task.done');
+      expect(replay.text()).toContain('c3c10a62');
+      expect(replay.text()).toMatch(/^id: \d+/m);
     } finally {
       for (const stream of streams) stream.close();
       await app.close();

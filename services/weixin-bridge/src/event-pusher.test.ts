@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { formatEvent, runEventPusher } from './event-pusher.js';
+import { formatEvent, runEventPusher, SEND_RETRY_DELAYS_MS } from './event-pusher.js';
 
 describe('formatEvent', () => {
   afterEach(() => {
@@ -311,5 +311,131 @@ describe('formatEvent', () => {
     expect(sent.join('')).toContain('第0行');
     expect(sent.join('')).toContain('第19行');
     expect(calls[1]?.headers).toEqual({ 'Last-Event-ID': '9' });
+  });
+});
+
+
+describe('runEventPusher 投递重试', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('默认重试间隔是 1s 再 2s（共 3 次尝试）', () => {
+    expect(SEND_RETRY_DELAYS_MS).toEqual([1000, 2000]);
+  });
+
+  it('sendMessage 失败两次后第三次成功：重试并记已推送，推进 Last-Event-ID', async () => {
+    const encoder = new TextEncoder();
+    const logs: string[] = [];
+    const controller = new AbortController();
+    const calls: Array<{ headers?: Record<string, string> }> = [];
+    let sendAttempts = 0;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      calls.push({ headers: (init?.headers ?? {}) as Record<string, string> });
+      if (calls.length === 1) {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(streamController) {
+              streamController.enqueue(
+                encoder.encode('id: 11\nevent: reminder.due\ndata: {"text":"喝水"}\n\n'),
+              );
+              streamController.close();
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      await new Promise<void>((resolve) => {
+        controller.signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      throw new Error('aborted');
+    });
+
+    const client = {
+      async sendMessage(message: { to?: string }) {
+        sendAttempts += 1;
+        if (sendAttempts < 3) {
+          throw new Error('sendMessage ret=-2 errmsg=prepare failed');
+        }
+        return message;
+      },
+    } as never;
+
+    const runPromise = runEventPusher(
+      {
+        agentUrl: 'http://agent:3000',
+        client,
+        peers: () => ['wx_peer'],
+        fetchImpl: fetchMock as unknown as typeof fetch,
+        log: (m) => logs.push(m),
+        sendRetryDelaysMs: [5, 5],
+      },
+      controller.signal,
+    );
+    await vi.waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(2), { timeout: 5000 });
+    controller.abort();
+    await runPromise.catch(() => {});
+
+    expect(sendAttempts).toBe(3);
+    expect(logs.some((line) => line.includes('已推送事件 reminder.due'))).toBe(true);
+    expect(logs.some((line) => line.includes('推送失败（未送达）'))).toBe(false);
+    expect(calls[1]?.headers).toEqual({ 'Last-Event-ID': '11' });
+  });
+
+  it('sendMessage 三次都失败：记推送失败（未送达），不记已推送，不推进 Last-Event-ID', async () => {
+    const encoder = new TextEncoder();
+    const logs: string[] = [];
+    const controller = new AbortController();
+    const calls: Array<{ headers?: Record<string, string> }> = [];
+    let sendAttempts = 0;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      calls.push({ headers: (init?.headers ?? {}) as Record<string, string> });
+      if (calls.length === 1) {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(streamController) {
+              streamController.enqueue(
+                encoder.encode('id: 12\nevent: reminder.due\ndata: {"text":"喝水"}\n\n'),
+              );
+              streamController.close();
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      await new Promise<void>((resolve) => {
+        controller.signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      throw new Error('aborted');
+    });
+
+    const client = {
+      async sendMessage() {
+        sendAttempts += 1;
+        throw new Error('sendMessage ret=-2 errmsg=prepare failed');
+      },
+    } as never;
+
+    const runPromise = runEventPusher(
+      {
+        agentUrl: 'http://agent:3000',
+        client,
+        peers: () => ['wx_peer'],
+        fetchImpl: fetchMock as unknown as typeof fetch,
+        log: (m) => logs.push(m),
+        sendRetryDelaysMs: [5, 5],
+      },
+      controller.signal,
+    );
+    await vi.waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(2), { timeout: 5000 });
+    controller.abort();
+    await runPromise.catch(() => {});
+
+    expect(sendAttempts).toBe(3);
+    expect(logs.some((line) => line.includes('已推送'))).toBe(false);
+    expect(
+      logs.some((line) => line.includes('推送失败（未送达）') && line.includes('reminder.due')),
+    ).toBe(true);
+    expect(calls[1]?.headers ?? {}).not.toHaveProperty('Last-Event-ID');
   });
 });

@@ -46,6 +46,8 @@ export interface EventPusherOptions {
   apiToken?: string;
   log?: (message: string) => void;
   fetchImpl?: typeof fetch;
+  /** sendMessage 失败后的重试间隔（毫秒）。默认 1s 再 2s，共 3 次尝试。 */
+  sendRetryDelaysMs?: number[];
 }
 
 export function formatEvent(event: string, data: unknown): string | undefined {
@@ -116,6 +118,37 @@ export function formatEvent(event: string, data: unknown): string | undefined {
   return undefined;
 }
 
+/** sendMessage 失败时的默认重试间隔：第 1 次失败后等 1s，第 2 次失败后等 2s，共 3 次尝试。 */
+export const SEND_RETRY_DELAYS_MS = [1000, 2000] as const;
+
+async function sendMessageWithRetry(
+  client: ILinkClient,
+  peer: string,
+  chunk: string,
+  log: ((message: string) => void) | undefined,
+  signal: AbortSignal,
+  retryDelaysMs: readonly number[],
+): Promise<boolean> {
+  const maxAttempts = retryDelaysMs.length + 1;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await client.sendMessage(buildReplyMessage({ to: peer, text: chunk }));
+      return true;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      const delay = retryDelaysMs[attempt - 1];
+      if (delay !== undefined && !signal.aborted) {
+        log?.(`[weixin] 推送失败 ${peer}（第${attempt}次，将重试）：${detail}`);
+        await sleep(delay, signal);
+        continue;
+      }
+      log?.(`[weixin] 推送失败 ${peer}：${detail}`);
+      return false;
+    }
+  }
+  return false;
+}
+
 /** 持续订阅 /api/events 并推送（断线自动重连，指数退避）。 */
 export async function runEventPusher(
   options: EventPusherOptions,
@@ -123,6 +156,7 @@ export async function runEventPusher(
 ): Promise<void> {
   const { agentUrl, client, peers, log, apiToken } = options;
   const fetchImpl = options.fetchImpl ?? fetch;
+  const retryDelaysMs = options.sendRetryDelaysMs ?? SEND_RETRY_DELAYS_MS;
   let failures = 0;
   /** 最近一次已处理事件的 SSE id：断线重连时回传 Last-Event-ID 拉回错过的通知。 */
   let lastEventId = '';
@@ -164,14 +198,15 @@ export async function runEventPusher(
           await Promise.all(
             targets.map(async (peer) => {
               for (const chunk of chunks) {
-                try {
-                  await client.sendMessage(buildReplyMessage({ to: peer, text: chunk }));
-                  anyChunkOk = true;
-                } catch (error) {
-                  log?.(
-                    `[weixin] 推送失败 ${peer}：${error instanceof Error ? error.message : String(error)}`,
-                  );
-                }
+                const ok = await sendMessageWithRetry(
+                  client,
+                  peer,
+                  chunk,
+                  log,
+                  signal,
+                  retryDelaysMs,
+                );
+                if (ok) anyChunkOk = true;
               }
             }),
           );
@@ -181,7 +216,11 @@ export async function runEventPusher(
             lastEventId = currentId;
           }
           if (targets.length > 0) {
-            log?.(`[weixin] 已推送事件 ${currentEvent} 到 ${targets.length} 个微信对端`);
+            if (anyChunkOk) {
+              log?.(`[weixin] 已推送事件 ${currentEvent} 到 ${targets.length} 个微信对端`);
+            } else {
+              log?.(`[weixin] 推送失败（未送达） ${currentEvent}`);
+            }
           }
         }
       });
