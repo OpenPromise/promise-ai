@@ -102,10 +102,16 @@ export function formatEvent(event: string, data: unknown): string | undefined {
     const ok = task.status === 'success';
     const raw = (task.result || task.error || '').toString().trim();
     const detail = raw ? clipPlainText(markdownToPlain(raw)) : '';
-    if (ok) {
-      return `小夜：${who}回来了。${detail ? `\n${detail}` : ''}`;
+    // result 已是小夜自己的验收口吻，原样推送，避免再套一层「小夜：xx回来了」。
+    if (!detail) {
+      return ok
+        ? `小夜：${who}回来了。`
+        : `❌ 小夜：${who}这单没跑完${id ? `（#${id}）` : ''}。`;
     }
-    return `小夜：${who}这单没跑完${id ? `（#${id}）` : ''}。${detail ? `\n${detail}` : ''}`;
+    if (!ok && !/❌|失败|没跑完|没搞定/.test(detail)) {
+      return `❌ ${detail}`;
+    }
+    return detail;
   }
   return undefined;
 }

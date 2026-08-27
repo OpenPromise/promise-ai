@@ -56,17 +56,36 @@ describe('formatEvent', () => {
         type: 'done',
         taskId: '12345678-aaaa',
         status: 'success',
-        result: '【验证结果】typecheck 通过',
+        result: '小黑把 typecheck 跑通了，这单可以收。',
       }),
-    ).toBe('小夜：小黑回来了。\n【验证结果】typecheck 通过');
+    ).toBe('小黑把 typecheck 跑通了，这单可以收。');
     expect(
       formatEvent('engineer.task.done', {
         type: 'done',
         taskId: '12345678-aaaa',
         status: 'failed',
-        error: '编译失败',
+        result: '小黑卡在编译，要不要再派一单？',
+      }),
+    ).toBe('❌ 小黑卡在编译，要不要再派一单？');
+    expect(
+      formatEvent('engineer.task.done', {
+        type: 'done',
+        taskId: '12345678-aaaa',
+        status: 'failed',
+        result: '小夜：小黑这单没跑完（#12345678）。\n编译失败',
       }),
     ).toBe('小夜：小黑这单没跑完（#12345678）。\n编译失败');
+  });
+
+
+  it('engineer.task.done 不再套一层「小夜：谁回来了」', () => {
+    const out = formatEvent('engineer.task.done', {
+      colleague: '小知',
+      status: 'success',
+      result: '小知把竞品表交来了，要点清楚。要再派跟我说。',
+    });
+    expect(out).toBe('小知把竞品表交来了，要点清楚。要再派跟我说。');
+    expect(out).not.toContain('小夜：小知回来了');
   });
 
   it('engineer.task.done 把 markdown 表格转成可读纯文本，不含分隔行', () => {
@@ -83,7 +102,7 @@ describe('formatEvent', () => {
       status: 'success',
       result,
     });
-    expect(out).toContain('小夜：小优回来了。');
+    expect(out).not.toContain('小夜：小优回来了。');
     expect(out).toContain('巡检结果');
     expect(out).toContain('容器：assistant-app，状态：Up 6 min');
     expect(out).not.toContain('|---|');
@@ -122,7 +141,7 @@ describe('formatEvent', () => {
         status: 'success',
         result: '【DESIGN_SPEC】完成',
       }),
-    ).toBe('小夜：小美回来了。\n【DESIGN_SPEC】完成');
+    ).toBe('【DESIGN_SPEC】完成');
   });
 
   it('ignores unknown events', () => {

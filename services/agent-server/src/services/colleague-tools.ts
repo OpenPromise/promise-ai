@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { access } from 'node:fs/promises';
-import type { PermissionLevel, Tool, ToolResult } from '@personal-ai/tools';
+import type { PermissionLevel, Tool, ToolContext, ToolResult } from '@personal-ai/tools';
 import type { ColleagueTask, ColleagueTaskRunner } from './colleague-task-runner.js';
 
 interface DelegateInput {
@@ -22,7 +22,7 @@ export interface ColleagueMailboxGateway {
   delegate(
     colleagueId: string,
     task: string,
-    options?: { directory?: string; timeoutMinutes?: number },
+    options?: { directory?: string; timeoutMinutes?: number; hubSessionId?: string },
   ): Promise<ColleagueTask>;
   recentMail(colleagueId: string, limit?: number): ColleagueMailPreview[];
   getTask?(id: string): ColleagueTask | undefined;
@@ -72,7 +72,7 @@ export function createColleagueDelegateTool(options: ColleagueDelegateToolOption
     },
     permissionLevel: 1 as PermissionLevel,
     timeoutMs: 30_000,
-    async execute(input: unknown): Promise<ToolResult> {
+    async execute(input: unknown, context: ToolContext): Promise<ToolResult> {
       const {
         task,
         directory = defaultDirectory,
@@ -90,11 +90,14 @@ export function createColleagueDelegateTool(options: ColleagueDelegateToolOption
       if (task.trim().length > 20_000) {
         return { ok: false, error: '任务文本超过 20000 字符，请拆分任务后重试' };
       }
+      const hubSessionId =
+        typeof context?.sessionId === 'string' ? context.sessionId.trim() : '';
       const record =
         office && colleagueId
           ? await office.delegate(colleagueId, task.trim(), {
               directory: resolvedDir,
               timeoutMinutes,
+              ...(hubSessionId ? { hubSessionId } : {}),
             })
           : await runner.delegate(task.trim(), {
               directory: resolvedDir,

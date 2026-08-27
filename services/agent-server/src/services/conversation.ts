@@ -474,6 +474,11 @@ export class ConversationService {
     }
   }
 
+  /** 该会话是否已有 in-flight 或排队的 runChat（含工具循环）。 */
+  isSessionBusy(sessionId: string): boolean {
+    return this.#sessionQueues.has(sessionId);
+  }
+
   async *#runChatInner(input: RunChatInput): AsyncIterable<ProtocolEnvelope> {
     const requestId = input.requestId ?? randomUUID();
     const requestStartedAt = Date.now();

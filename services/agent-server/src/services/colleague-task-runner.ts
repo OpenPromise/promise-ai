@@ -46,6 +46,10 @@ export interface ColleagueTask {
   finishedAt?: string;
   /** 最近一次进度提示（最后一行有意义的输出）。 */
   progress?: string;
+  /** 最近一次进度 toast 发出时间（ms）。办公室路径 20s 合并用。 */
+  progressEmittedAt?: number;
+  /** 派单方小夜微信会话 id。验收 wrap-up 用；不能是同事自己的 session。 */
+  hubSessionId?: string;
   /** 累计输出（截断保存，供查询/复盘）。 */
   output: string;
   /** 累计输出超过上限被截断（grok-build 思路：一旦置 true 不再回退）。 */

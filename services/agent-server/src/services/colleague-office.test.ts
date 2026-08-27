@@ -16,6 +16,7 @@ import {
   COLLEAGUE_ROSTER,
   ColleagueOffice,
   colleagueToolAllowlist,
+  wrapUpFallback,
   type ColleagueConversation,
   type ColleagueId,
   type ColleagueRunners,
@@ -360,7 +361,8 @@ describe('ColleagueOffice', () => {
     await waitFor(() => events.some((event) => event.type === 'done'));
     const progress = events.filter((event) => event.type === 'progress').map((event) => event.text);
     expect(progress).toContain('正在检索网页');
-    expect(progress).toContain('正在看时间');
+    // 20s 窗口内第二条人话（正在看时间）被合并，不刷屏
+    expect(progress.filter((text) => text === '正在检索网页' || text === '正在看时间')).toHaveLength(1);
     expect(
       progress.some(
         (text) =>
@@ -370,6 +372,191 @@ describe('ColleagueOffice', () => {
           (text ?? '').includes('unknown'),
       ),
     ).toBe(false);
+  });
+
+  it('hubSessionId 写入收件箱；验收在 hub 会话 runChat；done.result 是验收文，mailbox.reply 是同事原文', async () => {
+    const captured: Array<{
+      sessionId: string;
+      userMessage: string;
+      headless?: boolean;
+      toolAllowlist?: string[];
+      toolBudget?: number;
+    }> = [];
+    const conversation: ColleagueConversation = {
+      async *runChat(input) {
+        captured.push(input);
+        if (input.userMessage.startsWith('【同事回信】')) {
+          yield {
+            type: 'agent.tool_call',
+            payload: { toolCalls: [{ name: 'memory.list' }] },
+          };
+          yield {
+            type: 'chat.done',
+            payload: { text: '小知把竞品表交来了，要点清楚。要再派跟我说。' },
+          };
+          return;
+        }
+        yield { type: 'chat.done', payload: { text: '【目标】调研完成\n报告 ok' } };
+      },
+    };
+    const { office, mailboxDir } = await makeOffice({
+      runTask: async () => {
+        throw new Error('conversation 路径不应调用 runner');
+      },
+    });
+    const events: ColleagueTaskEvent[] = [];
+    office.onEvent((event) => events.push(event));
+    office.attachConversation(conversation);
+
+    const hubSessionId = 'weixin-hub-session';
+    const record = await office.delegate('xiaozhi', '调研三家竞品', { hubSessionId });
+    expect(office.listMailbox('xiaozhi')[0]?.hubSessionId).toBe(hubSessionId);
+    expect(office.getTask(record.id)?.hubSessionId).toBe(hubSessionId);
+    expect(office.getSessionId('xiaozhi')).not.toBe(hubSessionId);
+
+    await waitFor(() => events.filter((event) => event.type === 'done').length === 1, 1000);
+    expect(captured).toHaveLength(2);
+    expect(captured[0]?.sessionId).toBe(office.getSessionId('xiaozhi'));
+    expect(captured[1]?.sessionId).toBe(hubSessionId);
+    expect(captured[1]?.userMessage).toContain('【同事回信】');
+    expect(captured[1]?.userMessage).toContain('小知');
+    expect(captured[1]?.userMessage).toContain(record.id.slice(0, 8));
+    expect(captured[1]?.headless).toBe(true);
+    expect(captured[1]?.toolBudget).toBe(2);
+    expect(captured[1]?.toolAllowlist).toEqual(['memory.list', 'memory.remember']);
+    expect(captured[1]?.toolAllowlist?.some((name) => name.endsWith('.delegate'))).toBe(false);
+    expect(captured[1]?.toolAllowlist).not.toContain('research.status');
+
+    const mail = office.listMailbox('xiaozhi')[0];
+    expect(mail?.status).toBe('done');
+    expect(mail?.reply).toContain('调研完成');
+    expect(mail?.reply).not.toContain('要点清楚');
+    const done = events.find((event) => event.type === 'done');
+    expect(done?.result).toBe('小知把竞品表交来了，要点清楚。要再派跟我说。');
+    expect(done?.result).not.toContain('【目标】');
+    expect(office.getTask(record.id)?.result).toContain('调研完成');
+    // 验收过程的 memory.list 不冒同事进度
+    expect(events.some((event) => event.type === 'progress' && event.text === '正在查阅记忆')).toBe(
+      false,
+    );
+
+    const raw = await readFile(path.join(mailboxDir, 'xiaozhi.json'), 'utf8');
+    const fileMail = JSON.parse(raw) as Array<{ hubSessionId?: string; reply?: string }>;
+    expect(fileMail[0]?.hubSessionId).toBe(hubSessionId);
+    expect(fileMail[0]?.reply).toContain('调研完成');
+  });
+
+  it('同事会话 id 不能当 hub；无 hubSessionId 时 done 用小夜口吻回退', async () => {
+    const captured: string[] = [];
+    const conversation: ColleagueConversation = {
+      async *runChat(input) {
+        captured.push(input.sessionId);
+        yield { type: 'chat.done', payload: { text: '同事简报' } };
+      },
+    };
+    const { office } = await makeOffice();
+    const events: ColleagueTaskEvent[] = [];
+    office.onEvent((event) => events.push(event));
+    office.attachConversation(conversation);
+
+    const colleagueSession = office.getSessionId('xiaozhi')!;
+    await office.delegate('xiaozhi', '查资料', { hubSessionId: colleagueSession });
+    await waitFor(() => events.some((event) => event.type === 'done'), 1000);
+    expect(office.listMailbox('xiaozhi')[0]?.hubSessionId).toBeUndefined();
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toBe(colleagueSession);
+    const done = events.find((event) => event.type === 'done');
+    expect(done?.result).toBe(wrapUpFallback('小知', done!.taskId.slice(0, 8), true, '同事简报'));
+    expect(office.listMailbox('xiaozhi')[0]?.reply).toBe('同事简报');
+  });
+
+  it('验收 runChat 失败/空文本回退小夜口吻；hub 忙则跳过 LLM', async () => {
+    const { office: failOffice } = await makeOffice();
+    const failEvents: ColleagueTaskEvent[] = [];
+    failOffice.onEvent((event) => failEvents.push(event));
+    failOffice.attachConversation({
+      async *runChat(input) {
+        if (input.userMessage.startsWith('【同事回信】')) {
+          throw new Error('hub llm down');
+        }
+        yield { type: 'chat.done', payload: { text: '简报正文' } };
+      },
+    });
+    await failOffice.delegate('xiaomei', '出视觉稿', { hubSessionId: 'hub-fail' });
+    await waitFor(() => failEvents.some((event) => event.type === 'done'), 1000);
+    const failDone = failEvents.find((event) => event.type === 'done');
+    expect(failDone?.result).toBe(
+      wrapUpFallback('小美', failDone!.taskId.slice(0, 8), true, '简报正文'),
+    );
+    expect(failOffice.listMailbox('xiaomei')[0]?.reply).toBe('简报正文');
+
+    const { office: emptyOffice } = await makeOffice();
+    const emptyEvents: ColleagueTaskEvent[] = [];
+    emptyOffice.onEvent((event) => emptyEvents.push(event));
+    emptyOffice.attachConversation({
+      async *runChat(input) {
+        if (input.userMessage.startsWith('【同事回信】')) {
+          yield { type: 'chat.done', payload: { text: '   ' } };
+          return;
+        }
+        yield { type: 'chat.done', payload: { text: '空验收上游简报' } };
+      },
+    });
+    await emptyOffice.delegate('xiaozhen', '回归', { hubSessionId: 'hub-empty' });
+    await waitFor(() => emptyEvents.some((event) => event.type === 'done'), 1000);
+    const emptyDone = emptyEvents.find((event) => event.type === 'done');
+    expect(emptyDone?.result).toBe(
+      wrapUpFallback('小真', emptyDone!.taskId.slice(0, 8), true, '空验收上游简报'),
+    );
+
+    let hubCalls = 0;
+    const { office: busyOffice } = await makeOffice();
+    const busyEvents: ColleagueTaskEvent[] = [];
+    busyOffice.onEvent((event) => busyEvents.push(event));
+    busyOffice.attachConversation({
+      isSessionBusy: (sessionId) => sessionId === 'hub-busy',
+      async *runChat(input) {
+        if (input.userMessage.startsWith('【同事回信】')) hubCalls += 1;
+        yield { type: 'chat.done', payload: { text: '同事回信原文' } };
+      },
+    });
+    await busyOffice.delegate('xiaohei', '修 bug', { hubSessionId: 'hub-busy' });
+    await waitFor(() => busyEvents.some((event) => event.type === 'done'), 1000);
+    expect(hubCalls).toBe(0);
+    const busyDone = busyEvents.find((event) => event.type === 'done');
+    expect(busyDone?.result).toBe(
+      wrapUpFallback('小黑', busyDone!.taskId.slice(0, 8), true, '同事回信原文'),
+    );
+  });
+
+  it('进度 debounce：同一任务短时间内多条 tool_call 只 toast 一次', async () => {
+    const conversation: ColleagueConversation = {
+      async *runChat() {
+        yield {
+          type: 'agent.tool_call',
+          payload: { toolCalls: [{ name: 'web.search' }] },
+        };
+        yield {
+          type: 'agent.tool_call',
+          payload: { toolCalls: [{ name: 'web.fetch' }, { name: 'web.search' }] },
+        };
+        yield {
+          type: 'agent.tool_call',
+          payload: { toolCalls: [{ name: 'time.get' }] },
+        };
+        yield { type: 'chat.done', payload: { text: '简报' } };
+      },
+    };
+    const { office } = await makeOffice();
+    const events: ColleagueTaskEvent[] = [];
+    office.onEvent((event) => events.push(event));
+    office.attachConversation(conversation);
+    await office.delegate('xiaozhi', '调研');
+    await waitFor(() => events.some((event) => event.type === 'done'));
+    const progress = events.filter((event) => event.type === 'progress');
+    expect(progress).toHaveLength(1);
+    expect(progress[0]?.text).toBe('正在检索网页');
+    expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
   });
 
   it('conversation chat.error / throw 把收件箱标 failed', async () => {

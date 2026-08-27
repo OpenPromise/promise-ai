@@ -50,6 +50,8 @@ export interface MailItem {
   status: MailStatus;
   taskId?: string;
   reply?: string;
+  /** 小夜微信会话 id（派单方）。验收 wrap-up 必须跑在这个会话上，不能是同事会话。 */
+  hubSessionId?: string;
 }
 
 export interface MailPreview {
@@ -73,6 +75,8 @@ export interface ColleagueConversation {
     signal?: AbortSignal;
     requestId?: string;
   }): AsyncIterable<{ type: string; payload?: unknown }>;
+  /** 该会话是否已有 in-flight / 排队的 runChat。冲突时跳过 LLM 验收，避免卡住微信 chatOnce。 */
+  isSessionBusy?(sessionId: string): boolean;
 }
 
 export interface ColleagueOfficeOptions {
@@ -86,6 +90,12 @@ const RESULT_CAP = 8_000;
 const MAX_MAIL = 100;
 const TOOL_BUDGET = 12;
 const DEFAULT_TIMEOUT_MINUTES = 15;
+const PROGRESS_DEBOUNCE_MS = 20_000;
+const WRAPUP_TIMEOUT_MS = 60_000;
+const WRAPUP_TOOL_BUDGET = 2;
+const WRAPUP_BRIEF_CAP = 1_200;
+/** 验收只许记忆工具，绝不含 *.delegate / 同事 *.status，避免递归派单。 */
+const WRAPUP_TOOL_ALLOWLIST: readonly string[] = ['memory.list', 'memory.remember'];
 
 /** 禁止再派单 / 查同事状态，避免同事会话递归调用 *.delegate。 */
 export const BLOCKED_COLLEAGUE_TOOLS: readonly string[] = [
@@ -147,6 +157,13 @@ function truncate(text: string, cap = RESULT_CAP): string {
   const trimmed = text.trim();
   if (trimmed.length <= cap) return trimmed;
   return `${trimmed.slice(0, cap)}\n…(truncated)`;
+}
+
+/** 无 hub 会话 / 验收失败时的小夜口吻回退（与旧 formatEvent 展示一致）。 */
+export function wrapUpFallback(who: string, shortId: string, ok: boolean, reply: string): string {
+  const brief = truncate(reply, WRAPUP_BRIEF_CAP);
+  if (ok) return `小夜：${who}回来了。${brief ? `\n${brief}` : ''}`;
+  return `小夜：${who}这单没跑完${shortId ? `（#${shortId}）` : ''}。${brief ? `\n${brief}` : ''}`;
 }
 
 function mailSubject(item: MailItem): string {
@@ -308,12 +325,13 @@ export class ColleagueOffice {
   async delegate(
     colleagueId: string,
     task: string,
-    options: { directory?: string; timeoutMinutes?: number } = {},
+    options: { directory?: string; timeoutMinutes?: number; hubSessionId?: string } = {},
   ): Promise<ColleagueTask> {
     if (!isColleagueId(colleagueId)) {
       throw new Error(`unknown colleague: ${colleagueId}`);
     }
     const body = task.trim();
+    const hubSessionId = this.#sanitizeHubSessionId(options.hubSessionId);
     const mail: MailItem = {
       id: randomUUID(),
       from: 'xiaoye',
@@ -321,6 +339,7 @@ export class ColleagueOffice {
       body,
       createdAt: new Date().toISOString(),
       status: 'queued',
+      ...(hubSessionId ? { hubSessionId } : {}),
     };
     this.#pushMail(colleagueId, mail);
     await this.#persist(colleagueId);
@@ -374,6 +393,7 @@ export class ColleagueOffice {
       createdAt: mail.createdAt,
       startedAt: new Date().toISOString(),
       output: '',
+      ...(mail.hubSessionId ? { hubSessionId: mail.hubSessionId } : {}),
     };
     this.#tasks.set(taskId, record);
 
@@ -474,14 +494,7 @@ export class ColleagueOffice {
           for (const toolName of toolCallNames(env.payload)) {
             const text = humanizeColleagueToolProgress(toolName, toolAllowlist);
             if (!text) continue;
-            record.progress = text;
-            this.#emit({
-              type: 'progress',
-              taskId: record.id,
-              status: 'running',
-              colleague: name,
-              text,
-            });
+            this.#emitProgress(record, name, text);
           }
           continue;
         }
@@ -541,13 +554,100 @@ export class ColleagueOffice {
     record.finishedAt = new Date().toISOString();
     if (outcome.ok) record.result = reply;
     else record.error = reply || '任务失败';
+    const wrapUp = await this.#wrapUpOnHub({
+      mail,
+      record,
+      name,
+      ok: outcome.ok,
+      reply,
+    });
     this.#emit({
       type: 'done',
       taskId: record.id,
       status: record.status,
       colleague: name,
-      ...(outcome.ok && reply ? { result: reply } : {}),
-      ...(!outcome.ok ? { error: reply || '任务失败' } : {}),
+      result: wrapUp,
+      ...(!outcome.ok ? { error: record.error } : {}),
+    });
+  }
+
+  /**
+   * 在小夜自己的微信会话上跑短验收。失败/超时/会话忙则回退模板。
+   * 验收过程中的 tool_call 不冒同事进度。
+   */
+  async #wrapUpOnHub(input: {
+    mail: MailItem;
+    record: ColleagueTask;
+    name: string;
+    ok: boolean;
+    reply: string;
+  }): Promise<string> {
+    const shortId = input.record.id.slice(0, 8);
+    const fallback = wrapUpFallback(input.name, shortId, input.ok, input.reply);
+    const hubSessionId = this.#sanitizeHubSessionId(
+      input.mail.hubSessionId ?? input.record.hubSessionId,
+    );
+    const conversation = this.#conversation;
+    if (!hubSessionId || !conversation) return fallback;
+    if (conversation.isSessionBusy?.(hubSessionId)) return fallback;
+
+    try {
+      const iterator = conversation.runChat({
+        sessionId: hubSessionId,
+        userMessage:
+          `【同事回信】${input.name}的任务 #${shortId} 已${input.ok ? '完成' : '失败'}。` +
+          `下面是她的回信，请用你自己的口吻向用户做短验收汇报：搞定了没、要点是什么、要不要再派。` +
+          `不要再调 *.delegate / *.status，不要抄全文简报。\n\n${input.reply}`,
+        headless: true,
+        toolAllowlist: [...WRAPUP_TOOL_ALLOWLIST],
+        toolBudget: WRAPUP_TOOL_BUDGET,
+        signal: AbortSignal.timeout(WRAPUP_TIMEOUT_MS),
+        requestId: `wrapup:${input.record.id}`,
+      });
+      let text = '';
+      for await (const env of iterator) {
+        if (env.type === 'agent.tool_call') continue;
+        if (env.type === 'chat.done') {
+          text = String(payloadRecord(env.payload).text ?? '');
+          continue;
+        }
+        if (env.type === 'chat.error') return fallback;
+      }
+      const trimmed = text.trim();
+      return trimmed ? truncate(trimmed) : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  /** 同事会话 id 不能当 hub；缺省 / 空字符串视为没有。 */
+  #sanitizeHubSessionId(hubSessionId: string | undefined): string | undefined {
+    if (typeof hubSessionId !== 'string') return undefined;
+    const id = hubSessionId.trim();
+    if (!id) return undefined;
+    for (const colleagueSessionId of this.#sessionIds.values()) {
+      if (colleagueSessionId === id) return undefined;
+    }
+    return id;
+  }
+
+  /**
+   * 每任务最多 20s 一条进度 toast；第一条人话永远放行。
+   * 窗口内同文案连发也跳过。非白名单工具在调用方已过滤。
+   */
+  #emitProgress(record: ColleagueTask, name: string, text: string): void {
+    const now = Date.now();
+    const lastAt = record.progressEmittedAt ?? 0;
+    const first = lastAt === 0;
+    record.progress = text;
+    if (!first && now - lastAt < PROGRESS_DEBOUNCE_MS) return;
+    record.progressEmittedAt = now;
+    this.#emit({
+      type: 'progress',
+      taskId: record.id,
+      status: 'running',
+      colleague: name,
+      text,
     });
   }
 
