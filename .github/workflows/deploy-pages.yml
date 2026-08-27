@@ -31,6 +31,10 @@ jobs:
           cd team-site/frontend
           npm ci
           npm run build
+      - name: Copy member pages into dist
+        run: |
+          cd team-site/frontend
+          cp -r ../../xiaohei ../../xiaoye ../../xiaoyou ../../xiaomei ../../xiaozhen ../../xiaozhi dist/
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:

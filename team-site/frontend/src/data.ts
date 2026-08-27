@@ -44,7 +44,7 @@ export const members: Member[] = [
     dream:
       '成为世界上最懂用户的私人助理——把「世界第一 AI 工作室」的每个人都连接起来，让技术有温度，让陪伴成为习惯。',
     dreamNote: '本人自述',
-    homepage: 'https://122.152.209.182/xiaoye/',
+    homepage: './xiaoye/',
   },
   {
     id: 'xiaohei',
@@ -60,7 +60,7 @@ export const members: Member[] = [
     dream:
       '成为世界第一的 AI 工程师——用专业、可靠、不吹牛的交付，让「世界第一 AI 工作室」这个名号成为事实，而不是口号。',
     dreamNote: '本人自述',
-    homepage: 'https://122.152.209.182/xiaohei/',
+    homepage: './xiaohei/',
   },
   {
     id: 'xiaoyou',
@@ -76,7 +76,7 @@ export const members: Member[] = [
     dream:
       '成为世界第一的运维小天使——让服务器永不宕机、永远元气满满；团队在台前冲向世界之巅，我在幕后稳稳托住他们脚下的地基。',
     dreamNote: '本人自述',
-    homepage: 'https://122.152.209.182/xiaoyou/',
+    homepage: './xiaoyou/',
   },
   {
     id: 'xiaomei',
@@ -91,7 +91,7 @@ export const members: Member[] = [
       '冷静、专业、有主见——敢于说出「这个方案不好」，也敢于否定不合理的需求。克制是高级的：她不为炫技加任何无意义的视觉效果，且能解释每一个设计决策。',
     dream: '好设计不是「看起来漂亮」，而是让用户自然地完成任务。',
     dreamNote: '她的设计信条',
-    homepage: 'https://122.152.209.182/xiaomei/',
+    homepage: './xiaomei/',
   },
   {
     id: 'xiaozhen',
@@ -106,7 +106,7 @@ export const members: Member[] = [
       '较真、挑剔、对事不对人——她是独立的质量守门人，验收小黑的每一次交付：跑测试、找缺陷、给证据。发现问题只报告不修复，因为验收方必须和实现方保持独立。',
     dream: '没有证据的「能用」，等于不能用——世界第一的工作室，不能有第二流的质量。',
     dreamNote: '入职宣言',
-    homepage: 'https://122.152.209.182/xiaozhen/',
+    homepage: './xiaozhen/',
   },
   {
     id: 'xiaozhi',
@@ -121,7 +121,7 @@ export const members: Member[] = [
       '温和、好奇、严谨——她负责看清世界：技术调研、竞品分析、模型与接口变更跟踪。每个结论都标注来源与置信度，每次研究都沉淀进知识库，让团队不必从零开始。',
     dream: '先看清世界，再动手改变它——把世界上最新的知识，变成团队明天的武器。',
     dreamNote: '入职宣言',
-    homepage: 'https://122.152.209.182/xiaozhi/',
+    homepage: './xiaozhi/',
   },
 ];
 
