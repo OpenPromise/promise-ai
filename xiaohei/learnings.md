@@ -804,3 +804,26 @@
    - 证据：第一次跑 app.test.ts 前先建了 index.html，58/58 通过；单次观察，待验证
      （若后续测试环境有独立 fixture 再改）。
 
+
+
+## 2026.08 官网成员主页链接修复（GitHub Pages 部署）
+
+1. **【高置信·本次验证】静态站点双部署（GitHub Pages 子路径 + nginx alias 根路径）下，链接一律用相对路径**
+   - 触发场景：官网成员主页链接写死服务器裸 IP（https://122.152.209.182/xxx/），GitHub Pages 版
+     （openpromise.github.io/promise-ai）点击跳外网 IP 且无对应页面；成员页内部 href="/xxx" 在
+     Pages 子路径下 404。
+   - 动作：①站点内链接用相对路径——base:'./' 的 Vite 站，成员 homepage 存 './xxx/'；
+     ②成员页互链用 '../xxx/'（回上级目录），页内资源用 './xxx'（相对当前目录）；
+     ③GitHub Pages 构建时把仓库根成员目录 cp -r 进 dist 一起发布（服务器 nginx alias 服务同一批
+     目录，两边同构，一套代码两处部署）。绝对路径 '/' 在子路径站点永远指到域名根，是 404 根因。
+   - 证据：npm run build 产物 grep 无 122.152.209.182；python3 -m http.server 在根路径与
+     /promise-ai/ 子路径模拟下，6 成员页 + 全部内部相对链接均 200；workflow 复制后 dist 下 6 目录
+     各含 index.html。
+
+2. **【高置信·本次验证】改 CRLF 行尾文件必须字节级替换（rb/wb），文本写回会破坏行尾**
+   - 触发场景：team-site/frontend/src/data.ts 是 CRLF（Windows 来源），用文本编辑/写回会把整文件
+     变 LF，产生整文件噪音 diff。
+   - 动作：python open(...,'rb') 读 bytes → 对目标串 bytes.replace → 'wb' 写回；替换前断言每个
+     目标串 count==1，写回后断言 CRLF 行数不变。
+   - 证据：data.ts 172 行 CRLF 原样保留，git diff 仅显示 6 行 homepage 变化，无行尾噪音；
+     检查行尾用 python b.count(b'\r\n')，file 命令在容器内不可用。
