@@ -58,7 +58,7 @@ describe('formatEvent', () => {
         status: 'success',
         result: '【验证结果】typecheck 通过',
       }),
-    ).toBe('✅ 小黑任务完成（#12345678）\n【验证结果】typecheck 通过');
+    ).toBe('小夜：小黑回来了。\n【验证结果】typecheck 通过');
     expect(
       formatEvent('engineer.task.done', {
         type: 'done',
@@ -66,7 +66,7 @@ describe('formatEvent', () => {
         status: 'failed',
         error: '编译失败',
       }),
-    ).toBe('❌ 小黑任务失败（#12345678）\n编译失败');
+    ).toBe('小夜：小黑这单没跑完（#12345678）。\n编译失败');
   });
 
   it('engineer.task.done 把 markdown 表格转成可读纯文本，不含分隔行', () => {
@@ -83,7 +83,7 @@ describe('formatEvent', () => {
       status: 'success',
       result,
     });
-    expect(out).toContain('✅ 小优任务完成（#abcdef01）');
+    expect(out).toContain('小夜：小优回来了。');
     expect(out).toContain('巡检结果');
     expect(out).toContain('容器：assistant-app，状态：Up 6 min');
     expect(out).not.toContain('|---|');
@@ -122,7 +122,7 @@ describe('formatEvent', () => {
         status: 'success',
         result: '【DESIGN_SPEC】完成',
       }),
-    ).toBe('✅ 小美任务完成（#abcdef01）\n【DESIGN_SPEC】完成');
+    ).toBe('小夜：小美回来了。\n【DESIGN_SPEC】完成');
   });
 
   it('ignores unknown events', () => {

@@ -663,7 +663,6 @@ export class ConversationService {
       });
 
       for (const call of toolCalls) {
-        toolCallsUsed += 1;
         const fingerprint = approvalFingerprint(call.name, parseToolCallArgs(call.arguments));
         if (fingerprint === lastToolFingerprint) {
           toolRepeatCount += 1;
@@ -678,44 +677,47 @@ export class ConversationService {
         };
         let result: ToolResult | undefined;
         let toolStartedAt: number | undefined;
-        if (input.toolBudget !== undefined && toolCallsUsed > input.toolBudget) {
-          toolBudgetExceeded = true;
-          stopToolLoop = true;
-          result = {
-            ok: false,
-            error: `工具预算超限（已执行 ${toolCallsUsed - 1}/${input.toolBudget} 次），已熔断停止`,
-          };
-        } else if (input.toolAllowlist && !input.toolAllowlist.includes(call.name)) {
+        if (input.toolAllowlist && !input.toolAllowlist.includes(call.name)) {
           // 定时任务工具白名单（OpenClaw tools-allow）：不在名单内直接拒绝，
-          // 模型看到错误后可改用允许的工具。
+          // 模型看到错误后可改用允许的工具。白名单拒绝不计入 toolBudget。
           result = {
             ok: false,
             error: `工具 ${call.name} 不在该任务允许的工具白名单内（允许：${input.toolAllowlist.join(', ')}）`,
           };
-        } else if (toolRepeatCount >= TOOL_REPEAT_LIMIT) {
-          // 连续相同调用达到阈值：不再执行，直接返回错误结果并结束循环。
-          stopToolLoop = true;
-          result = {
-            ok: false,
-            error: `检测到连续 ${TOOL_REPEAT_LIMIT} 次调用相同工具（${call.name}，参数相同），疑似循环，已停止执行`,
-          };
         } else {
-          toolStartedAt = Date.now();
-          const iterator = runToolCallWithApproval(
-            this.#approvals,
-            this.#tools,
-            call,
-            context,
-            input.headless ?? false,
-            this.#autoApproveAll,
-          );
-          while (true) {
-            const next = await iterator.next();
-            if (next.done) {
-              result = next.value;
-              break;
+          toolCallsUsed += 1;
+          if (input.toolBudget !== undefined && toolCallsUsed > input.toolBudget) {
+            toolBudgetExceeded = true;
+            stopToolLoop = true;
+            result = {
+              ok: false,
+              error: `工具预算超限（已执行 ${toolCallsUsed - 1}/${input.toolBudget} 次），已熔断停止`,
+            };
+          } else if (toolRepeatCount >= TOOL_REPEAT_LIMIT) {
+            // 连续相同调用达到阈值：不再执行，直接返回错误结果并结束循环。
+            stopToolLoop = true;
+            result = {
+              ok: false,
+              error: `检测到连续 ${TOOL_REPEAT_LIMIT} 次调用相同工具（${call.name}，参数相同），疑似循环，已停止执行`,
+            };
+          } else {
+            toolStartedAt = Date.now();
+            const iterator = runToolCallWithApproval(
+              this.#approvals,
+              this.#tools,
+              call,
+              context,
+              input.headless ?? false,
+              this.#autoApproveAll,
+            );
+            while (true) {
+              const next = await iterator.next();
+              if (next.done) {
+                result = next.value;
+                break;
+              }
+              yield next.value;
             }
-            yield next.value;
           }
         }
         if (result === undefined) {
@@ -760,36 +762,22 @@ export class ConversationService {
       }
 
       if (stopToolLoop) {
-        const note = toolBudgetExceeded
-          ? `工具预算超限（已执行 ${toolCallsUsed} 次工具调用），已自动熔断停止`
-          : `检测到工具循环（连续 ${TOOL_REPEAT_LIMIT} 次相同调用），已自动停止以避免无限执行`;
-        await this.#store.addMessage(input.sessionId, {
-          role: 'assistant',
-          content: note,
+        messages.push({
+          role: 'user',
+          content: '工具次数已用完，请立刻根据已有材料输出完整结论，不要再调用工具。',
         });
-        void this.#timeline?.addEvent({
-          type: 'chat',
-          summary: `和用户对话（已停止）：${input.userMessage.trim().slice(0, 120)}`,
-          sessionId: input.sessionId,
-        });
-        yield createEnvelope({
-          type: 'chat.done',
-          sessionId: input.sessionId,
-          requestId,
-          payload: { text: note, durationMs: Date.now() - requestStartedAt },
-        });
-        yield createEnvelope({
-          type: 'agent.state',
-          sessionId: input.sessionId,
-          requestId,
-          payload: { state: 'listening' },
-        });
-        return;
+        break;
       }
     }
 
-    // 工具轮次用尽：再跑一次不带工具的总结，避免多轮任务后收到空回复。
+    // 工具轮次用尽或预算/循环熔断：再跑一次不带工具的总结，避免只丢一句熔断提示。
+    const meltNote = stopToolLoop
+      ? toolBudgetExceeded
+        ? `工具预算超限（已执行 ${toolCallsUsed} 次工具调用），已自动熔断停止`
+        : `检测到工具循环（连续 ${TOOL_REPEAT_LIMIT} 次相同调用），已自动停止以避免无限执行`
+      : undefined;
     let finalText = '';
+    let summaryFailed = false;
     try {
       for await (const chunk of chatWithTimeoutAndRetry(this.#llm, {
         messages,
@@ -798,12 +786,15 @@ export class ConversationService {
         finalText += chunk.delta;
       }
     } catch (error) {
+      summaryFailed = true;
       finalText = `（工具轮次已达上限，最终总结生成失败：${error instanceof Error ? error.message : String(error)}）`;
     }
-    const finalSummary =
-      finalText.trim().length > 0
-        ? finalText
-        : '（本轮任务工具轮次已达上限，但未生成可见总结；如需结果请让我继续说明。）';
+    const finalSummary = (() => {
+      if (!summaryFailed && finalText.trim().length > 0) return finalText;
+      if (meltNote) return meltNote;
+      if (finalText.trim().length > 0) return finalText;
+      return '（本轮任务工具轮次已达上限，但未生成可见总结；如需结果请让我继续说明。）';
+    })();
     await this.#store.addMessage(input.sessionId, {
       role: 'assistant',
       content: finalSummary,

@@ -349,7 +349,7 @@ describe('ConversationService', () => {
           };
           return;
         }
-        yield { delta: '' };
+        yield { delta: '根据已有材料：当前时间为 2026。' };
       },
       async generate(): Promise<GenerateResult> {
         return { text: '' };
@@ -372,7 +372,88 @@ describe('ConversationService', () => {
         doneNote = (envelope.payload as { text?: string }).text ?? '';
       }
     }
-    expect(doneNote).toContain('预算超限');
+    expect(doneNote).toContain('根据已有材料');
+    expect(doneNote).not.toMatch(/^工具预算超限/);
+  });
+
+  it('toolAllowlist 拒绝的调用不计入 toolBudget', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    const tools = new ToolRegistry();
+    let pingExecuted = 0;
+    tools.register({
+      name: 'time.get',
+      description: '时间',
+      inputSchema: { type: 'object', properties: {}, required: [] },
+      permissionLevel: 0,
+      async execute() {
+        return { ok: true, data: { now: '2026' } };
+      },
+    });
+    tools.register({
+      name: 'ping.ok',
+      description: '探测',
+      inputSchema: { type: 'object', properties: {}, required: [] },
+      permissionLevel: 0,
+      async execute() {
+        pingExecuted += 1;
+        return { ok: true, data: { pong: true } };
+      },
+    });
+    let callSeq = 0;
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'deepseek-test',
+      configured: true,
+      async *chat(): AsyncIterable<ChatChunk> {
+        callSeq += 1;
+        if (callSeq === 1) {
+          yield {
+            delta: '',
+            finishReason: 'tool_calls',
+            toolCalls: [{ id: 'call_denied', name: 'time.get', arguments: '{}' }],
+          };
+          return;
+        }
+        if (callSeq === 2) {
+          yield {
+            delta: '',
+            finishReason: 'tool_calls',
+            toolCalls: [{ id: 'call_ok', name: 'ping.ok', arguments: '{}' }],
+          };
+          return;
+        }
+        yield { delta: '完成了。' };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+    const service = new ConversationService({
+      store,
+      llm,
+      tools,
+      approvals: new ApprovalRegistry(),
+      memory: new InMemoryMemoryStore(),
+    });
+    let doneNote = '';
+    for await (const envelope of service.runChat({
+      sessionId: session.id,
+      userMessage: '跑',
+      toolAllowlist: ['ping.ok'],
+      toolBudget: 1,
+    })) {
+      if (envelope.type === 'chat.done') {
+        doneNote = (envelope.payload as { text?: string }).text ?? '';
+      }
+    }
+    expect(pingExecuted).toBe(1);
+    expect(doneNote).toContain('完成了');
+    expect(doneNote).not.toContain('预算超限');
+    const refreshed = await store.getSession(session.id);
+    expect(
+      refreshed.messages.some((m) => m.role === 'tool' && m.content.includes('白名单')),
+    ).toBe(true);
   });
 
   it('模型只出推理不出正文时，用兜底文案避免静默空回复', async () => {

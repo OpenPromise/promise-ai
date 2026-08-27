@@ -102,9 +102,10 @@ export function formatEvent(event: string, data: unknown): string | undefined {
     const ok = task.status === 'success';
     const raw = (task.result || task.error || '').toString().trim();
     const detail = raw ? clipPlainText(markdownToPlain(raw)) : '';
-    return `${ok ? '✅' : '❌'} ${who}任务${ok ? '完成' : '失败'}${id ? `（#${id}）` : ''}${
-      detail ? `\n${detail}` : ''
-    }`;
+    if (ok) {
+      return `小夜：${who}回来了。${detail ? `\n${detail}` : ''}`;
+    }
+    return `小夜：${who}这单没跑完${id ? `（#${id}）` : ''}。${detail ? `\n${detail}` : ''}`;
   }
   return undefined;
 }

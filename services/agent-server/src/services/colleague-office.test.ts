@@ -245,6 +245,7 @@ describe('ColleagueOffice', () => {
       'web.search',
       'web.fetch',
       'github.search_repos',
+      'time.get',
     ]);
   });
 
@@ -266,7 +267,7 @@ describe('ColleagueOffice', () => {
         await gate;
         yield {
           type: 'agent.tool_call',
-          payload: { toolCalls: [{ name: 'coding.run' }] },
+          payload: { toolCalls: [{ name: 'coding.run' }, { name: 'time.get' }] },
         };
         yield { type: 'chat.done', payload: { text: '【目标】修好了\n报告 ok' } };
       },
@@ -311,9 +312,16 @@ describe('ColleagueOffice', () => {
     const done = office.listMailbox('xiaohei')[0];
     expect(done?.reply).toContain('修好了');
     expect(office.getTask(record.id)?.status).toBe('success');
-    expect(events.some((event) => event.type === 'progress' && event.text === 'coding.run')).toBe(
+    expect(events.some((event) => event.type === 'progress' && event.text === '正在写代码')).toBe(
       true,
     );
+    expect(
+      events.some(
+        (event) =>
+          event.type === 'progress' &&
+          (event.text === 'time.get' || (event.text ?? '').includes('time.get')),
+      ),
+    ).toBe(false);
     expect(events.some((event) => event.type === 'done' && event.status === 'success')).toBe(true);
 
     const after = await store.getSession(sessionId);
@@ -330,6 +338,38 @@ describe('ColleagueOffice', () => {
     expect(byId.ok).toBe(true);
     expect((byId.data as { status: string; result?: string }).status).toBe('success');
     expect((byId.data as { result?: string }).result).toContain('修好了');
+  });
+
+  it('进度只广播白名单内工具，并用人话而不是原始工具名', async () => {
+    const conversation: ColleagueConversation = {
+      async *runChat() {
+        yield {
+          type: 'agent.tool_call',
+          payload: {
+            toolCalls: [{ name: 'web.search' }, { name: 'time.get' }, { name: 'unknown.tool' }],
+          },
+        };
+        yield { type: 'chat.done', payload: { text: '简报' } };
+      },
+    };
+    const { office } = await makeOffice();
+    const events: ColleagueTaskEvent[] = [];
+    office.onEvent((event) => events.push(event));
+    office.attachConversation(conversation);
+    await office.delegate('xiaozhi', '调研');
+    await waitFor(() => events.some((event) => event.type === 'done'));
+    const progress = events.filter((event) => event.type === 'progress').map((event) => event.text);
+    expect(progress).toContain('正在检索网页');
+    expect(progress).toContain('正在看时间');
+    expect(
+      progress.some(
+        (text) =>
+          text === 'web.search' ||
+          text === 'time.get' ||
+          text === 'unknown.tool' ||
+          (text ?? '').includes('unknown'),
+      ),
+    ).toBe(false);
   });
 
   it('conversation chat.error / throw 把收件箱标 failed', async () => {

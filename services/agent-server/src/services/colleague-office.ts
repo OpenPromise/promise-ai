@@ -119,7 +119,7 @@ export const COLLEAGUE_EXTRA_TOOLS: Record<ColleagueId, readonly string[]> = {
   xiaoyou: ['server.shell', 'system.status'],
   xiaomei: ['filesystem.search', 'coding.run'],
   xiaozhen: ['coding.run', 'filesystem.search', 'server.shell'],
-  xiaozhi: ['web.search', 'web.fetch', 'github.search_repos'],
+  xiaozhi: ['web.search', 'web.fetch', 'github.search_repos', 'time.get'],
 };
 
 /**
@@ -183,6 +183,28 @@ function toolCallNames(payload: unknown): string[] {
       return typeof name === 'string' ? name : '';
     })
     .filter((name) => name.length > 0);
+}
+
+const TOOL_PROGRESS_LABEL: Record<string, string> = {
+  'web.search': '正在检索网页',
+  'web.fetch': '正在阅读网页',
+  'github.search_repos': '正在搜索 GitHub',
+  'filesystem.search': '正在搜索文件',
+  'coding.run': '正在写代码',
+  'server.shell': '正在执行命令',
+  'system.status': '正在查看系统状态',
+  'memory.list': '正在查阅记忆',
+  'memory.remember': '正在写入记忆',
+  'time.get': '正在看时间',
+};
+
+/** 白名单外或未知工具不冒进度；已知工具用人话，不用原始英文名。 */
+export function humanizeColleagueToolProgress(
+  toolName: string,
+  allowlist: readonly string[],
+): string | undefined {
+  if (!allowlist.includes(toolName)) return undefined;
+  return TOOL_PROGRESS_LABEL[toolName];
 }
 
 /**
@@ -450,13 +472,15 @@ export class ColleagueOffice {
         if (finished) continue;
         if (env.type === 'agent.tool_call') {
           for (const toolName of toolCallNames(env.payload)) {
-            record.progress = toolName;
+            const text = humanizeColleagueToolProgress(toolName, toolAllowlist);
+            if (!text) continue;
+            record.progress = text;
             this.#emit({
               type: 'progress',
               taskId: record.id,
               status: 'running',
               colleague: name,
-              text: toolName,
+              text,
             });
           }
           continue;
