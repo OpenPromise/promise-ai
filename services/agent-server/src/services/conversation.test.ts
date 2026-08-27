@@ -5,9 +5,11 @@ import { ToolRegistry } from '@personal-ai/tools';
 import { ApprovalRegistry } from './approval.js';
 import {
   collectPersistentContext,
+  containsDsmlToolXml,
   ConversationService,
   pruneToolResult,
   repairToolResultPairing,
+  stripDsmlToolXml,
 } from './conversation.js';
 import { InMemoryProfileStore, InMemoryTimelineStore } from '@personal-ai/memory';
 
@@ -1394,6 +1396,127 @@ describe('ConversationService', () => {
     expect(delegated).toBe(1);
     expect(callSeq).toBe(2);
     expect(finalText).toBe('headless 继续说完。');
+  });
+
+
+  it('识别并剥掉正文里的 DSML / tool XML', () => {
+    const blob =
+      '两份设计文档已落盘。现在做交付前自检 + git 提交…\n' +
+      `<\uFF5CDSML\uFF5Ctool_calls>\n<invoke name="coding_run"></invoke>\n</tool_calls>`;
+    expect(containsDsmlToolXml(blob)).toBe(true);
+    expect(containsDsmlToolXml('<tool_calls>{"name":"coding.run"}</tool_calls>')).toBe(true);
+    expect(containsDsmlToolXml('结论：主页可以交付，不用再派。')).toBe(false);
+    expect(stripDsmlToolXml(blob)).toBe('两份设计文档已落盘。现在做交付前自检 + git 提交…');
+  });
+
+  it('assistant 正文含 DSML 且无 structured toolCalls：再跑一轮无工具，chat.done 用自然语言', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    const tools = new ToolRegistry();
+    tools.register({
+      name: 'coding.run',
+      description: '写代码',
+      inputSchema: { type: 'object', properties: {}, required: [] },
+      permissionLevel: 1,
+      async execute() {
+        throw new Error('DSML 正文不应触发工具执行');
+      },
+    });
+
+    let callSeq = 0;
+    let secondHadTools: boolean | undefined;
+    let secondPrompt = '';
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'deepseek-test',
+      configured: true,
+      async *chat(input: ChatInput): AsyncIterable<ChatChunk> {
+        callSeq += 1;
+        if (callSeq === 1) {
+          yield {
+            delta:
+              '两份设计文档已落盘。现在做交付前自检 + git 提交…\n' +
+              `<\uFF5CDSML\uFF5Ctool_calls>\n<invoke name="coding_run"></invoke>\n</tool_calls>`,
+          };
+          return;
+        }
+        secondHadTools = Array.isArray(input.tools) && input.tools.length > 0;
+        const lastUser = [...input.messages].reverse().find((m) => m.role === 'user');
+        secondPrompt = lastUser?.content ?? '';
+        yield { delta: '结论：DESIGN_SPEC 已落盘，主页深色情报档案室。不用再派。' };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+    const service = new ConversationService({
+      store,
+      llm,
+      tools,
+      approvals: new ApprovalRegistry(),
+      memory: new InMemoryMemoryStore(),
+    });
+    let finalText = '';
+    for await (const envelope of service.runChat({
+      sessionId: session.id,
+      userMessage: '做小知主页',
+      headless: true,
+    })) {
+      if (envelope.type === 'chat.done') {
+        finalText = (envelope.payload as { text?: string }).text ?? '';
+      }
+    }
+    expect(callSeq).toBe(2);
+    expect(secondHadTools).toBe(false);
+    expect(secondPrompt).toContain('不要再调用工具');
+    expect(finalText).toContain('DESIGN_SPEC 已落盘');
+    expect(finalText).not.toContain('tool_calls');
+    expect(finalText).not.toContain('DSML');
+    const stored = (await store.getSession(session.id)).messages.map((m) => m.content).join('\n');
+    expect(stored).not.toContain('<tool_calls>');
+    expect(stored).not.toMatch(/<\uFF5CDSML/);
+  });
+
+  it('DSML 补救轮仍是垃圾：chat.done 只用正文前缀，不含 XML', async () => {
+    const store = new InMemorySessionStore();
+    const session = await store.createSession({ systemPrompt: '你是助理。' });
+    let callSeq = 0;
+    const llm: LLMProvider = {
+      name: 'fake',
+      model: 'deepseek-test',
+      configured: true,
+      async *chat(): AsyncIterable<ChatChunk> {
+        callSeq += 1;
+        yield {
+          delta:
+            '两份设计文档已落盘。现在做交付前自检…\n' +
+            `<\uFF5CDSML\uFF5Ctool_calls>\n</tool_calls>`,
+        };
+      },
+      async generate(): Promise<GenerateResult> {
+        return { text: '' };
+      },
+    };
+    const service = new ConversationService({
+      store,
+      llm,
+      tools: new ToolRegistry(),
+      approvals: new ApprovalRegistry(),
+      memory: new InMemoryMemoryStore(),
+    });
+    let finalText = '';
+    for await (const envelope of service.runChat({
+      sessionId: session.id,
+      userMessage: '做小知主页',
+      headless: true,
+    })) {
+      if (envelope.type === 'chat.done') {
+        finalText = (envelope.payload as { text?: string }).text ?? '';
+      }
+    }
+    expect(callSeq).toBe(2);
+    expect(finalText).toBe('两份设计文档已落盘。现在做交付前自检…');
+    expect(finalText).not.toContain('tool_calls');
   });
 
   it('非 headless 派单失败不提前结束，可继续工具轮', async () => {

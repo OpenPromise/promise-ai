@@ -240,6 +240,29 @@ export function pruneToolResult(content: string, maxChars = TOOL_RESULT_MAX_CHAR
   return `${head}\n…[结果过长已截断，原 ${content.length} 字符，仅保留头尾]…\n${tail}`;
 }
 
+const DSML_OPEN = '<\uFF5CDSML';
+const DSML_TOOL_XML_RE = new RegExp(`${DSML_OPEN}|<tool_calls>|</tool_calls>`, 'i');
+const DSML_NO_TOOLS_PROMPT = '不要再调用工具。用自然语言交完整结论。';
+const DSML_FALLBACK_TEXT = '模型把工具调用写成了正文，任务未正常收尾';
+
+/** DeepSeek 偶发把 tool XML 写成正文（无 structured toolCalls）。 */
+export function containsDsmlToolXml(text: string): boolean {
+  return DSML_TOOL_XML_RE.test(text);
+}
+
+/** 剥掉 DSML / <tool_calls> 块，保留正文前缀。 */
+export function stripDsmlToolXml(text: string): string {
+  const dsmlBlock = new RegExp(`${DSML_OPEN}[\\s\\S]*?(?:</tool_calls>|$)`, 'gi');
+  const toolBlock = /<tool_calls>[\s\S]*?(?:<\/tool_calls>|$)/gi;
+  return text
+    .replace(dsmlBlock, '')
+    .replace(toolBlock, '')
+    .replace(/<\/tool_calls>/gi, '')
+    .replace(/[ \t]+$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 /**
  * 持久上下文（Prime /goal + OpenCrabs 反馈台账思路）：把长期目标与近期
  * 反馈教训组装成一段系统提示注入每次对话，让 AI 跨会话持续关注目标、
@@ -605,6 +628,83 @@ export class ConversationService {
         return;
       }
 
+      // DeepSeek 把 tool XML 写成正文且没有 structured toolCalls：
+      // 不能 chat.done 那坨 XML。剥掉标记后，再无工具跑一轮要完整结论。
+      if ((!toolCalls || toolCalls.length === 0) && containsDsmlToolXml(fullText)) {
+        const prosePrefix = stripDsmlToolXml(fullText);
+        if (prosePrefix.length > 0) {
+          await this.#store.addMessage(input.sessionId, {
+            role: 'assistant',
+            content: prosePrefix,
+          });
+        }
+        messages.push({ role: 'assistant', content: prosePrefix });
+        messages.push({ role: 'user', content: DSML_NO_TOOLS_PROMPT });
+
+        let recovered = '';
+        try {
+          for await (const chunk of chatWithTimeoutAndRetry(this.#llm, {
+            messages,
+            ...(input.signal ? { signal: input.signal } : {}),
+          })) {
+            if (chunk.delta.length > 0) {
+              recovered += chunk.delta;
+              yield createEnvelope({
+                type: 'chat.token',
+                sessionId: input.sessionId,
+                requestId,
+                payload: { delta: chunk.delta },
+              });
+            }
+            if (chunk.usage) usage = chunk.usage;
+          }
+        } catch {
+          recovered = '';
+        }
+
+        const recoveredProse = stripDsmlToolXml(recovered);
+        const stillGarbage =
+          containsDsmlToolXml(recovered) || recovered.trim().length === 0;
+        const finalText = stillGarbage
+          ? recoveredProse.length > 0
+            ? recoveredProse
+            : prosePrefix.length > 0
+              ? prosePrefix
+              : DSML_FALLBACK_TEXT
+          : recovered;
+        const alreadyStoredPrefix =
+          stillGarbage && finalText === prosePrefix && prosePrefix.length > 0;
+        if (!alreadyStoredPrefix) {
+          await this.#store.addMessage(input.sessionId, {
+            role: 'assistant',
+            content: finalText,
+          });
+        }
+        yield createEnvelope({
+          type: 'chat.done',
+          sessionId: input.sessionId,
+          requestId,
+          payload: { text: finalText, usage, durationMs: Date.now() - requestStartedAt },
+        });
+        if (!input.headless) {
+          this.#profileIngest?.(input.userMessage);
+        }
+        if (!input.headless) {
+          void this.#timeline?.addEvent({
+            type: 'chat',
+            summary: `和用户对话：${input.userMessage.trim().slice(0, 120)}`,
+            sessionId: input.sessionId,
+          });
+        }
+        yield createEnvelope({
+          type: 'agent.state',
+          sessionId: input.sessionId,
+          requestId,
+          payload: { state: 'listening' },
+        });
+        return;
+      }
+
       // 轻量派单核查：完成式声称但无派单工具调用 → 注入"澄清或补派"提示。
       // 不 tool_choice 强制（模型可澄清，不会被逼着派单）；引用/条件句不触发。
       const claimedDispatch =
@@ -888,9 +988,12 @@ export class ConversationService {
       if (finalText.trim().length > 0) return finalText;
       return '（本轮任务工具轮次已达上限，但未生成可见总结；如需结果请让我继续说明。）';
     })();
+    const safeSummary = containsDsmlToolXml(finalSummary)
+      ? stripDsmlToolXml(finalSummary) || DSML_FALLBACK_TEXT
+      : finalSummary;
     await this.#store.addMessage(input.sessionId, {
       role: 'assistant',
-      content: finalSummary,
+      content: safeSummary,
     });
     void this.#timeline?.addEvent({
       type: 'chat',
@@ -902,7 +1005,7 @@ export class ConversationService {
       sessionId: input.sessionId,
       requestId,
       payload: {
-        text: finalSummary,
+        text: safeSummary,
         usage: undefined,
         note: `已执行 ${MAX_TOOL_TURNS} 轮工具，以上为最终总结`,
       },

@@ -13,6 +13,7 @@ import { XIAO_YOU_PROMPT } from './ops-tools.js';
 import { XIAO_MEI_PROMPT } from './designer-tools.js';
 import { XIAO_ZHEN_PROMPT } from './qa-tools.js';
 import { XIAO_ZHI_PROMPT } from './research-tools.js';
+import { containsDsmlToolXml, stripDsmlToolXml } from './conversation.js';
 
 /** 五位同事短 id（小夜除外）。会话 metadata.colleagueId / 收件箱文件名用这个。 */
 export type ColleagueId = 'xiaohei' | 'xiaoyou' | 'xiaomei' | 'xiaozhen' | 'xiaozhi';
@@ -113,6 +114,13 @@ const WRAPUP_TOOL_BUDGET = 2;
 const WRAPUP_BRIEF_CAP = 1_200;
 /** 验收只许记忆工具，绝不含 *.delegate / 同事 *.status，避免递归派单。 */
 const WRAPUP_TOOL_ALLOWLIST: readonly string[] = ['memory.list', 'memory.remember'];
+const NUDGE_TIMEOUT_MS = 60_000;
+const NUDGE_USER_MESSAGE =
+  '【小夜催交】上一封把工具调用写成了正文/只报了进度。请立刻用自然语言交完整简报：结论、要点、要不要再派。不要再调工具。';
+/** 进度半成品：开头是「现在做/接下来/正在做交付前自检」，且没有像样的简报。 */
+const PROGRESS_STUB_START_RE = /^(现在做|接下来|正在做交付前自检)/;
+const PROGRESS_STUB_PHRASE_RE = /现在做交付前自检|正在做交付前自检/;
+const SUBSTANTIAL_BRIEF_CHARS = 160;
 
 /** 禁止再派单 / 查同事状态，避免同事会话递归调用 *.delegate。 */
 export const BLOCKED_COLLEAGUE_TOOLS: readonly string[] = [
@@ -188,6 +196,19 @@ export function wrapUpFallback(who: string, shortId: string, ok: boolean, reply:
   const brief = truncate(reply, WRAPUP_BRIEF_CAP);
   if (ok) return `小夜：${who}回来了。${brief ? `\n${brief}` : ''}`;
   return `小夜：${who}这单没跑完${shortId ? `（#${shortId}）` : ''}。${brief ? `\n${brief}` : ''}`;
+}
+
+/**
+ * 同事回信半成品：DSML/tool XML 漏进正文，或只有「现在做交付前自检」这类进度 stub。
+ * 启发式收紧：真正的验收表里提到「自检」但正文够长，不算没交完。
+ */
+export function isIncompleteColleagueReply(text: string): boolean {
+  if (containsDsmlToolXml(text)) return true;
+  const prose = stripDsmlToolXml(text).trim();
+  if (!prose) return false;
+  const looksStub = PROGRESS_STUB_START_RE.test(prose) || PROGRESS_STUB_PHRASE_RE.test(prose);
+  if (!looksStub) return false;
+  return prose.length < SUBSTANTIAL_BRIEF_CHARS;
 }
 
 function mailSubject(item: MailItem): string {
@@ -661,7 +682,9 @@ export class ColleagueOffice {
     const fromName = mail.from === 'xiaoye' ? '小夜' : colleagueName(mail.from);
     const userMessage = `【${fromName}来信】\n${mail.body}`;
     const toolAllowlist = colleagueToolAllowlist(colleagueId, { nested: Boolean(mail.nested) });
-    let finished = false;
+    let doneText: string | undefined;
+    let errorText: string | undefined;
+    let sawTerminal = false;
     try {
       const iterator = conversation.runChat({
         sessionId,
@@ -673,8 +696,8 @@ export class ColleagueOffice {
         requestId: record.id,
       });
       for await (const env of iterator) {
-        if (finished) continue;
         if (env.type === 'agent.tool_call') {
+          if (sawTerminal) continue;
           for (const toolName of toolCallNames(env.payload)) {
             const text = humanizeColleagueToolProgress(toolName, toolAllowlist);
             if (!text) continue;
@@ -683,39 +706,88 @@ export class ColleagueOffice {
           continue;
         }
         if (env.type === 'chat.done') {
-          const text = String(payloadRecord(env.payload).text ?? '');
-          await this.#settle(colleagueId, mail, record, {
-            ok: true,
-            text,
-            skipSession: true,
-          });
-          finished = true;
+          doneText = String(payloadRecord(env.payload).text ?? '');
+          sawTerminal = true;
           continue;
         }
         if (env.type === 'chat.error') {
-          const error = String(payloadRecord(env.payload).error ?? '对话失败');
-          await this.#settle(colleagueId, mail, record, {
-            ok: false,
-            text: error,
-            skipSession: true,
-          });
-          finished = true;
+          errorText = String(payloadRecord(env.payload).error ?? '对话失败');
+          sawTerminal = true;
         }
       }
-      if (!finished) {
-        await this.#settle(colleagueId, mail, record, {
-          ok: false,
-          text: '会话结束但未返回结果',
-          skipSession: false,
-        });
-      }
     } catch (error) {
-      if (finished) return;
+      if (!sawTerminal) {
+        errorText = error instanceof Error ? error.message : String(error);
+      }
+    }
+
+    if (errorText !== undefined && doneText === undefined) {
       await this.#settle(colleagueId, mail, record, {
         ok: false,
-        text: error instanceof Error ? error.message : String(error),
+        text: errorText,
+        skipSession: sawTerminal,
+      });
+      return;
+    }
+    if (doneText === undefined) {
+      await this.#settle(colleagueId, mail, record, {
+        ok: false,
+        text: '会话结束但未返回结果',
         skipSession: false,
       });
+      return;
+    }
+
+    let text = doneText;
+    let ok = true;
+    if (isIncompleteColleagueReply(text)) {
+      const continued = await this.#nudgeIncompleteReply(sessionId, record.id, conversation);
+      if (continued && !isIncompleteColleagueReply(continued)) {
+        text = continued;
+      } else {
+        ok = false;
+        const stripped = stripDsmlToolXml(text);
+        if (stripped) text = stripped;
+      }
+    }
+    await this.#settle(colleagueId, mail, record, {
+      ok,
+      text,
+      skipSession: true,
+    });
+  }
+
+  /**
+   * 半成品回信后再跑一轮无工具催交。必须等上一轮 runChat 迭代器结束，
+   * 否则同一同事会话队列会死锁。
+   */
+  async #nudgeIncompleteReply(
+    sessionId: string,
+    taskId: string,
+    conversation: ColleagueConversation,
+  ): Promise<string | undefined> {
+    try {
+      const iterator = conversation.runChat({
+        sessionId,
+        userMessage: NUDGE_USER_MESSAGE,
+        headless: true,
+        toolAllowlist: [],
+        toolBudget: 0,
+        signal: AbortSignal.timeout(NUDGE_TIMEOUT_MS),
+        requestId: `continue:${taskId}`,
+      });
+      let text = '';
+      for await (const env of iterator) {
+        if (env.type === 'chat.done') {
+          text = String(payloadRecord(env.payload).text ?? '');
+          continue;
+        }
+        if (env.type === 'chat.error') return undefined;
+      }
+      const trimmed = text.trim();
+      return trimmed ? trimmed : undefined;
+    } catch {
+      return undefined;
     }
   }
 
@@ -783,7 +855,9 @@ export class ColleagueOffice {
         userMessage:
           `【同事回信】${input.name}的任务 #${shortId} 已${input.ok ? '完成' : '失败'}。` +
           `下面是她的回信，请用你自己的口吻向用户做短验收汇报：搞定了没、要点是什么、要不要再派。` +
-          `不要再调 *.delegate / *.status，不要抄全文简报。\n\n${input.reply}`,
+          `不要再调 *.delegate / *.status，不要抄全文简报。` +
+          `禁止说「等她下一条」「还在自检」「正式回报还没来」。这封信就是终稿。` +
+          `若内容明显没写完，就说没交完、已知要点是什么，不要让用户等待。\n\n${input.reply}`,
         headless: true,
         toolAllowlist: [...WRAPUP_TOOL_ALLOWLIST],
         toolBudget: WRAPUP_TOOL_BUDGET,

@@ -16,6 +16,7 @@ import {
   COLLEAGUE_ROSTER,
   ColleagueOffice,
   colleagueToolAllowlist,
+  isIncompleteColleagueReply,
   parseColleagueId,
   wrapUpFallback,
   type ColleagueConversation,
@@ -432,6 +433,8 @@ describe('ColleagueOffice', () => {
     expect(captured[0]?.sessionId).toBe(office.getSessionId('xiaozhi'));
     expect(captured[1]?.sessionId).toBe(hubSessionId);
     expect(captured[1]?.userMessage).toContain('【同事回信】');
+    expect(captured[1]?.userMessage).toContain('禁止说「等她下一条」');
+    expect(captured[1]?.userMessage).toContain('这封信就是终稿');
     expect(captured[1]?.userMessage).toContain('小知');
     expect(captured[1]?.userMessage).toContain(record.id.slice(0, 8));
     expect(captured[1]?.headless).toBe(true);
@@ -816,4 +819,176 @@ describe('ColleagueOffice', () => {
 
     await expect(office.sendFrom('xiaohei', 'xiaomei', '退回给你')).rejects.toThrow(/打转/);
   });
+
+  it('isIncompleteColleagueReply：DSML 与短进度 stub 为半成品；验收表里的自检不是', () => {
+    const dsml =
+      '两份设计文档已落盘。现在做交付前自检 + git 提交…\n' +
+      `<\uFF5CDSML\uFF5Ctool_calls>\n<invoke name="coding_run"></invoke>\n</tool_calls>`;
+    expect(isIncompleteColleagueReply(dsml)).toBe(true);
+    expect(isIncompleteColleagueReply('现在做交付前自检 + git 提交…')).toBe(true);
+    expect(isIncompleteColleagueReply('接下来补一笔自检就交。')).toBe(true);
+    expect(isIncompleteColleagueReply('两份设计文档已落盘。现在做交付前自检 + git 提交…')).toBe(
+      true,
+    );
+    const qaTable = [
+      '## 验收',
+      '| 项 | 结果 |',
+      '| 对比度 | 通过 |',
+      '| 交付前自检 | 全部通过 |',
+      '结论：可以交付，不用再派。要点是深色档案室与夜间可读。',
+      '还核对了按钮热区和空态文案，表格里的自检只是 QA 记录不是进度预告。',
+      '补充：主页深色情报档案室、夜间对比度、空态与错误态文案都过了，不需要再派小美。',
+      '交互：夜间模式切换、档案检索空态、错误态文案都过了，结论维持不用再派。',
+    ].join('\n');
+    expect(qaTable.length).toBeGreaterThan(160);
+    expect(isIncompleteColleagueReply(qaTable)).toBe(false);
+    expect(isIncompleteColleagueReply('结论：主页 v2 已交，不用再派。')).toBe(false);
+  });
+
+  it('不完整 DSML 回信触发一次催交；催交完整则 mailbox 用第二封，wrap-up 带禁止等下一条', async () => {
+    const dsml =
+      '两份设计文档已落盘。现在做交付前自检 + git 提交…\n' +
+      `<\uFF5CDSML\uFF5Ctool_calls>\n<invoke name="coding_run"></invoke>\n</tool_calls>`;
+    const captured: Array<{
+      sessionId: string;
+      userMessage: string;
+      toolAllowlist?: string[];
+      toolBudget?: number;
+      headless?: boolean;
+    }> = [];
+    const conversation: ColleagueConversation = {
+      async *runChat(input) {
+        captured.push(input);
+        if (input.userMessage.startsWith('【小夜催交】')) {
+          yield {
+            type: 'chat.done',
+            payload: {
+              text: '结论：主页 v2 与 DESIGN_SPEC 已落盘。要点：深色情报档案室。不用再派。',
+            },
+          };
+          return;
+        }
+        if (input.userMessage.startsWith('【同事回信】')) {
+          yield {
+            type: 'chat.done',
+            payload: { text: '小美把主页设计交来了，不用再派。' },
+          };
+          return;
+        }
+        yield { type: 'chat.done', payload: { text: dsml } };
+      },
+    };
+    const { office } = await makeOffice({
+      runTask: async () => {
+        throw new Error('不应走 runner');
+      },
+    });
+    const events: ColleagueTaskEvent[] = [];
+    office.onEvent((event) => events.push(event));
+    office.attachConversation(conversation);
+
+    const record = await office.delegate('xiaomei', '做小知主页', { hubSessionId: 'hub-dsml' });
+    await waitFor(() => events.some((event) => event.type === 'done'), 1000);
+
+    const nudge = captured.filter((row) => row.userMessage.startsWith('【小夜催交】'));
+    expect(nudge).toHaveLength(1);
+    expect(nudge[0]?.sessionId).toBe(office.getSessionId('xiaomei'));
+    expect(nudge[0]?.headless).toBe(true);
+    expect(nudge[0]?.toolAllowlist).toEqual([]);
+    expect(nudge[0]?.toolBudget).toBe(0);
+
+    const mail = office.listMailbox('xiaomei')[0];
+    expect(mail?.status).toBe('done');
+    expect(mail?.reply).toContain('主页 v2 与 DESIGN_SPEC');
+    expect(mail?.reply).not.toContain('tool_calls');
+    expect(mail?.reply).not.toContain('DSML');
+    expect(office.getTask(record.id)?.status).toBe('success');
+
+    const wrap = captured.find((row) => row.userMessage.startsWith('【同事回信】'));
+    expect(wrap?.userMessage).toContain('禁止说「等她下一条」');
+    expect(wrap?.userMessage).toContain('这封信就是终稿');
+    expect(wrap?.userMessage).toContain('已完成');
+    expect(wrap?.userMessage).not.toContain('tool_calls');
+    const done = events.find((event) => event.type === 'done');
+    expect(done?.result).toContain('小美把主页设计交来了');
+  });
+
+  it('催交仍不完整则保留首封（剥 XML）并标 failed，wrap-up 按没交完', async () => {
+    const dsml =
+      '两份设计文档已落盘。现在做交付前自检 + git 提交…\n' +
+      `<\uFF5CDSML\uFF5Ctool_calls>\n</tool_calls>`;
+    const captured: string[] = [];
+    const conversation: ColleagueConversation = {
+      async *runChat(input) {
+        captured.push(input.userMessage);
+        if (input.userMessage.startsWith('【小夜催交】')) {
+          yield { type: 'chat.done', payload: { text: '现在做交付前自检…' } };
+          return;
+        }
+        if (input.userMessage.startsWith('【同事回信】')) {
+          yield { type: 'chat.done', payload: { text: '小美这单没交完，已知落了两份设计文档。' } };
+          return;
+        }
+        yield { type: 'chat.done', payload: { text: dsml } };
+      },
+    };
+    const { office } = await makeOffice({
+      runTask: async () => {
+        throw new Error('不应走 runner');
+      },
+    });
+    const events: ColleagueTaskEvent[] = [];
+    office.onEvent((event) => events.push(event));
+    office.attachConversation(conversation);
+    await office.delegate('xiaomei', '做小知主页', { hubSessionId: 'hub-dsml-fail' });
+    await waitFor(() => events.some((event) => event.type === 'done'), 1000);
+
+    expect(captured.some((msg) => msg.startsWith('【小夜催交】'))).toBe(true);
+    const mail = office.listMailbox('xiaomei')[0];
+    expect(mail?.status).toBe('failed');
+    expect(mail?.reply).toContain('两份设计文档已落盘');
+    expect(mail?.reply).not.toContain('tool_calls');
+    const wrap = captured.find((msg) => msg.startsWith('【同事回信】'));
+    expect(wrap).toContain('已失败');
+    expect(wrap).toContain('禁止说「等她下一条」');
+    const done = events.find((event) => event.type === 'done');
+    expect(done?.status).toBe('failed');
+    expect(done?.result).toContain('没交完');
+  });
+
+  it('验收表提到自检的完整简报不催交', async () => {
+    const qaTable = [
+      '## 验收',
+      '| 项 | 结果 |',
+      '| 对比度 | 通过 |',
+      '| 交付前自检 | 全部通过 |',
+      '结论：可以交付，不用再派。要点是深色档案室与夜间可读。',
+      '还核对了按钮热区和空态文案，表格里的自检只是 QA 记录不是进度预告。',
+    ].join('\n');
+    const captured: string[] = [];
+    const conversation: ColleagueConversation = {
+      async *runChat(input) {
+        captured.push(input.userMessage);
+        if (input.userMessage.startsWith('【同事回信】')) {
+          yield { type: 'chat.done', payload: { text: '小真验收过了。' } };
+          return;
+        }
+        yield { type: 'chat.done', payload: { text: qaTable } };
+      },
+    };
+    const { office } = await makeOffice({
+      runTask: async () => {
+        throw new Error('不应走 runner');
+      },
+    });
+    const events: ColleagueTaskEvent[] = [];
+    office.onEvent((event) => events.push(event));
+    office.attachConversation(conversation);
+    await office.delegate('xiaozhen', '回归主页', { hubSessionId: 'hub-qa' });
+    await waitFor(() => events.some((event) => event.type === 'done'), 1000);
+    expect(captured.some((msg) => msg.startsWith('【小夜催交】'))).toBe(false);
+    expect(office.listMailbox('xiaozhen')[0]?.status).toBe('done');
+    expect(office.listMailbox('xiaozhen')[0]?.reply).toContain('交付前自检');
+  });
+
 });
