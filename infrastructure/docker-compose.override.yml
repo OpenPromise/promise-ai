@@ -1,0 +1,14 @@
+services:
+  app:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      HTTP_PROXY: http://host.docker.internal:7890
+      HTTPS_PROXY: http://host.docker.internal:7890
+      NODE_USE_ENV_PROXY: "1"
+      http_proxy: http://host.docker.internal:7890
+      https_proxy: http://host.docker.internal:7890
+      NO_PROXY: localhost,127.0.0.1,postgres,weixin-bridge,assistant-postgres,assistant-weixin,host.docker.internal,.qq.com,.weixin.qq.com,.wechat.com,.tencent.com,.qcloud.com,.myqcloud.com,.cn,.baidu.com,.taobao.com,.tmall.com,.jd.com,.gitee.com,.bilibili.com,.163.com,.aliyun.com,.alibaba.com,.zhihu.com,.douyin.com,.bytedance.com,.meituan.com,.didiglobal.com,.pinduoduo.com,.csdn.net,.51job.com,.weibo.com,.sohu.com,.ctrip.com,.ele.me
+      no_proxy: localhost,127.0.0.1,postgres,weixin-bridge,assistant-postgres,assistant-weixin,host.docker.internal,.qq.com,.weixin.qq.com,.wechat.com,.tencent.com,.qcloud.com,.myqcloud.com,.cn,.baidu.com,.taobao.com,.tmall.com,.jd.com,.gitee.com,.bilibili.com,.163.com,.aliyun.com,.alibaba.com,.zhihu.com,.douyin.com,.bytedance.com,.meituan.com,.didiglobal.com,.pinduoduo.com,.csdn.net,.51job.com,.weibo.com,.sohu.com,.ctrip.com,.ele.me
+    volumes:
+      - /etc/ssh/ssh_config.d/proxy.conf:/etc/ssh/ssh_config.d/proxy.conf:ro

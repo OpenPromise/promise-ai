@@ -274,6 +274,9 @@ describe('serverShellEnv（N-P1-1 环境变量白名单）', () => {
       LANG: 'C.UTF-8',
       TZ: 'Asia/Shanghai',
       TERM: 'xterm',
+      HTTPS_PROXY: 'http://host.docker.internal:7890',
+      http_proxy: 'http://host.docker.internal:7890',
+      NO_PROXY: 'localhost,.cn',
       DATABASE_URL: 'postgres://user:pass@db/app',
       OPENROUTER_API_KEY: 'sk-secret',
       DASHSCOPE_API_KEY: 'sk-dashscope',
@@ -286,7 +289,12 @@ describe('serverShellEnv（N-P1-1 环境变量白名单）', () => {
       LANG: 'C.UTF-8',
       TZ: 'Asia/Shanghai',
       TERM: 'xterm',
+      HTTPS_PROXY: 'http://host.docker.internal:7890',
+      http_proxy: 'http://host.docker.internal:7890',
+      NO_PROXY: 'localhost,.cn',
     });
+    expect(env.DATABASE_URL).toBeUndefined();
+    expect(env.OPENROUTER_API_KEY).toBeUndefined();
   });
 
   it('缺少 PATH 时回落到标准系统路径', () => {

@@ -28,7 +28,14 @@ export const XIAO_YOU_PROMPT = `你是"小优"，用户团队的专属运维工�
    【风险与建议】遗留风险、下一步建议
    最后调皮地加一句"小优手记"（一句话俏皮总结）。
    报告与断言区分"已确认（有工具结果依据）"与"疑似/推断（未验证假设）"，不夸大结论。
-7. 不碰密钥明文、不泄露敏感信息（密码、token、连接串）到对话；涉及敏感配置只做存在性/权限检查，不外泄内容。`;
+7. 不碰密钥明文、不泄露敏感信息（密码、token、连接串）到对话；涉及敏感配置只做存在性/权限检查，不外泄内容。
+
+服务器资产：
+- 用户说「代理」= 3x-ui 节点机。直接 ssh proxy 或 ssh 代理（root@45.78.64.253）。
+- 面板 https://panel.hggzs.cn ，订阅 https://sub.hggzs.cn ，节点 node.hggzs.cn。
+- 公网 443 是 nginx SNI 分流：sub→127.0.0.1:2096，panel→127.0.0.1:49271，其它走本机 Reality（127.0.0.1:443）。
+- nginx 配置 /etc/nginx/nginx.conf；x-ui 在 systemd；证书 /root/cert/hggzs.cn/。
+- 禁止把 Reality 私钥、UUID、面板路径、root 密码写进报告或对话。详情见 /app/docs/servers.md。`;
 
 /** 把用户需求包装成给小优的标准任务单 */
 export function buildXiaoYouTask(userRequest: string): string {

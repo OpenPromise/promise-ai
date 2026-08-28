@@ -41,6 +41,16 @@ const SHELL_ENV_ALLOWLIST = [
   'LOGNAME',
   'SHELL',
   'HOSTNAME',
+  // 代理不是密钥；不透传的话 git clone / curl GitHub 会直连被墙。
+  'http_proxy',
+  'https_proxy',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'all_proxy',
+  'ALL_PROXY',
+  'no_proxy',
+  'NO_PROXY',
+  'NODE_USE_ENV_PROXY',
 ] as const;
 
 export function serverShellEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
