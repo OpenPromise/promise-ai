@@ -8,6 +8,7 @@ export * from './tasks.js';
 export * from './profile.js';
 export * from './timeline.js';
 export * from './reminders.js';
+export * from './usage.js';
 
 export class SessionNotFoundError extends Error {
   readonly sessionId: string;

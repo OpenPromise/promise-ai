@@ -13,12 +13,14 @@ import {
   InMemoryTaskStore,
   InMemoryProfileStore,
   InMemoryReminderStore,
+  InMemoryUsageStore,
   PostgresMemoryStore,
   PostgresProfileStore,
   PostgresReminderStore,
   PostgresSessionStore,
   PostgresTaskStore,
   PostgresTimelineStore,
+  PostgresUsageStore,
 } from '@personal-ai/memory';
 import { ToolRegistry, createBuiltinTools } from '@personal-ai/tools';
 import { ApprovalRegistry } from './services/approval.js';
@@ -56,6 +58,7 @@ export interface AgentCore {
   profileStore: InMemoryProfileStore | PostgresProfileStore;
   timelineStore: InMemoryTimelineStore | PostgresTimelineStore;
   reminderStore: InMemoryReminderStore | PostgresReminderStore;
+  usageStore: InMemoryUsageStore | PostgresUsageStore;
   persona: FilePersonaProvider;
   personaDir: string;
   llm: FallbackLLMProvider;
@@ -125,6 +128,7 @@ export async function createAgentCore(options: {
   let profileStore: InMemoryProfileStore | PostgresProfileStore = new InMemoryProfileStore();
   let timelineStore: InMemoryTimelineStore | PostgresTimelineStore = new InMemoryTimelineStore();
   let reminderStore: InMemoryReminderStore | PostgresReminderStore = new InMemoryReminderStore();
+  let usageStore: InMemoryUsageStore | PostgresUsageStore = new InMemoryUsageStore();
   if (config.databaseUrl) {
     const postgresMemory = new PostgresMemoryStore({
       connectionString: config.databaseUrl,
@@ -134,17 +138,20 @@ export async function createAgentCore(options: {
     const postgresProfiles = new PostgresProfileStore({ connectionString: config.databaseUrl });
     const postgresTimeline = new PostgresTimelineStore({ connectionString: config.databaseUrl });
     const postgresReminders = new PostgresReminderStore({ connectionString: config.databaseUrl });
+    const postgresUsage = new PostgresUsageStore({ connectionString: config.databaseUrl });
     try {
       await postgresMemory.init();
       await postgresTasks.init();
       await postgresProfiles.init();
       await postgresTimeline.init();
       await postgresReminders.init();
+      await postgresUsage.init();
       memory = postgresMemory;
       taskStore = postgresTasks;
       profileStore = postgresProfiles;
       timelineStore = postgresTimeline;
       reminderStore = postgresReminders;
+      usageStore = postgresUsage;
       memoryBackend = 'postgres';
       console.log(`[memory] embedding: dashscope/${memoryEmbedder.dimensions ?? 'local'}`);
       let dbHost = 'postgres';
@@ -288,6 +295,8 @@ export async function createAgentCore(options: {
     memory,
     profile: profileStore,
     timeline: timelineStore,
+    usage: usageStore,
+    llmProvider: config.llmProvider,
     profileIngest: (message) => void profileIngestor.ingest(message),
     autoApproveAll: config.autoApproveAll,
   });
@@ -402,6 +411,7 @@ export async function createAgentCore(options: {
     profileStore,
     timelineStore,
     reminderStore,
+    usageStore,
     persona,
     personaDir,
     llm,
