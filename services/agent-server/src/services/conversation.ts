@@ -509,6 +509,11 @@ export class ConversationService {
     return this.#sessionQueues.has(sessionId);
   }
 
+  /** 任一会话忙（含用户微信回合）：心跳忙守卫用。 */
+  isAnySessionBusy(): boolean {
+    return this.#sessionQueues.size > 0;
+  }
+
   async *#runChatInner(input: RunChatInput): AsyncIterable<ProtocolEnvelope> {
     const requestId = input.requestId ?? randomUUID();
     const requestStartedAt = Date.now();

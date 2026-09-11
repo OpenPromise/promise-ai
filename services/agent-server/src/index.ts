@@ -23,6 +23,11 @@ import { createCloudTools } from './services/cloud-tools.js';
 import { createProfileTools } from './services/profile-tools.js';
 import { createTimelineTools } from './services/timeline-tools.js';
 import { HookService } from './services/hook-service.js';
+import {
+  HeartbeatService,
+  ensureDigestTasks,
+  loadHeartbeatPrompt,
+} from './services/heartbeat-service.js';
 import { buildApp } from './app.js';
 import { createAgentCore } from './agent-core.js';
 import { registerColleagueInternalRoutes } from './routes/colleague-internal.js';
@@ -49,6 +54,7 @@ const {
   profileStore,
   timelineStore,
   reminderStore,
+  taskStore,
   persona,
   personaDir,
   llm,
@@ -157,6 +163,45 @@ const hookService = new HookService({
   timeline: timelineStore,
 });
 
+const heartbeatEveryMs = Number(process.env.HEARTBEAT_EVERY_MS ?? '');
+const heartbeatEnabled = (process.env.HEARTBEAT_ENABLED ?? 'true').toLowerCase() !== 'false';
+const heartbeatService = new HeartbeatService({
+  conversation,
+  sessions: store,
+  tasks: taskStore,
+  colleagueOffice,
+  systemPrompt: () => persona.getSystemPrompt(),
+  heartbeatPrompt: () => loadHeartbeatPrompt(personaDir),
+  timeline: timelineStore,
+  enabled: heartbeatEnabled,
+  ...(Number.isFinite(heartbeatEveryMs) && heartbeatEveryMs > 0
+    ? { everyMs: heartbeatEveryMs }
+    : {}),
+  isBusy: () => conversation.isAnySessionBusy(),
+});
+if (heartbeatEnabled) {
+  heartbeatService.start();
+  console.log(
+    `[heartbeat] enabled every=${Math.round((Number.isFinite(heartbeatEveryMs) && heartbeatEveryMs > 0 ? heartbeatEveryMs : 30 * 60_000) / 60_000)}m`,
+  );
+} else {
+  console.log('[heartbeat] disabled (HEARTBEAT_ENABLED=false)');
+}
+
+try {
+  const digestSeed = await ensureDigestTasks({
+    tasks: taskStore,
+    createTaskSession: (action) => taskService.createTaskSession(action),
+  });
+  if (digestSeed.created.length > 0) {
+    console.log(`[heartbeat] seeded digest tasks: ${digestSeed.created.join(', ')}`);
+  }
+} catch (error) {
+  console.warn(
+    `[heartbeat] ensureDigestTasks failed (${error instanceof Error ? error.message : String(error)})`,
+  );
+}
+
 const hostUptimeSeconds = await readHostUptimeSeconds();
 const hostBootedRecently = hostUptimeSeconds !== null && hostUptimeSeconds < 10 * 60;
 console.log(
@@ -176,7 +221,14 @@ const app = buildApp({
   profile: profileStore,
   timeline: timelineStore,
   profileIngest: (message) => void profileIngestor.ingest(message),
-  subscribeTaskEvents: (listener) => taskService.onRun(listener),
+  subscribeTaskEvents: (listener) => {
+    const unsubTask = taskService.onRun(listener);
+    const unsubHb = heartbeatService.onRun(listener);
+    return () => {
+      unsubTask();
+      unsubHb();
+    };
+  },
   subscribeReminderEvents: (listener) => reminderService.onDue(listener),
   subscribeHookEvents: (listener) => hookService.onRun(listener),
   subscribeEngineerEvents: (listener) => {
@@ -232,6 +284,7 @@ const shutdown = async (signal: string): Promise<void> => {
   app.log.info({ signal }, 'shutting down agent-server');
   taskService.stop();
   reminderService.stop();
+  heartbeatService.stop();
   await colleagueOffice.closeAndWait();
   await app.close();
   process.exit(0);

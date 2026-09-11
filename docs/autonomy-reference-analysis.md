@@ -109,8 +109,13 @@
 ## 落地进度
 
 - ✅ ① Heartbeat 不打扰协议（2026-08-20）：事件推送器识别任务输出
-  `HEARTBEAT_OK` 静默跳过（OpenClaw heartbeat 思路）；人设引导巡检任务
+  `HEARTBEAT_OK` / `NO_REPLY` 静默跳过（OpenClaw heartbeat 思路）；人设引导巡检任务
   正常只回 HEARTBEAT_OK，异常才报告
+- ✅ ①b 常驻 Heartbeat + 早晚 digest（2026-09-11）：`HeartbeatService` 每 30–60 分钟
+  轻量巡检收件箱/卡住委派（忙守卫跳过用户微信回合）；干净信号不跑 LLM；
+  有事合并 digest 经 `task.run`→weixin-bridge。早晚摘要用既有 `task.create`
+  cron（09:00 / 21:00 Asia/Shanghai，启动幂等种子 `morning-digest` / `evening-digest`）。
+  配置：`HEARTBEAT_ENABLED` / `HEARTBEAT_EVERY_MS`；提示词：`persona/heartbeat.md`
 - ✅ ② 定时任务加固：task.create 支持 `tools` 白名单（OpenClaw
   tools-allow），白名单外工具直接拒绝并回传错误；TaskService 对无人值守
   任务设工具预算 10 次（tool_budget_exceeded 熔断）
