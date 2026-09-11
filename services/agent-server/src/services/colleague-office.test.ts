@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -72,7 +72,12 @@ describe('ColleagueOffice', () => {
   });
 
   async function makeOffice(
-    options: { store?: InMemorySessionStore; runTask?: RunTaskFn; gitRepoDir?: string | null } = {},
+    options: {
+      store?: InMemorySessionStore;
+      runTask?: RunTaskFn;
+      gitRepoDir?: string | null;
+      projectRoot?: string | null;
+    } = {},
   ) {
     const mailboxDir = await mkdtemp(path.join(tmpdir(), 'mailboxes-'));
     dirs.push(mailboxDir);
@@ -83,6 +88,7 @@ describe('ColleagueOffice', () => {
       runners,
       mailboxDir,
       gitRepoDir: options.gitRepoDir ?? null,
+      projectRoot: options.projectRoot ?? null,
     });
     offices.push(office);
     await office.ensureSessions();
@@ -134,6 +140,35 @@ describe('ColleagueOffice', () => {
     const still = await store.getSession(weixin.id);
     expect(still.systemPrompt).toBe('小夜');
     expect(still.metadata).toEqual({ channel: 'weixin', peerId: 'wxid_ceo' });
+  });
+
+  it('ensureSessions 按 allowlist 注入 SKILL.md；缺文件时跳过', async () => {
+    const skillsRoot = await mkdtemp(path.join(tmpdir(), 'skills-root-'));
+    dirs.push(skillsRoot);
+    const skillDir = path.join(skillsRoot, 'xiaozhen', 'skills', 'release-smoke');
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(
+      path.join(skillDir, 'SKILL.md'),
+      `---
+name: release-smoke
+description: smoke
+---
+CHECKLIST_TOKEN_XYZ
+`,
+      'utf8',
+    );
+
+    const { store } = await makeOffice({ projectRoot: skillsRoot });
+    const zhen = (await store.listSessions()).find((s) => s.metadata?.colleagueId === 'xiaozhen');
+    const you = (await store.listSessions()).find((s) => s.metadata?.colleagueId === 'xiaoyou');
+    const hei = (await store.listSessions()).find((s) => s.metadata?.colleagueId === 'xiaohei');
+
+    expect(zhen?.systemPrompt).toContain('## Skills');
+    expect(zhen?.systemPrompt).toContain('CHECKLIST_TOKEN_XYZ');
+    expect(zhen?.systemPrompt).toContain(COLLEAGUE_ROSTER.find((e) => e.id === 'xiaozhen')!.prompt.slice(0, 20));
+    // allowlisted host-health missing → no skills section for 小优
+    expect(you?.systemPrompt).toBe(COLLEAGUE_ROSTER.find((e) => e.id === 'xiaoyou')!.prompt);
+    expect(hei?.systemPrompt).toBe(COLLEAGUE_ROSTER.find((e) => e.id === 'xiaohei')!.prompt);
   });
 
   it('delegate 写信入收件箱并记入同事会话；完成后标记 done + assistant 回复', async () => {

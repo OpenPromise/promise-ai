@@ -4,6 +4,18 @@ export { FilePersonaProvider } from './persona.js';
 export type { FilePersonaProviderOptions, PersonaFileSpec } from './persona.js';
 export { PERSONA_FILES } from './persona.js';
 
+export {
+  DEFAULT_ROLE_SKILL_ALLOWLIST,
+  discoverSkills,
+  formatSkillsSection,
+  injectSkillsIntoPrompt,
+  loadSkillsForRole,
+  parseSkillMd,
+  selectSkillsForRole,
+  skillRootsForRole,
+} from './skills.js';
+export type { LoadSkillsForRoleOptions, Skill } from './skills.js';
+
 export interface VoiceProfile {
   voiceId: string;
   model?: string;
