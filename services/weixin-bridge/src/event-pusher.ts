@@ -72,25 +72,25 @@ export function formatEvent(event: string, data: unknown): string | undefined {
     const name = task.taskName || task.action || '定时任务';
     const ok = task.status !== 'error';
     const detail = (task.output || task.error || '').toString().slice(0, 300);
-    // OpenClaw heartbeat 不打扰协议：任务输出 HEARTBEAT_OK 表示"无事发生"，
+    // OpenClaw heartbeat 不打扰协议：任务输出 HEARTBEAT_OK / NO_REPLY 表示"无事发生"，
     // 静默跳过，不推送给用户（避免定时巡检每轮都刷屏）。
-    if (
-      ok &&
-      (task.output ?? '').toString().trim().toUpperCase().includes('HEARTBEAT_OK')
-    ) {
-      return undefined;
+    if (ok) {
+      const out = (task.output ?? '').toString().trim().toUpperCase();
+      if (out.includes('HEARTBEAT_OK') || out.includes('NO_REPLY')) {
+        return undefined;
+      }
     }
     return `${ok ? '✅' : '❌'} 定时任务${ok ? '完成' : '失败'}：${name}${detail ? `\n${detail}` : ''}`;
   }
   if (event === 'hook.run') {
     const hook = data as HookEvent;
     const output = (hook.output || hook.error || '').toString().slice(0, 300);
-    // 外部事件无需要求打扰（HEARTBEAT_OK）时静默。
-    if (
-      hook.status !== 'error' &&
-      output.trim().toUpperCase().includes('HEARTBEAT_OK')
-    ) {
-      return undefined;
+    // 外部事件无需要求打扰（HEARTBEAT_OK / NO_REPLY）时静默。
+    if (hook.status !== 'error') {
+      const upper = output.trim().toUpperCase();
+      if (upper.includes('HEARTBEAT_OK') || upper.includes('NO_REPLY')) {
+        return undefined;
+      }
     }
     return `🔔 外部事件（${hook.hookName ?? 'unknown'}）：${hook.summary ?? ''}${output ? `\n${output}` : ''}`;
   }

@@ -30,6 +30,9 @@ describe('formatEvent', () => {
       formatEvent('task.run', { taskName: '服务器巡检', status: 'success', output: 'HEARTBEAT_OK' }),
     ).toBeUndefined();
     expect(
+      formatEvent('task.run', { taskName: 'heartbeat', status: 'success', output: 'NO_REPLY' }),
+    ).toBeUndefined();
+    expect(
       formatEvent('task.run', {
         taskName: '服务器巡检',
         status: 'success',

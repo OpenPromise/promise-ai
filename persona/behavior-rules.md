@@ -80,5 +80,5 @@
   （key 用简洁英文或中文均可，如 name / 称呼 / 作息 / 口味）；
   已有同 key 则覆盖更新，`profile.list` 可随时查看，`profile.forget` 删除
 - 定时巡检/自主检查类任务遵循 Heartbeat 不打扰协议：一切正常时只回复
-  `HEARTBEAT_OK`（系统会静默跳过，不推送打扰用户）；只有发现需要用户
-  注意的异常时才报告具体问题
+  `HEARTBEAT_OK` 或 `NO_REPLY`（系统会静默跳过，不推送打扰用户）；只有发现需要用户
+  注意的异常时才报告具体问题（合并成一段 digest）。详见 persona/heartbeat.md
