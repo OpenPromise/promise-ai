@@ -12,3 +12,19 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE INDEX IF NOT EXISTS sessions_updated_at_idx ON sessions (updated_at DESC);
+
+-- LLM usage ledger：每次真实调用一行（tokens；DeepSeek 可估 cost_cny）
+CREATE TABLE IF NOT EXISTS llm_usage (
+  id uuid PRIMARY KEY,
+  session_id uuid,
+  colleague text NOT NULL,
+  model text NOT NULL,
+  provider text NOT NULL,
+  input_tokens integer NOT NULL DEFAULT 0,
+  output_tokens integer NOT NULL DEFAULT 0,
+  cost_cny numeric,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS llm_usage_created_idx ON llm_usage (created_at DESC);
+CREATE INDEX IF NOT EXISTS llm_usage_colleague_created_idx ON llm_usage (colleague, created_at DESC);

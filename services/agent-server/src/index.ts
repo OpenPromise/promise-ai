@@ -22,6 +22,7 @@ import { createWeixinTools } from './services/weixin-tools.js';
 import { createCloudTools } from './services/cloud-tools.js';
 import { createProfileTools } from './services/profile-tools.js';
 import { createTimelineTools } from './services/timeline-tools.js';
+import { createUsageTools } from './services/usage-tools.js';
 import { HookService } from './services/hook-service.js';
 import {
   HeartbeatService,
@@ -54,6 +55,7 @@ const {
   profileStore,
   timelineStore,
   reminderStore,
+  usageStore,
   taskStore,
   persona,
   personaDir,
@@ -124,6 +126,9 @@ for (const tool of createProfileTools({ store: profileStore, llm })) {
   toolRegistry.register(tool);
 }
 for (const tool of createTimelineTools({ store: timelineStore })) {
+  toolRegistry.register(tool);
+}
+for (const tool of createUsageTools({ store: usageStore })) {
   toolRegistry.register(tool);
 }
 for (const tool of createSelfTools({ memoryBackend, memory, personaDir })) {
@@ -220,6 +225,7 @@ const app = buildApp({
   memory,
   profile: profileStore,
   timeline: timelineStore,
+  usage: usageStore,
   profileIngest: (message) => void profileIngestor.ingest(message),
   subscribeTaskEvents: (listener) => {
     const unsubTask = taskService.onRun(listener);

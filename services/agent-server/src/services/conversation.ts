@@ -7,7 +7,7 @@ import type {
   LLMToolCallWire,
   LLMProvider,
 } from '@personal-ai/llm';
-import type { ProfileStore, SessionStore, TimelineStore } from '@personal-ai/memory';
+import type { ProfileStore, SessionStore, TimelineStore, UsageStore } from '@personal-ai/memory';
 import type { MemoryStore } from '@personal-ai/memory';
 import { createEnvelope } from '@personal-ai/protocol';
 import type { ProtocolEnvelope } from '@personal-ai/protocol';
@@ -45,6 +45,10 @@ export interface ConversationServiceDeps {
   profile?: ProfileStore;
   /** 事件时间线：记录/注入"我们之间发生过什么"。 */
   timeline?: TimelineStore;
+  /** LLM 用量账本：每次真实调用记 tokens（及可选成本）。 */
+  usage?: UsageStore;
+  /** 配置侧 provider 名（deepseek/openrouter/dashscope），写入 usage 行。 */
+  llmProvider?: string;
   /** 对话正常结束后异步抽取画像（Mem0 两阶段思路）；不阻塞回复。 */
   profileIngest?: (userMessage: string) => void;
   /** 全权限模式：所有工具（含 L2/L3）自动执行，不弹确认。 */
@@ -175,7 +179,12 @@ function isToolChoiceUnsupportedError(error: unknown): boolean {
 async function* chatWithTimeoutAndRetry(
   llm: LLMProvider,
   input: ChatInput,
-  options: { idleTimeoutMs?: number; retryAttempts?: number } = {},
+  options: {
+    idleTimeoutMs?: number;
+    retryAttempts?: number;
+    /** 流结束后若拿到 usage 则回调（用量账本）。 */
+    onUsage?: (usage: TokenUsage) => void;
+  } = {},
 ): AsyncGenerator<ChatChunk, void, undefined> {
   const idleTimeoutMs = options.idleTimeoutMs ?? LLM_IDLE_TIMEOUT_MS;
   const retryAttempts = options.retryAttempts ?? LLM_RETRY_ATTEMPTS;
@@ -204,15 +213,18 @@ async function* chatWithTimeoutAndRetry(
     };
     armTimer();
     let gotChunk = false;
+    let lastUsage: TokenUsage | undefined;
 
     try {
       for await (const chunk of llm.chat({ ...request, signal: controller.signal })) {
         gotChunk = true;
+        if (chunk.usage) lastUsage = chunk.usage;
         armTimer();
         yield chunk;
       }
       if (timer) clearTimeout(timer);
       input.signal?.removeEventListener('abort', onAbort);
+      if (lastUsage) options.onUsage?.(lastUsage);
       return;
     } catch (error) {
       if (timer) clearTimeout(timer);
@@ -458,6 +470,8 @@ export class ConversationService {
   readonly #memory: MemoryStore;
   readonly #profile?: ProfileStore;
   readonly #timeline?: TimelineStore;
+  readonly #usage?: UsageStore;
+  readonly #llmProvider: string;
   readonly #profileIngest?: (userMessage: string) => void;
   readonly #autoApproveAll: boolean;
   /** 会话级串行队列：同一会话的请求排队执行，防止并发写入错乱历史。 */
@@ -471,8 +485,43 @@ export class ConversationService {
     this.#memory = deps.memory;
     this.#profile = deps.profile;
     this.#timeline = deps.timeline;
+    this.#usage = deps.usage;
+    this.#llmProvider = deps.llmProvider?.trim() || deps.llm.name || 'unknown';
     this.#profileIngest = deps.profileIngest;
     this.#autoApproveAll = deps.autoApproveAll ?? false;
+  }
+
+  /** 从会话 metadata 解析同事短 id；微信/hub 会话记为 xiaoye。 */
+  #colleagueForSession(session: Session): string {
+    const meta = session.metadata;
+    if (meta && meta.role === 'colleague' && typeof meta.colleagueId === 'string') {
+      return meta.colleagueId;
+    }
+    return 'xiaoye';
+  }
+
+  /** 非阻塞写入用量；失败只打日志，不影响对话。 */
+  #noteUsage(session: Session, usage: TokenUsage): void {
+    if (!this.#usage) return;
+    void this.#usage
+      .record({
+        sessionId: session.id,
+        colleague: this.#colleagueForSession(session),
+        model: this.#llm.model,
+        provider: this.#llmProvider,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+      })
+      .catch((error) => {
+        console.warn(
+          "[usage] record failed (" + (error instanceof Error ? error.message : String(error)) + ")",
+        );
+      });
+  }
+
+  #onUsage(session: Session): ((usage: TokenUsage) => void) | undefined {
+    if (!this.#usage) return undefined;
+    return (usage) => this.#noteUsage(session, usage);
   }
 
   /**
@@ -591,7 +640,7 @@ export class ConversationService {
       };
 
       try {
-        for await (const chunk of chatWithTimeoutAndRetry(this.#llm, chatInput)) {
+        for await (const chunk of chatWithTimeoutAndRetry(this.#llm, chatInput, { onUsage: this.#onUsage(session) })) {
           if (chunk.delta.length > 0) {
             fullText += chunk.delta;
             yield createEnvelope({
@@ -648,10 +697,14 @@ export class ConversationService {
 
         let recovered = '';
         try {
-          for await (const chunk of chatWithTimeoutAndRetry(this.#llm, {
-            messages,
-            ...(input.signal ? { signal: input.signal } : {}),
-          })) {
+          for await (const chunk of chatWithTimeoutAndRetry(
+            this.#llm,
+            {
+              messages,
+              ...(input.signal ? { signal: input.signal } : {}),
+            },
+            { onUsage: this.#onUsage(session) },
+          )) {
             if (chunk.delta.length > 0) {
               recovered += chunk.delta;
               yield createEnvelope({
@@ -925,10 +978,14 @@ export class ConversationService {
     if (dispatchedNeedShortClose) {
       let closeText = '';
       try {
-        for await (const chunk of chatWithTimeoutAndRetry(this.#llm, {
-          messages,
-          ...(input.signal ? { signal: input.signal } : {}),
-        })) {
+        for await (const chunk of chatWithTimeoutAndRetry(
+          this.#llm,
+          {
+            messages,
+            ...(input.signal ? { signal: input.signal } : {}),
+          },
+          { onUsage: this.#onUsage(session) },
+        )) {
           if (chunk.delta.length > 0) {
             closeText += chunk.delta;
             yield createEnvelope({
@@ -977,10 +1034,14 @@ export class ConversationService {
     let finalText = '';
     let summaryFailed = false;
     try {
-      for await (const chunk of chatWithTimeoutAndRetry(this.#llm, {
-        messages,
-        ...(input.signal ? { signal: input.signal } : {}),
-      })) {
+      for await (const chunk of chatWithTimeoutAndRetry(
+        this.#llm,
+        {
+          messages,
+          ...(input.signal ? { signal: input.signal } : {}),
+        },
+        { onUsage: this.#onUsage(session) },
+      )) {
         finalText += chunk.delta;
       }
     } catch (error) {
@@ -1052,10 +1113,14 @@ export class ConversationService {
         { role: 'system', content: COMPACTION_PROMPT },
         ...repairToolResultPairing(toLLMMessages(oldMessages)),
       ];
-      for await (const chunk of chatWithTimeoutAndRetry(this.#llm, {
-        messages: messagesForTurn,
-        ...(signal ? { signal } : {}),
-      })) {
+      for await (const chunk of chatWithTimeoutAndRetry(
+        this.#llm,
+        {
+          messages: messagesForTurn,
+          ...(signal ? { signal } : {}),
+        },
+        { onUsage: this.#onUsage(session) },
+      )) {
         summary += chunk.delta;
       }
       summary = summary.trim();

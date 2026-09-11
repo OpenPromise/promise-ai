@@ -34,6 +34,7 @@ export const HEARTBEAT_TOOL_ALLOWLIST: readonly string[] = [
   'time.get',
   'timeline.list',
   'task.list',
+  'usage.summary',
   'engineer.status',
   'ops.status',
   'designer.status',
@@ -214,11 +215,15 @@ export async function loadHeartbeatPrompt(personaDir: string): Promise<string> {
 
 export const MORNING_DIGEST_ACTION =
   '【早晚摘要·早】请按 persona/heartbeat.md 做一次早间摘要：' +
-  '看同事收件箱/卡住任务/系统健康/昨夜失败。无事只回 HEARTBEAT_OK；有事给一段合并 digest。';
+  '看同事收件箱/卡住任务/系统健康/昨夜失败。' +
+  '可用 usage.summary 看昨夜/今日 LLM tokens（一行带过即可）。' +
+  '无事只回 HEARTBEAT_OK；有事给一段合并 digest。';
 
 export const EVENING_DIGEST_ACTION =
   '【早晚摘要·晚】请按 persona/heartbeat.md 做一次晚间摘要：' +
-  '概括今日同事进展、未完成/卡住项、异常。无事只回 HEARTBEAT_OK；有事给一段合并 digest。';
+  '概括今日同事进展、未完成/卡住项、异常。' +
+  '可用 usage.summary(period=today) 带一行今日 token 用量。' +
+  '无事只回 HEARTBEAT_OK；有事给一段合并 digest。';
 
 /**
  * 幂等种下早晚摘要定时任务（09:00 / 21:00，宿主机 Asia/Shanghai）。
@@ -429,7 +434,7 @@ export class HeartbeatService {
       `【心跳巡检】\n${formatSignalsForPrompt(signals)}\n\n` +
       `${heartbeat}\n\n` +
       '请根据以上信号判断：无事只回 HEARTBEAT_OK；有事给一段合并摘要。' +
-      '可用 system.status / *.status / timeline.list / task.list；不要 delegate。';
+      '可用 system.status / *.status / timeline.list / task.list / usage.summary；不要 delegate。';
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.#runTimeoutMs);

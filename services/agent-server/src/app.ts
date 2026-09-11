@@ -10,6 +10,7 @@ import type {
   ProfileStore,
   SessionStore,
   TimelineStore,
+  UsageStore,
 } from '@personal-ai/memory';
 import type { QwenRealtimeClient } from '@personal-ai/qwen-realtime';
 import type { ToolRegistry } from '@personal-ai/tools';
@@ -46,6 +47,8 @@ export interface AppDeps {
   profile?: ProfileStore;
   /** 事件时间线（记录/注入"发生过什么"）。 */
   timeline?: TimelineStore;
+  /** LLM 用量账本。 */
+  usage?: UsageStore;
   /** 对话正常结束后异步抽取画像（Mem0 两阶段思路）。 */
   profileIngest?: (userMessage: string) => void;
   createVoice: () => VoiceGateway;
@@ -97,6 +100,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     memory: deps.memory,
     profile: deps.profile,
     timeline: deps.timeline,
+    usage: deps.usage,
+    llmProvider: deps.config.llmProvider,
     profileIngest: deps.profileIngest,
     autoApproveAll: deps.config.autoApproveAll,
   });
@@ -164,6 +169,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
               tools: deps.tools,
               approvals: deps.approvals,
               memory: deps.memory,
+              usage: deps.usage,
+              llmProvider: deps.config.llmProvider,
               autoApproveAll: deps.config.autoApproveAll,
             }),
           });
@@ -176,6 +183,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
             tools: deps.tools,
             approvals: deps.approvals,
             memory: deps.memory,
+            usage: deps.usage,
+            llmProvider: deps.config.llmProvider,
             autoApproveAll: deps.config.autoApproveAll,
           });
           registerQwenVoiceRoutes(instance, {
