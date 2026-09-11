@@ -355,6 +355,7 @@ export async function createAgentCore(options: {
   const colleagueId =
     options.colleagueId ?? parseColleagueId(process.env.COLLEAGUE_ID ?? '') ?? undefined;
 
+  const projectRoot = fileURLToPath(new URL('../../..', import.meta.url));
   const colleagueOffice = new ColleagueOffice({
     store,
     mailboxDir: process.env.COLLEAGUE_MAILBOX_DIR ?? './data/mailboxes',
@@ -366,6 +367,7 @@ export async function createAgentCore(options: {
       xiaozhi: researchTaskRunner,
     },
     isolation,
+    projectRoot,
     ...(isolation === 'child' && colleagueId ? { workerColleagueId: colleagueId } : {}),
   });
   colleagueOffice.attachConversation(conversation);

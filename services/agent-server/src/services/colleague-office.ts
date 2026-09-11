@@ -22,6 +22,7 @@ import { XIAO_MEI_PROMPT } from './designer-tools.js';
 import { XIAO_ZHEN_PROMPT } from './qa-tools.js';
 import { XIAO_ZHI_PROMPT } from './research-tools.js';
 import { containsDsmlToolXml, stripDsmlToolXml } from './conversation.js';
+import { injectSkillsIntoPrompt, loadSkillsForRole } from '@personal-ai/core';
 import {
   DEFAULT_GIT_REPO_DIR,
   deliverMailChanges,
@@ -137,6 +138,11 @@ export interface ColleagueOfficeOptions {
   forkStaggerMs?: number;
   /** child 把 progress/done POST 给父进程；缺省 publishColleagueEvent。 */
   publishEvent?: (event: ColleagueChildEvent) => Promise<void>;
+  /**
+   * 仓库根：发现 `skills/` 与 `{colleagueId}/skills/` 并注入 systemPrompt。
+   * 缺省不加载（vitest 保持静态 prompt）；生产由 agent-core 传入。
+   */
+  projectRoot?: string | null;
 }
 
 const RESULT_CAP = 8_000;
@@ -374,6 +380,8 @@ export class ColleagueOffice {
   readonly #forkWorker: (id: ColleagueId) => ChildProcess;
   readonly #forkStaggerMs: number;
   readonly #publishEvent?: (event: ColleagueChildEvent) => Promise<void>;
+  /** null/undefined = 不加载 skills（测试默认）。 */
+  readonly #projectRoot: string | null;
   readonly #children = new Map<ColleagueId, ChildRecord>();
   readonly #wrappedMailIds = new Set<string>();
   #mailboxWatchTimer?: ReturnType<typeof setTimeout>;
@@ -389,6 +397,7 @@ export class ColleagueOffice {
     this.#forkWorker = options.forkWorker ?? forkColleagueWorker;
     this.#forkStaggerMs = options.forkStaggerMs ?? colleagueForkStaggerMs();
     this.#publishEvent = options.publishEvent;
+    this.#projectRoot = options.projectRoot ?? null;
   }
 
   /** 生产在 ConversationService 建好后注入；测试可传假 runChat。 */
@@ -481,21 +490,43 @@ export class ColleagueOffice {
     }
 
     for (const entry of COLLEAGUE_ROSTER) {
+      const prompt = await this.#resolveColleaguePrompt(entry);
       const found = byColleague.get(entry.id);
       if (found) {
-        if (!found.systemPrompt || found.systemPrompt !== entry.prompt) {
-          await this.#store.updateSession(found.id, { systemPrompt: entry.prompt });
+        if (!found.systemPrompt || found.systemPrompt !== prompt) {
+          await this.#store.updateSession(found.id, { systemPrompt: prompt });
         }
         this.#sessionIds.set(entry.id, found.id);
         continue;
       }
       const created = await this.#store.createSession({
-        systemPrompt: entry.prompt,
+        systemPrompt: prompt,
         metadata: { role: 'colleague', colleagueId: entry.id, name: entry.name },
       });
       this.#sessionIds.set(entry.id, created.id);
     }
     return new Map(this.#sessionIds);
+  }
+
+  /**
+   * 把 allowlist 内的 SKILL.md 注入同事基础 prompt。缺 projectRoot / 缺文件时回退原 prompt。
+   */
+  async #resolveColleaguePrompt(entry: ColleagueRosterEntry): Promise<string> {
+    if (!this.#projectRoot) return entry.prompt;
+    try {
+      const skills = await loadSkillsForRole({
+        projectRoot: this.#projectRoot,
+        role: entry.id,
+      });
+      return injectSkillsIntoPrompt(entry.prompt, skills);
+    } catch (error) {
+      console.warn(
+        `[colleagues] skills load failed for ${entry.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return entry.prompt;
+    }
   }
 
   /** 读盘收件箱、订阅 runner 完成事件、把重启残留的 running 重置为 queued，再启动五位 worker。 */
